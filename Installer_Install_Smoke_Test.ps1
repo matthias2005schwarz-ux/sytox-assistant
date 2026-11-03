@@ -20,10 +20,10 @@ function Invoke-BoundedProcess([string]$Executable, [string[]]$Arguments,
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             # Kill children too (e.g. spawned runtime subprocesses), on the isolated CI runner.
             & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
-            throw "$Description: Zeitlimit von $TimeoutSeconds Sekunden ueberschritten."
+            throw "${Description}: Zeitlimit von $TimeoutSeconds Sekunden ueberschritten."
         }
         if ($process.ExitCode -ne 0) {
-            throw "$Description: Exitcode $($process.ExitCode)."
+            throw "${Description}: Exitcode $($process.ExitCode)."
         }
     } finally {
         $process.Dispose()
