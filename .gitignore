@@ -1,0 +1,12 @@
+# Local development environment and personal data
+.venv/
+__pycache__/
+.pytest_cache/
+build/
+dist/
+installer/
+*.py[cod]
+*.log
+*.spec
+.env
+.env.*

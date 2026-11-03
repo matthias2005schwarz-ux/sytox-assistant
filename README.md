@@ -1,1 +1,187 @@
-# sytox-assistant
+# SYTOX Assistant – Entwicklungsstand 0.2.7 (Windows Build/Installer-Verifikation)
+
+## Neu in Version 0.2.7
+
+- Windows-CI erstellt eine portable Windows-App (`dist/SYTOX_Assistant/`) und einen Inno-Setup-Installer.
+- Echter *automatisierter* Installations-Smoketest in einer **isolierten GitHub-Actions-Windows-VM**: Installieren, die installierte EXE mit `--smoke-test` starten, deinstallieren, erhaltene Benutzerdaten kontrollieren. Dieser Test läuft **nicht** auf Linux; er wurde in dieser Chat-Sitzung nicht ausgeführt.
+- Beim EXE-Startabsturz wird `startup_error.log` unter `%APPDATA%\SytoxAssistant` geschrieben, um Fehler eines Windows-GUI-Programms ohne Konsolenfenster zu diagnostizieren.
+- Build nimmt die Installer-Quellen in das für Self-Development bereitgestellte Bundle auf.
+- Die Windows-CI veröffentlicht die fertige EXE (als Verzeichnis-ZIP) und den Installer als getrennte Build-Artefakte **nur nach** erfolgreichen Tests. Zum Ausführen muss der Projektordner als GitHub-Repository veröffentlicht und die Workflow-Aktion gestartet werden. Hier wurde kein Windows-Installer erzeugt.
+- **Eine VM-Prüfung ist kein Ersatz für die Prüfung auf dem eigenen PC** (Audio, PC-Steuerung, Antiviren-/Rechteumgebung, Tray, Autostart, Performance).
+
+### Windows Build / automatisierte Tests
+
+1. Auf Windows mit Python 3.12, PowerShell und Inno Setup 6: `Setup_Windows.ps1` ausführen (interaktives Setup).
+2. Tests: `Windows_Smoke_Test.ps1 -BuildExe`.
+3. Installer: `Build_Installer.ps1 -SkipExeBuild`.
+4. Auf GitHub: Projektinhalt als Repository-Root hochladen; unter `Actions` den Workflow **SYTOX Windows Checks** starten. Nur die isolierte CI-VM führt `Installer_Install_Smoke_Test.ps1` aus; es installiert bewusst **nicht** auf deinem normalen PC. Bei erfolgreichem Workflow die zwei Artefakte herunterladen.
+
+**Status:** Eine unter Windows gebaute und erfolgreich installierte EXE konnte hier mangels Windows-Laufzeit nicht verifiziert werden. Linux-Komponententests und statische Build-Vertragsprüfungen sind separat.
+
+---
+
+# SYTOX Assistant – Entwicklerstand 0.2.5 (Windows-Installer und UI)
+
+**Status: NICHT FERTIG.** 77 automatisierte Python-Tests bestanden (unter Linux, mit simulierten Qt-/Windows-Funktionen). Native Windows-EXE, Inno-Installer, Tray und Audio wurden in dieser Umgebung **noch nicht praktisch getestet**. Aktuell liegt nur Quellcode und ein Windows-Buildablauf vor, keine fertige Windows-EXE.
+
+## Änderung in 0.2.5: Installer, Ein-Instanz-Start und Design
+
+- **Optionaler Autostart:** Inno Setup bietet eine standardmäßig deaktivierte Option, den Assistenten bei Windows-Anmeldung mit `--background` ins Tray zu starten. Das startet *nicht* automatisch das Mikrofon. Beim Update ist die zuvor gewählte Option neu auswählbar; bei Abwahl wird der alte HKCU-Run-Eintrag entfernt.
+- **Ein-Instanz-Verhalten:** Bei einem zweiten Desktop-Start empfängt der bereits laufende Assistent eine lokale Nachricht und öffnet sein Fenster, statt eine zweite Instanz zu erzeugen. Der Hintergrund-Autostart öffnet eine laufende Instanz nicht. Ist die Taskleiste ohne Tray-Unterstützung, wird das Fenster regulär eingeblendet.
+- **Tray-Menü:** Schließen mit X versteckt das Fenster, solange das Tray verfügbar ist; „SYTOX vollständig beenden“ schließt die App kontrolliert und fragt bei laufenden Aufgaben nach.
+- **Benutzerfreundlicher Installer:** Pro-Benutzer-Installation ohne Administratorrechte, optionale Desktop-Verknüpfung, Inno-Setup-Upgrade-ID, keine Löschung von Chats/Settings im Roaming-Profil bei Deinstallation. Für ein Upgrade muss SYTOX beendet werden.
+- **Designänderung:** Einheitlicheres dunkles Blau mit magenta Akzenten, überarbeiteter Chatkopf, Buttons, Listen, Eingabebereich, Statuschip und Tray-Icon. Das ist ein Implementierungsstand ohne visuell verifizierten Windows-Render-Test.
+- **CI vorbereitet:** GitHub Actions kann bei einem GitHub-Checkout die Windows-Komponententests und den Qt/EXE-Smoketest ausführen, anschließend das Setup mit Inno Setup 6 kompilieren und als CI-Artefakt speichern. Nicht in diesem Chat auf Windows ausgeführt.
+- **77 Tests unter Linux bestanden**, inklusive Ein-Instanz-Startverhalten mit Simulation, Start in Hintergrund, Freigaben und Installer-Vertragsprüfungen.
+
+### Windows-Build und Testablauf
+
+1. `powershell -ExecutionPolicy Bypass -File .\Setup_Windows.ps1` (benötigt Python, Netzwerk für Abhängigkeiten)
+2. `powershell -ExecutionPolicy Bypass -File .\Windows_Smoke_Test.ps1 -BuildExe` (GUI/EXE prüfen; kein Test außerhalb der eigens angelegten GUI)
+3. **Inno Setup 6** installieren, danach `powershell -ExecutionPolicy Bypass -File .\Build_Installer.ps1 -SkipExeBuild` zum Bauen des bereits getesteten Executables. Ohne `-SkipExeBuild` baut das Skript die EXE selbst erneut.
+4. Erst nach positivem Test das erzeugte `installer\SYTOX_Assistant_Setup_0.2.5.exe` verwenden.
+
+**Grenzen:** Der Installer wurde hier nicht nativ kompiliert oder auf Windows installiert. PC-Steuerung und Sprache müssen auf dem Zielrechner mit Einwilligung geprüft werden. Ein zusätzlicher Desktop-Starter kann nicht für eine Anwendung im ausgeschalteten PC weiterarbeiten.
+
+## Änderung in 0.2.4: Windows-Smoke-Tests und EXE-Startprüfung
+
+- `main.py --smoke-test` öffnet den Qt-Startpfad im Einmal-Testmodus, prüft die lokale UI-Initialisierung und beendet die Anwendung kontrolliert nach 350 ms; keine Ollama-Verbindung, keine PC-Eingaben.
+- `Windows_Smoke_Test.ps1` prüft die Python-Tests, **echte Win32-Fensterauflistung**, pywinauto/UIA-Import und den vollständigen Qt-GUI-Start in einem temporären APPDATA-Verzeichnis. Optional `-BuildExe`: echte Windows-EXE bauen und mit Exitcode/30-Sekunden-Grenze überprüfen; optional `-InteractiveDesktop`: eigene isolierte Qt-Testoberfläche mit echter Unicode-Tastatureingabe prüfen.
+- `.github/workflows/windows-ci.yml`: Windows-GitHub-Actions-Pipeline für Python 3.12, PySide6-Abhängigkeiten und EXE-Erstellung. Wird **erst ausgeführt**, wenn das Projekt in ein GitHub-Repository übertragen und der Workflow gestartet wird. **Es liegt noch kein Windows-CI-Ergebnis vor.**
+- `Build_EXE.ps1` packt nun weitere Windows-Build-/Testdateien in die Quellcodekopie und die TTS-Module über PyInstaller.
+- Neue plattformunabhängige Tests für den Startpfad und die Windows-Build-Skripte. Fehlendes PySide6 und fehlende Windows-Laufzeit in der aktuellen Umgebung verhindern den realen GUI/EXE-Test hier.
+
+### Windows-Check auf Test-PC (erst wenn du testen möchtest)
+
+1. `powershell -ExecutionPolicy Bypass -File .\Setup_Windows.ps1`
+2. `powershell -ExecutionPolicy Bypass -File .\Windows_Smoke_Test.ps1`
+3. Für EXE-Test: `powershell -ExecutionPolicy Bypass -File .\Windows_Smoke_Test.ps1 -BuildExe`
+4. Nur auf ausdrücklichen Wunsch bei **sichtbarem Testfenster**: `powershell -ExecutionPolicy Bypass -File .\Windows_Smoke_Test.ps1 -InteractiveDesktop`. Die Testeingabe wird ausschließlich im selbst erzeugten Fenster vorgenommen.
+
+**Noch offen:** native Windows-Ergebnisse, echte Installation durch Inno Setup und Prüfung von Mikrofon, TTS, Gmail sowie längeren Modellaufträgen. Nichts davon wird durch die neuen Cross-Plattform-Tests als bestanden erklärt.
+
+
+## Änderung in 0.2.3: Self-Development und Langzeit-Checkpoints
+
+- **Getrennte Selbstentwicklung:** `selfdev_prepare` legt nach Freigabe eine bearbeitbare Kopie in `assistant_source/` sowie eine unabhängige Original-Baseline im lokalen App-Datenordner an. Keine Änderung am laufenden Programm.
+- **Änderungsvergleich:** `selfdev_review` listet veränderte/gelöschte/neue Dateien mit einem begrenzten Diff-Auszug auf. `write_file` kann die Arbeitskopie bearbeiten, ohne den Live-Code anzutasten.
+- **Prüf- und Freigabekette:** `selfdev_validate` führt nach ausdrücklicher Freigabe Syntaxprüfung und Unit-Tests im Arbeitsordner aus. **Wichtig: Python-Tests führen ausführbaren Code auf dem PC aus; das ist keine Sandbox.** `selfdev_stage` erstellt nach erneuter Freigabe und nur bei unverändertem, zuvor grün geprüftem Stand ein ZIP im Projektordner (`selfdev_releases/`). Fehlende oder fehlgeschlagene Tests sowie nachträglich geänderte Dateien blockieren die Bereitstellung. Keine automatische Installation, kein Austauschen des laufenden Codes.
+- **Windows-EXE-Quellcodekopie:** Das Build-Skript nimmt den Quellcode in ein `source_bundle` auf. Für Validierung aus der installierten Windows-EXE heraus wird zusätzlich eine reguläre Python-Entwicklungsumgebung mit Projekt-Abhängigkeiten benötigt. Unter Windows nicht praktisch getestet.
+- **Längere Aufträge:** `record_progress` speichert beschränkte Fortschrittsnotizen, Nachweise und nächste Schritte in der SQLite-Task-Datenbank, sodass bei manueller Fortsetzung mehr Kontext verfügbar ist. Solche KI-Notizen gelten **nicht** als Nachweis einer erledigten Aufgabe; die bestehende explizite Abschlussprüfung bleibt aktiv.
+- **62 automatisierte Tests unter Linux bestanden**, einschließlich Self-Development-Vergleich, Freigaben, fehlgeschlagener Tests, nachträglich geänderter Dateien, Staging und Wiederaufnahme von Arbeitsnotizen.
+- **Noch nicht bestätigt:** Mehrstündiger durchgehender Modellbetrieb, Windows-End-to-End-Steuerung, sichere Isolation beliebiger Tests, selbsttätige Live-Upgrades oder Weiterarbeiten, wenn App/PC nicht laufen.
+
+## Änderung in 0.2.2: Sprachunterhaltung (Quellcode)
+
+- **Gesprächsmodus:** Lokale deutsche Spracherkennung mit Vosk. Standardmäßig wird er über „Hey Sytox“ aktiviert; nach einer Antwort sind Anschlussfragen für ein einstellbares Zeitfenster ohne erneutes Aktivierungswort möglich. Optional kann man *nach bewusstem Start* auf das Aktivierungswort verzichten.
+- **Gegen Mithören der eigenen Antworten:** Das Mikrofon wird während der Auftragsbearbeitung und Sprachausgabe für die Befehlserkennung stummgeschaltet. Nach der Antwort wird es wieder freigegeben. Das ist noch **keine** frei unterbrechbare, voll-duplex Echtzeitunterhaltung.
+- **Stimmen:** Windows-Systemstimme (lokal), Piper mit separater Offline-Stimme oder Microsoft Edge Neural (Online, nur nach ausdrücklicher Einwilligung). Deutsche und österreichische Stimmoptionen sind auswählbar. Bei Edge wird der gesprochene Text an Microsoft übertragen; das lokale Ollama-Modell bleibt davon unabhängig.
+- **Audioverarbeitung:** Chat-Markdown wird fürs Vorlesen vereinfacht; bei längeren Antworten wird die Sprachausgabe gekürzt. Für Piper/Edge entstehen temporäre Audiodateien, die nach Wiedergabe gelöscht werden.
+- **Windows-Einrichtung:** `Setup_Sprache.ps1` bietet den optionalen Download des deutschsprachigen Vosk-Modells an; `Setup_Windows.ps1` kann die Einrichtung abfragen.
+- **54 automatisierte Tests unter Linux bestanden**, darunter 23 Tests für Sprach-Routing, Audioerzeugung mit simuliertem Online-Dienst, Fehlerfälle und WAV-Transkription. Eine vollständig getestete Windows-Sprachlösung ist das noch nicht: echte Mikrofon-/Lautsprechertests, TTS-Qualität, Audio-Gerätewechsel, Unterbrechung während Windows-TTS sowie EXE- und Installer-Tests fehlen.
+
+## Änderung in 0.2.1: Windows-PC-Steuerung (Quellcode)
+
+- **Neue Windows-App-Suche (`pc_find_apps`):** Findet Programme über Verknüpfungen im Startmenü und auf dem Desktop. Start nur nach konkreter Freigabe (`pc_open_app`); keine freie Shell-Ausführung durch das PC-Werkzeug.
+- **Fensterwahl statt globaler Blindsteuerung:** `pc_list_windows` findet sichtbare Fenster mit ID/Position. Mit `pc_select_window` wird das Ziel ausdrücklich ausgewählt, nachdem der Benutzer zugestimmt hat. Spätere Eingaben sind daran gebunden.
+- **Bedienelemente per Windows-UI-Automation:** `pc_inspect_window` liest nach Freigabe zugängliche Steuerelemente (pywinauto). `pc_click_control` kann das gewählte Element nach separater Freigabe anklicken. Nach einem Klick sind alte Element-IDs ungültig.
+- **Gesteuerte Eingabe:** `pc_click` erlaubt nur Bildschirmkoordinaten im ausgewählten Fenster; nach Freigabe werden Position und Fokus erneut geprüft. `pc_hotkey` nutzt eine erlaubte Tastenliste. `pc_type_text` verwendet native Unicode-Eingaben (Umlaute, Emojis), ohne die Zwischenablage anzufassen.
+- **Privatsphäre:** Windows-Fensterlisten und Accessibility-Inhalte werden nicht im Detail im lokalen Aktivitätsprotokoll/Checkpoint gespeichert; die lokale KI erhält diese Inhalte dennoch zur Bearbeitung. Programm-/Textaktionen bleiben freigabepflichtig.
+- **31 automatisierte Tests unter Linux erfolgreich:** 16 vorherige plus 15 neue Tests, darunter Verweigerung, Fensterwechsel, Bereichsgrenzen, UI-Automation mit Test-Doppel und Unicode-Weitergabe.
+- **Noch nicht unter Windows praktisch getestet:** Insbesondere Fenster-Fokussierung durch Windows, pywinauto-Bedienelemente, echte Tastatur-/Maussteuerung und das fertige Installer-Paket müssen auf dem Ziel-PC getestet werden. Die neuen Tests verwenden simulierte Windows-Fenster.
+
+## Änderung in 0.2.0
+
+- **Entwicklungszweige zusammengeführt:** Gmail-OAuth-API und Erweiterungsverwaltung bleiben aus dem umfangreicheren früheren Stand erhalten; verbesserte Fehlerbehandlung der Windows-Setup-/Build-Skripte wurde übernommen.
+- **Autonomer Arbeitsmodus:** vorübergehende Ollama-Verbindungsfehler werden bis zu drei Versuche lang behandelt. Danach wird die Aufgabe **pausiert**, der Checkpoint bleibt erhalten.
+- **Endlosschleifenbremse:** Drei identische Werkzeuganforderungen hintereinander pausieren die Aufgabe, statt dieselbe Aktion beliebig oft auszuführen.
+- **Prüf-Nachweise:** eine erfolgreiche Syntaxprüfung für eine nicht vorhandene oder unbeteiligte Datei gilt nicht mehr als Nachweis für zuletzt bearbeiteten Code. Noch nicht validierte Dateien bleiben auch bei Wiederaufnahme im Checkpoint.
+- **Freigaben:** abgelehnte Aktionen pausieren den Auftrag. Das UI lehnt unbeantwortete Freigabe-Dialoge nach einer Minute automatisch ab, statt unbegrenzt zu blockieren.
+- **Diskretere Protokolle:** das Aktivitätenprotokoll zeichnet bei sensiblen Werkzeug-Argumenten nicht mehr den vollständigen Mail-/Texteingabeinhalt auf. Das lokale Gmail-Datenmodell ist unabhängig davon weiterhin vertraulich zu behandeln.
+- **16 automatisierte Komponententests erfolgreich** unter Linux. GUI/EXE/Windows-Installer sowie echte lokale Modell-, Sprach- und Gmail-End-to-End-Tests sind **nicht** durchgeführt.
+
+## Änderung in 0.1.1
+
+- Aufgaben gelten nicht schon wegen einer KI-Antwort wie „Fertig“ als abgeschlossen; das Modell muss ein `complete_task`-Werkzeug aufrufen.
+- Programmieraufgaben benötigen nach der **letzten** gespeicherten Änderung eine erfolgreich ausgeführte Test-/Syntaxprüfung. Ein früherer grüner Test reicht nicht aus.
+- Bloße Dateiauflistungen und fehlgeschlagene Befehle werden nicht mehr als Arbeitsnachweis gezählt.
+- Acht frühere automatisierte Komponententests unter Linux bestanden (Chat, Gedächtnis, Backups, Agent, Abschlusskontrolle, Gmail-Versandfreigabe).
+- **Nicht getestet:** komplette Windows-Oberfläche, vollständige Sprachsteuerung, echte Gmail-Verbindung, Ollama-Modell auf i7-4770/RX 570, EXE/Installer.
+
+
+## Auf Windows starten
+
+1. Installiere **Python 3.11 oder neuer** und **Ollama**: https://www.python.org/downloads/windows/ und https://ollama.com/download/windows
+2. PowerShell im entpackten Ordner öffnen. `powershell -ExecutionPolicy Bypass -File .\Setup_Windows.ps1` ausführen.
+3. Ollama starten und `ollama pull qwen2.5-coder:7b` ausführen (falls nicht im Setup heruntergeladen).
+4. `Start_SYTOX.bat` starten. In Einstellungen Modell / Projektordner anpassen.
+5. Für die Erstellung einer eigenen Windows-EXE `Build_EXE.ps1` ausführen; optional `Windows_Installer.iss` mit Inno Setup kompilieren.
+
+**Wichtig:** Der Download von Python/Ollama/Modellen und der Browser-Automation benötigt zunächst Internet. Danach laufen Modell und Chats lokal, aber Webseiten und Gmail brauchen selbstverständlich Internet. Die Anwendung wurde hier unter Linux statisch geprüft; die Windows-EXE und das Installationsskript wurden nicht auf einem Windows-PC getestet.
+
+## Bereits im Quellcode vorhanden
+
+- Qt-Desktop-Chat im schwarz/dunkelroten Stil, mehrere Chats, Chat-Umbenennung / Suche / Löschen.
+- SQLite-Datenbank im Benutzerprofil mit Chat-Verlauf, Volltextabruf aus früheren Chats, expliziten Erinnerungen, Aufträgen und Audit-Protokoll.
+- Ollama-Anbindung über dokumentierte Chat-API inklusive Werkzeuge; Modellname frei einstellbar.
+- Agenten-Aufträge: einmalig, 1/3 Stunden, bis fertig, gesonderte Zeitangabe im Chat (z. B. „4 Stunden“), Status/Protokoll/Stop; gespeicherte Checkpoints und manuelles Wiederaufnehmen.
+- Begrenzter Projektordner mit Dateien lesen/schreiben, Sicherung alter Dateien, Test-/Entwicklungsbefehle mit Freigabe bei ausführbarem Code.
+- Internet: im Browser öffnen, separater automatisierter Chromium-Browser mit eigenem Login-Profil, Webseiten lesen/ausfüllen/klicken. **Jeder automatisierte Browser-Klick braucht Zustimmung** (damit nicht heimlich E-Mails gesendet werden).
+- Windows-App-Suche, Fensterliste und Fensterauswahl, UI-Automation-Elemente sowie Text/Tastatur/Maus im explizit gewählten Fenster. Alle Aktionen mit Eingriff erfordern Freigabe. **Windows-Funktionalität nicht praktisch getestet.**
+- Optionaler Gesprächsmodus mit lokalem Vosk-Wakeword „Hey Sytox“, Anschlussfragen ohne erneutes Aktivierungswort und optionalem freiem Zuhören (nicht auf Windows getestet).
+- Lokale Sprachmemos und Offline-Transkription mit deutschem Vosk-Modell. Vorlesen über Windows SAPI/pyttsx3, Piper offline oder nach ausdrücklicher Zustimmung Edge Neural online.
+- Self-Development-Ablauf mit getrennter Quellcodekopie, Original-Baseline, Diff, explizit freigegebener Syntax-/Unit-Testprüfung und ZIP-Kandidat zur manuellen Übernahme; kein Live-Update.
+
+## Grenzen / noch nicht fertig
+
+- **Nicht auf Windows end-to-end getestet.** Windows-Binärdatei und Inno-Installer müssen auf Windows gebaut und geprüft werden.
+- Sprachmemo-Transkription braucht ein zusätzliches Vosk-Deutsch-Modell, z. B. von https://alphacephei.com/vosk/models; für natürlichere Stimmen Piper-Binary + geeignetes Stimmenmodell separat einrichten.
+- Der Wakeword-Gesprächsmodus ist weiterhin experimentell und noch nicht praktisch auf Windows getestet. Die Spracheingabe pausiert während Antworten: keine echte simultane Unterhaltung; eine Sprachantwort per Stimme zu unterbrechen funktioniert dann nicht. Windows-TTS kann sich trotz Stopp-Knopf zu Ende abspielen. Bestehende TTS-Stimmen klingen je nach installierter Stimme möglicherweise noch robotisch.
+- Gmail im bestehenden Chrome-Login nicht automatisch verbunden. Der Automationsbrowser hat ein eigenes Profil und benötigt die erste Anmeldung durch den Benutzer. Browser-Schritte sind nicht für Gmail durchgängig integriert/getestet.
+- Selbstverbesserung arbeitet ausschließlich in einer Entwicklungs-Arbeitskopie. Getestete Updates werden nach Freigabe **nur als ZIP** bereitgestellt, nicht automatisch installiert. Tests sind keine Sicherheits-Sandbox.
+- Die neue PC-Steuerung ist noch kein autonomes „Sehen“ des Bildschirms: sie liest Fenster-/Accessibility-Informationen, kann aber nicht jede grafische Anwendung zuverlässig bedienen. Programme mit Administratorrechten, Spielen mit eigener Oberfläche oder blockierter UI-Automation können scheitern.
+- Kleine lokale Modelle können Tool-Aufrufe falsch einsetzen und Aufgaben falsch als erledigt bezeichnen. Es gibt keine Garantie, dass sie selbstständige Langzeit-Aufträge zuverlässig fertigstellen.
+- Der Work-Loop benötigt einen laufenden PC, eine laufende App, verfügbare Ollama-Engine und ausreichend Speicher. Eine Zielzeit ist kein Versprechen für unterbrechungslose sinnvolle Arbeit: bei Abschluss/Blockaden stoppt die Aufgabe.
+- Sicherheit: Auch genehmigte Befehle und ausführbare Testdateien können riskant sein. Projekte und ungetestete Software nur mit Backups ausführen.
+
+## Datenschutz & Steuerung
+
+Chats, Memories, Arbeitsprotokoll und Browser-Profil liegen standardmäßig unter `%APPDATA%\SytoxAssistant` (auf anderen Systemen `~/.local/share/SytoxAssistant`). Automatische Speicherung ist lokal; Webseitenzugriffe schicken Daten an die besuchten Server. Keine Telemetrie im Anwendungscode. Jeder vom Modell gestartete freie Befehl, PC-Klick und Browser-Klick muss freigegeben werden. Der Benutzer muss einer Fensterinspektion und dem Fokussieren ebenfalls zustimmen. Für unbeaufsichtigte Arbeit können deshalb Freigaben zur Blockade führen. Stoppen signalisiert die Beendigung und unterbricht laufende KI-Streaming-Antworten.
+
+## Architektur
+
+- `sytox/storage.py`: lokale SQLite-Speicherung und einfache Volltextsuche.
+- `sytox/agent.py`: Ollama-API, Werkzeug-Agent und Auftragsschleife.
+- `sytox/actions.py`: Werkzeuge, Berechtigungen, Backups, Browser, Selbstentwicklungskopie.
+- `sytox/pc_control.py`: Windows-Fensterverwaltung, UI Automation und Unicode-Tastatureingaben.
+- `sytox/selfdev.py`: getrennte Selbstentwicklungs-Worktree, Review, Tests und geprüfte ZIP-Kandidaten.
+- `sytox/voice_features.py`: Aufnahme / Transkription / TTS.
+- `sytox/ui.py`: PySide6-Oberfläche und Hintergrund-Worker.
+- `tests/`: automatisierte Komponententests ohne Modell.
+
+## Quellen
+
+Ollama API: https://github.com/ollama/ollama/blob/main/docs/api.md
+Ollama Tool Calling: https://github.com/ollama/ollama/blob/main/docs/capabilities/tool-calling.mdx
+
+## PC-Steuerung: Beispielablauf (in einer gestarteten Windows-Instanz)
+
+1. „Finde Notepad“ → `pc_find_apps` liefert lokale Verknüpfungen mit Pfaden.
+2. „Starte Notepad“ → `pc_open_app` fragt vor Ausführung nach Zustimmung.
+3. `pc_list_windows` liefert Fenster-IDs; `pc_select_window` wählt nach Freigabe das Ziel.
+4. Optional `pc_inspect_window`, um Edit-/Button-Elemente zu entdecken (Freigabe erforderlich).
+5. `pc_type_text`/`pc_hotkey` oder `pc_click_control` steuern nur dieses Fenster, jeweils nach Zustimmung.
+6. Bei geschlossenem, verdecktem oder verändertem Fenster wird die Aktion mit einer Fehlermeldung beendet.
+
+Für fortgeschrittene, unbeaufsichtigte Nutzung reicht diese Version noch nicht: Jede Interaktion erfordert Freigaben. Das absichtliche Sicherheitsmodell verhindert unbeaufsichtigte Änderungen an anderen Apps; später könnten eng begrenzte, vom Benutzer vorab freigegebene Aufgabenprofile hinzukommen.
+
+**Manueller Windows-Test vor Freigabe der Anwendung:** Setup_Windows.ps1 im Testsystem ausführen; `python -m unittest discover -s tests` testen; dann mit einem leeren Notepad-Fenster App-Suche, Auswahl, Eingabe mit „äöüß“, Fensterwechsel und Klickgrenzen prüfen. Keine echten Zugangsdaten oder produktiven Dateien für diese Tests verwenden.
+
+## Änderung 0.2.7 (Windows-Installer-Stabilität)
+- Der isolierte Installations-Smoke-Test hat verbindliche Laufzeitgrenzen:
+  Installation 180 s, GUI-Start 45 s, Deinstallation 120 s.
+- Bei einem Zeitlimit wird der hängende Prozessbaum beendet und die CI meldet einen Fehler,
+  statt unbegrenzt auf einen fehlerhaften Windows-Start zu warten.
+- Startfehlerprotokolle der installierten Anwendung werden im fehlgeschlagenen Test ausgegeben.
+- Das ist **kein** unter Windows ausgeführter Testlauf: Der echte Inno-/Windows-Test benötigt
+  weiterhin einen Windows-Runner. Auch die Windows-EXE liegt diesem Quellpaket nicht bei.

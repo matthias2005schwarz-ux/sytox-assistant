@@ -1,0 +1,64 @@
+name: SYTOX Windows Checks
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install application dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          & .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'pip failed' }
+      - name: Windows unit, Win32, and Qt startup tests
+        shell: powershell
+        run: .\Windows_Smoke_Test.ps1
+      - name: Build EXE and smoke-test startup
+        shell: powershell
+        run: .\Windows_Smoke_Test.ps1 -BuildExe
+      - name: Make sure Inno Setup 6 is installed
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+          }
+          if (!(Test-Path $iscc)) { throw 'Inno Setup 6 missing' }
+      - name: Compile Windows installer from tested EXE
+        shell: powershell
+        run: |
+          .\Build_Installer.ps1 -SkipExeBuild
+          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.2.7.exe')) { throw 'Installer was not built' }
+      - name: Install, launch, uninstall and verify user data on Windows runner
+        shell: powershell
+        run: .\Installer_Install_Smoke_Test.ps1
+      - name: Windows build checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            'installer/SYTOX_Assistant_Setup_0.2.7.exe',
+            'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
+          )
+          foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
+      - name: Archive Windows standalone app (CI artifact only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sytox-windows-app-0.2.7
+          path: dist/SYTOX_Assistant/
+          if-no-files-found: error
+      - name: Archive Windows installer (CI artifact only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sytox-windows-setup-0.2.7
+          path: installer/SYTOX_Assistant_Setup_0.2.7.exe
+          if-no-files-found: error
