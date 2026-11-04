@@ -88,6 +88,64 @@ def interruption_command(phrase, free_listening=False):
     return False, ''
 
 
+def desktop_voice_intent(phrase):
+    """Recognize a few safe, local UI intents after normal wake-word routing.
+
+    Return (kind, optional app query). Opening this panel never starts a program
+    or changes focus; explicit on-screen approval is still required.
+    Unknown requests are passed to the regular AI/agent permission workflow.
+    """
+    text = ' '.join(str(phrase or '').strip().split()).strip(' ,.!?')
+    if not text:
+        return None
+
+    if re.fullmatch(
+        r'(?:öffne|zeige|zeig|starte)(?:\\s+mir)?\\s+(?:die\\s+)?'
+        r'(?:desktop[- ]steuerung|windows[- ]steuerung|pc[- ]steuerung)',
+        text, flags=re.I
+    ):
+        return ('panel', '')
+
+    if re.fullmatch(
+        r'(?:zeige|zeig|liste)(?:\\s+mir)?\\s+(?:die\\s+)?'
+        r'(?:(?:alle|offenen|geöffneten)\\s+)?(?:fenster|windows)',
+        text, flags=re.I
+    ):
+        return ('windows', '')
+
+    match = re.fullmatch(
+        r'(?:suche|finde|öffne|starte)(?:\\s+mir)?\\s+'
+        r'(?:(?:die|das|den)\\s+)?(?:app|programm|anwendung)\\s+(.+)',
+        text, flags=re.I
+    )
+    if match:
+        query = match.group(1).strip()
+        if 2 <= len(query) <= 80:
+            return ('apps', query)
+        return None
+
+    # Frequently spoken Windows application names. Still only *search* here.
+    aliases = {
+        'editor': 'Editor', 'notepad': 'Notepad',
+        'rechner': 'Rechner', 'taschenrechner': 'Rechner',
+    }
+    match = re.fullmatch(
+        r'(?:öffne|starte)\\s+(?:den\\s+|das\\s+)?'
+        r'(editor|notepad|rechner|taschenrechner)',
+        text, flags=re.I
+    )
+    if match:
+        return ('apps', aliases[match.group(1).casefold()])
+
+    if re.fullmatch(
+        r'(?:sprachmodus|gesprächsmodus|mikrofon)\\s+'
+        r'(?:stoppen|beenden|ausschalten)',
+        text, flags=re.I
+    ):
+        return ('stop_listening', '')
+    return None
+
+
 VOSK_DE_MODEL_NAME = 'vosk-model-small-de-0.15'
 VOSK_DE_MODEL_URL = 'https://alphacephei.com/vosk/models/' + VOSK_DE_MODEL_NAME + '.zip'
 
