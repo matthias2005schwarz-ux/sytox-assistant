@@ -339,8 +339,13 @@ class Toolkit:
         """No arbitrary package IDs, no shell, and no implied consent from task text."""
         key = canonical_language(language)
         spec = TOOLCHAINS[key]
-        if status(key)['ready']:
+        if status(key, self.workspace)['ready']:
             return spec.name + ': benötigte Werkzeuge sind bereits im Suchpfad.'
+        if key == 'typescript' and status('javascript')['ready']:
+            return ('Node.js ist vorhanden, aber TypeScript fehlt noch. '
+                    'Im gewählten Projekt ist nach gesonderter Freigabe '
+                    'npm install --save-dev typescript möglich. '
+                    'Anschließend toolchain_inspect erneut ausführen.')
         if platform.system() != 'Windows':
             raise RuntimeError('Die automatische Installation ist nur unter Windows verfügbar.')
         if not spec.package:
@@ -383,7 +388,7 @@ class Toolkit:
             if proc.returncode:
                 raise RuntimeError('winget Exitcode ' + str(proc.returncode)
                                    + ': ' + output[-2000:])
-            check = status(key)
+            check = status(key, self.workspace)
             return ('winget meldet Erfolg für ' + spec.package + '.\n'
                     + ('Compiler erkannt.' if check['ready'] else
                        'Compiler noch nicht im aktuellen Suchpfad. '
