@@ -1,3 +1,13 @@
+# Entwicklungsstand: Automatische Webrecherche (noch kein Release)
+
+- **Ohne gesonderten Suchbefehl:** Bei kurzen öffentlichen Wissensfragen wie „Wer ist Jenna Ortega?“ sucht SYTOX selbstständig nach aktuellen Quellen. Reine Programmieraufträge und Steuerfragen wie „Wie weit bist du?“ lösen keine automatische Suche aus.
+- **Auch während des Programmierens:** Die getrennte Nebenunterhaltung kann Web-Suchtreffer abrufen, während der Hauptagent weiterläuft. Sie erhält dadurch **keine** Schreib-, PC- oder Agentenwerkzeuge.
+- **Quellen und Grenzen:** Ein Lesezugriff sucht Bing-RSS-Suchergebnisse mit DuckDuckGo-HTML als Ausweichlösung. Antworten nennen Links zu Suchtreffern; Snippets sind keine unabhängig überprüften Fakten. Für umfassende Webseitenanalysen steht dem Hauptagenten weiterhin der bestehende Browser zur Verfügung.
+- **Verfügbarkeit:** Internet erforderlich. Suchanfragen werden an den jeweiligen Suchanbieter gesendet; keine Anmeldedaten oder Browserprofile werden für die Suche verwendet. Wenn der Anbieter nicht erreichbar ist, wird keine erfolgreiche Echtzeitrecherche vorgetäuscht.
+- **Tests/Veröffentlichung:** Automatisierte Regressionstests sind ergänzt; Live-Suchanbieter, echtes Ollama- und Windows-Sprachverhalten müssen praktisch getestet werden. Es wurde **keine neue Windows-EXE** veröffentlicht.
+
+---
+
 # Neu im Entwicklungszweig: Automatische Erkennung von Programmiersprachen und Entwicklungswerkzeugen
 
 - **Neue Agent-Werkzeuge:** `toolchain_inspect` prüft vorhandene Projektdateien, empfiehlt anhand des Auftrags eine Sprache und meldet fehlende Compiler, ohne Code auszuführen oder Software zu installieren.

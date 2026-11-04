@@ -20,6 +20,7 @@ from .selfdev import SelfDevelopment
 from .extensions import Registry
 from .gmail import GmailClient
 from .pc_control import WindowsDesktop
+from .web_search import search_web, format_results
 
 
 TOOLS = [
@@ -35,6 +36,8 @@ TOOLS = [
      {'language':('string','Language from toolchain_inspect, e.g. python, cpp, csharp, java, rust')},['language']),
     ('remember','Save a persistent note to recall across conversations.',{'text':('string','Important durable fact')},['text']),
     ('open_url','Open a webpage in the standard PC browser.',{'url':('string','Full https URL')},['url']),
+    ('web_search','Search public internet for factual/current information. Read-only; returns snippets and source URLs.',
+     {'query':('string','Public search terms; do not include private data or secrets')},['query']),
     ('browser_visit','Open an address in the automated browser (separate saved login profile).',
      {'url':('string','Full https URL')},['url']),
     ('browser_read','Read visible page title and text from the automated browser.',{},[]),
@@ -178,7 +181,7 @@ class Toolkit:
             # Side effects (e.g. saved files or drafts) and actual reads count toward
             # a non-coding task; coding tasks additionally need post-write validation.
             evidence_tools = {
-                'read_file', 'write_file', 'run_command', 'remember', 'browser_visit',
+                'read_file', 'write_file', 'run_command', 'remember', 'browser_visit', 'web_search',
                 'browser_read', 'browser_click', 'browser_type', 'pc_open_app',
                 'pc_inspect_window', 'pc_click_control',
                 'pc_type_text', 'pc_hotkey', 'pc_click', 'selfdev_prepare',
@@ -188,6 +191,8 @@ class Toolkit:
             }
             ok_command = name == 'run_command' and outcome.startswith('Exit code: 0\n')
             has_result = outcome not in ('', '(leer)', 'Kein Verzeichnis.')
+            if name == 'web_search' and outcome.startswith('Keine Live-Suchergebnisse'):
+                has_result = False
             if ((name in evidence_tools and name != 'run_command' and has_result)
                     or ok_command or name.startswith('ext_')):
                 self.action_count += 1
@@ -442,6 +447,9 @@ class Toolkit:
         if parsed.scheme not in ('https','http'): raise ValueError('Nur Webadressen mit http(s) sind erlaubt')
         webbrowser.open(url)
         return 'Seite im Standardbrowser geöffnet.'
+
+    def action_web_search(self, query):
+        return format_results(query, search_web(query, stop_event=self.stop_event))
 
     def action_browser_visit(self,url):
         parsed=urlparse(url)
