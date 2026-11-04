@@ -37,6 +37,27 @@ class ParallelReplyTests(unittest.TestCase):
             self.assertIn('KEINE Werkzeuge', args[0][0]['content'])
         self.assertEqual(answers, ['Ich erkläre es dir.'])
 
+    def test_side_chat_routes_colloquial_pause_as_control_not_ollama_call(self):
+        dialog = ParallelChatDialog(
+            {'model': 'offline-model', 'ollama_url': 'http://localhost:11434'}
+        )
+        requests = []
+        dialog.control_requested.connect(
+            lambda kind, original, spoken: requests.append((kind, original, spoken))
+        )
+        try:
+            with patch('sytox.parallel_chat.ParallelReplyWorker') as model:
+                self.assertTrue(dialog.ask('Hör kurz auf zu programmieren', spoken=True))
+                model.assert_not_called()
+            self.assertEqual(
+                requests, [('pause', 'Hör kurz auf zu programmieren', True)]
+            )
+            self.assertEqual(dialog.history, [])
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            self.app.processEvents()
+
     def test_dialog_keeps_own_unsaved_chat_context(self):
         dialog = ParallelChatDialog(
             {'model': 'offline-model', 'ollama_url': 'http://localhost:11434'}
