@@ -1,6 +1,7 @@
 """Explicit capabilities. The local model never gets an unrestricted hidden shell."""
 from __future__ import annotations
 import os
+import platform
 import re
 import json
 import shutil
@@ -13,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .toolchains import canonical_language, propose, status, TOOLCHAINS
 from .storage import default_data_dir
 from .selfdev import SelfDevelopment
 from .extensions import Registry
@@ -27,6 +29,10 @@ TOOLS = [
      {'path':('string','Relative file path'),'content':('string','Complete file contents')},['path','content']),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
+    ('toolchain_inspect','Read-only: recommend a language for a task, inspect project files and check installed developer tools. Never installs anything.',
+     {'task':('string','Describe the program to build; may be empty to inspect the project')},[]),
+    ('toolchain_install','Install ONE curated Windows compiler/SDK through winget. Always asks for explicit user approval of the exact package first.',
+     {'language':('string','Language from toolchain_inspect, e.g. python, cpp, csharp, java, rust')},['language']),
     ('remember','Save a persistent note to recall across conversations.',{'text':('string','Important durable fact')},['text']),
     ('open_url','Open a webpage in the standard PC browser.',{'url':('string','Full https URL')},['url']),
     ('browser_visit','Open an address in the automated browser (separate saved login profile).',
@@ -177,7 +183,7 @@ class Toolkit:
                 'pc_inspect_window', 'pc_click_control',
                 'pc_type_text', 'pc_hotkey', 'pc_click', 'selfdev_prepare',
                 'selfdev_validate', 'selfdev_stage',
-                'extension_install', 'gmail_search', 'gmail_read', 'gmail_draft',
+                'extension_install', 'toolchain_install', 'gmail_search', 'gmail_read', 'gmail_draft',
                 'gmail_send',
             }
             ok_command = name == 'run_command' and outcome.startswith('Exit code: 0\n')
@@ -279,6 +285,69 @@ class Toolkit:
                 return False
             return True
         return False
+
+    def action_toolchain_inspect(self, task=''):
+        if not isinstance(task, str) or len(task) > 1000:
+            raise ValueError('Auftragsbeschreibung zu lang.')
+        return json.dumps(propose(task, self.workspace), ensure_ascii=False)
+
+    def action_toolchain_install(self, language):
+        """No arbitrary package IDs, no shell, and no implied consent from task text."""
+        key = canonical_language(language)
+        spec = TOOLCHAINS[key]
+        if status(key)['ready']:
+            return spec.name + ': benötigte Werkzeuge sind bereits im Suchpfad.'
+        if platform.system() != 'Windows':
+            raise RuntimeError('Die automatische Installation ist nur unter Windows verfügbar.')
+        if not spec.package:
+            raise ValueError('Für ' + spec.name + ' ist kein freigegebenes winget-Paket hinterlegt.')
+        winget = shutil.which('winget')
+        if not winget:
+            raise RuntimeError('Windows-Paketmanager winget fehlt. Bitte App Installer prüfen.')
+        argv = [winget, 'install', '--id', spec.package, '--exact', '--source', 'winget',
+                '--accept-package-agreements', '--accept-source-agreements',
+                '--disable-interactivity']
+        self._request(
+            'Entwicklungswerkzeug installieren: ' + spec.name,
+            'Nur das folgende Paket aus der winget-Quelle wird installiert:\n'
+            + spec.package + '\n\nAusführung: ' + ' '.join(argv)
+            + '\nDownloads, Systemänderungen und ggf. Administratorrechte sind möglich. '
+            + 'Es wird ohne Zustimmung nichts heruntergeladen. '
+            + (('\nHinweis: ' + spec.note) if spec.note else '')
+        )
+        self._check()
+        proc = None
+        try:
+            proc = subprocess.Popen(argv, cwd=str(self.workspace), shell=False,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, encoding='utf-8', errors='replace')
+            start = time.monotonic()
+            while True:
+                if self.stop_event and self.stop_event.is_set():
+                    proc.kill()
+                    raise Cancelled('Installation angehalten; bereits gestartete Systeminstaller '
+                                    'können separat weiterlaufen.')
+                if time.monotonic() - start > 900:
+                    proc.kill()
+                    raise TimeoutError('Installation nach 15 Minuten abgebrochen.')
+                try:
+                    output, _ = proc.communicate(timeout=.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+            self._check()
+            if proc.returncode:
+                raise RuntimeError('winget Exitcode ' + str(proc.returncode)
+                                   + ': ' + output[-2000:])
+            check = status(key)
+            return ('winget meldet Erfolg für ' + spec.package + '.\n'
+                    + ('Compiler erkannt.' if check['ready'] else
+                       'Compiler noch nicht im aktuellen Suchpfad. '
+                       'SYTOX bzw. Windows-Terminal neu starten und erneut prüfen.')
+                    + (('\n' + spec.note) if spec.note else ''))
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
 
     def action_run_command(self,command):
         if not isinstance(command,str) or len(command)>1500: raise ValueError('Ungültiger Befehl')
