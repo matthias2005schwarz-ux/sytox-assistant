@@ -37,6 +37,41 @@ class ParallelReplyTests(unittest.TestCase):
             self.assertIn('KEINE Werkzeuge', args[0][0]['content'])
         self.assertEqual(answers, ['Ich erkläre es dir.'])
 
+    def test_public_question_searches_web_without_agent_tools(self):
+        question = {'role': 'user', 'content': 'Wer ist Jenna Ortega?'}
+        worker = ParallelReplyWorker(
+            {'model': 'offline-model', 'ollama_url': 'http://localhost:11434'},
+            [question]
+        )
+        answers = []
+        worker.completed.connect(answers.append)
+        result = [{'title': 'Profil', 'url': 'https://example.org/jenna',
+                   'snippet': 'Schauspielerin'}]
+        with patch('sytox.parallel_chat.search_web', return_value=result) as web, \
+                patch('sytox.parallel_chat.OllamaClient') as client:
+            client.return_value.chat.return_value = {
+                'role': 'assistant', 'content': 'Jenna Ortega ist eine Schauspielerin.'
+            }
+            worker.run()
+            self.assertIsNone(client.return_value.chat.call_args.kwargs['tools'])
+            sent = client.return_value.chat.call_args.args[0]
+            self.assertIn('https://example.org/jenna', sent[-1]['content'])
+            web.assert_called_once()
+        self.assertIn('https://example.org/jenna', answers[0])
+
+    def test_task_status_does_not_call_web_search(self):
+        worker = ParallelReplyWorker(
+            {'model': 'offline-model', 'ollama_url': 'http://localhost:11434'},
+            [{'role': 'user', 'content': 'Wie weit bist du?'}]
+        )
+        with patch('sytox.parallel_chat.search_web') as web, \
+                patch('sytox.parallel_chat.OllamaClient') as client:
+            client.return_value.chat.return_value = {
+                'role': 'assistant', 'content': 'Der Auftrag läuft.'
+            }
+            worker.run()
+            web.assert_not_called()
+
     def test_side_chat_routes_colloquial_pause_as_control_not_ollama_call(self):
         dialog = ParallelChatDialog(
             {'model': 'offline-model', 'ollama_url': 'http://localhost:11434'}
