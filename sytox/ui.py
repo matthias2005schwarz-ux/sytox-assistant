@@ -1822,9 +1822,14 @@ class MainWindow(QMainWindow):
 
     def received_voice_command(self,text):
         self.log('Stimme','Befehl gehört: '+text[:120])
-        if re.fullmatch(r'\s*(?:stopp|stop|anhalten|sei still|ruhe)\s*[.!?]*',text.lower()):
+        if re.fullmatch(r'\s*(?:stopp|stop|anhalten)\s*[.!?]*',text.lower()):
             self.stop_speech()
             self.stop_work()
+            self._conversation_ready()
+            return
+        if re.fullmatch(r'\s*(?:sei still|ruhe)\s*[.!?]*',text.lower()):
+            # Silence the spoken answer, NOT the programming task.
+            self.stop_speech()
             self._conversation_ready()
             return
         if agent_status_intent(text):
