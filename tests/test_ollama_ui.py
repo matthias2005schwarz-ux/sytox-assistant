@@ -82,17 +82,20 @@ class OllamaAutoSetupQtTests(unittest.TestCase):
             worker.assert_not_called()
         dialog.close()
 
-    def test_accepted_consent_starts_qthread_for_selected_model(self):
+    def test_accepted_consent_runs_real_qthread_without_network(self):
         from PySide6.QtWidgets import QMessageBox
         dialog = OllamaHelpDialog('qwen2.5-coder:7b', None)
         dialog.model_choice.setCurrentIndex(dialog.model_choice.findData('qwen2.5-coder:3b'))
         with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.Yes), \
-             patch('sytox.ui.OllamaSetupWorker') as worker:
+             patch('sytox.ui.setup_local_ollama', return_value='qwen2.5-coder:3b') as setup:
             dialog.begin_install()
-            worker.assert_called_once_with('http://localhost:11434', 'qwen2.5-coder:3b', dialog)
-            worker.return_value.start.assert_called_once_with()
-            # Qt must see the fake worker as finished before dialog teardown.
-            worker.return_value.isRunning.return_value = False
+            self.assertTrue(dialog.worker.wait(4000), 'setup worker should finish')
+            for _ in range(10):
+                self.app.processEvents()
+            setup.assert_called_once()
+            self.assertEqual(setup.call_args.args[1], 'qwen2.5-coder:3b')
+        self.assertEqual(dialog.installed_model, 'qwen2.5-coder:3b')
+        self.assertFalse(dialog.worker.isRunning())
         dialog.close()
         dialog.deleteLater()
         self.app.processEvents()
