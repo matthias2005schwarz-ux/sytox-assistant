@@ -56,6 +56,24 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.assertEqual(self.window.input.toPlainText(), 'Erstelle eine Funktion')
         self.assertEqual(self.window.chatlist.count(), 1)
 
+    def test_focus_mode_hides_and_restores_tools_without_destroying_controls(self):
+        from PySide6.QtWidgets import QFrame
+        panel = self.window.utility_panel
+        cards_before = self.window.findChildren(QFrame, 'utilityCard')
+        self.assertEqual(len(cards_before), 4)
+        self.assertFalse(panel.isHidden())
+
+        self.window.toggle_focus_mode()
+        self.assertTrue(panel.isHidden())
+        self.assertTrue(self.window.focus_btn.isChecked())
+        self.assertEqual(self.window.focus_btn.text(), 'Steuerzentrale')
+
+        self.window.toggle_focus_mode()
+        self.assertFalse(panel.isHidden())
+        self.assertFalse(self.window.focus_btn.isChecked())
+        self.assertEqual(self.window.focus_btn.text(), 'Fokusmodus')
+        self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 4)
+
     def test_first_message_replaces_empty_state_without_losing_text(self):
         from PySide6.QtWidgets import QFrame, QLabel
         self.assertIsNotNone(self.window.empty_widget)
