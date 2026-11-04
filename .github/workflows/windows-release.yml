@@ -1,0 +1,70 @@
+name: Publish verified SYTOX Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Assert tag matches bundled application version
+        shell: pwsh
+        run: |
+          $version = (& python -c "from sytox import __version__; print(__version__)").Trim()
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Release-Tag $env:GITHUB_REF_NAME stimmt nicht mit $version ueberein."
+          }
+          $iss = Get-Content Windows_Installer.iss -Raw
+          if (-not $iss.Contains("#define MyAppVersion `"$version`"")) {
+            throw 'Inno Setup version differs from application version.'
+          }
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          & .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
+      - name: Run unit and EXE startup tests
+        shell: powershell
+        run: .\Windows_Smoke_Test.ps1 -BuildExe
+      - name: Install Inno Setup 6 if missing
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+          }
+      - name: Build installer from tested EXE
+        shell: powershell
+        run: .\Build_Installer.ps1 -SkipExeBuild
+      - name: Verify installing and preserving user data
+        shell: powershell
+        run: .\Installer_Install_Smoke_Test.ps1
+      - name: Write SHA-256 sidecar (required by in-app updater)
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $exe = "installer/SYTOX_Assistant_Setup_$version.exe"
+          if (-not (Test-Path $exe)) { throw "Installer missing: $exe" }
+          $checksum = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
+          "$checksum  $(Split-Path -Leaf $exe)" | Set-Content -Path "$exe.sha256" -Encoding ascii
+      - name: Publish verified release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $exe = "installer/SYTOX_Assistant_Setup_$version.exe"
+          gh release create $env:GITHUB_REF_NAME $exe "$exe.sha256" --verify-tag --title "SYTOX Assistant $version" --notes "SYTOX Windows Installer mit SHA-256-Pruefdatei. Updates werden nur nach Bestätigung installiert."
