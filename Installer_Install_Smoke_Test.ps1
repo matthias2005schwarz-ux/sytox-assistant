@@ -30,7 +30,7 @@ function Invoke-BoundedProcess([string]$Executable, [string[]]$Arguments,
     }
 }
 
-$installer = Join-Path $PSScriptRoot 'installer\SYTOX_Assistant_Setup_0.3.3.exe'
+$installer = Join-Path $PSScriptRoot 'installer\SYTOX_Assistant_Setup_0.3.4.exe'
 if (-not (Test-Path -LiteralPath $installer)) { throw "Installer fehlt: $installer" }
 $testRoot = Join-Path $env:RUNNER_TEMP ('sytox_install_test_' + [guid]::NewGuid().ToString('N'))
 $installDir = Join-Path $testRoot 'Program'
