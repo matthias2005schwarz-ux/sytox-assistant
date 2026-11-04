@@ -100,22 +100,22 @@ def desktop_voice_intent(phrase):
         return None
 
     if re.fullmatch(
-        r'(?:öffne|zeige|zeig|starte)(?:\\s+mir)?\\s+(?:die\\s+)?'
+        r'(?:öffne|zeige|zeig|starte)(?:\s+mir)?\s+(?:die\s+)?'
         r'(?:desktop[- ]steuerung|windows[- ]steuerung|pc[- ]steuerung)',
         text, flags=re.I
     ):
         return ('panel', '')
 
     if re.fullmatch(
-        r'(?:zeige|zeig|liste)(?:\\s+mir)?\\s+(?:die\\s+)?'
-        r'(?:(?:alle|offenen|geöffneten)\\s+)?(?:fenster|windows)',
+        r'(?:zeige|zeig|liste)(?:\s+mir)?\s+(?:die\s+)?'
+        r'(?:(?:alle|offenen|geöffneten)\s+)?(?:fenster|windows)',
         text, flags=re.I
     ):
         return ('windows', '')
 
     match = re.fullmatch(
-        r'(?:suche|finde|öffne|starte)(?:\\s+mir)?\\s+'
-        r'(?:(?:die|das|den)\\s+)?(?:app|programm|anwendung)\\s+(.+)',
+        r'(?:suche|finde|öffne|starte)(?:\s+mir)?\s+'
+        r'(?:(?:die|das|den)\s+)?(?:app|programm|anwendung)\s+(.+)',
         text, flags=re.I
     )
     if match:
@@ -130,7 +130,7 @@ def desktop_voice_intent(phrase):
         'rechner': 'Rechner', 'taschenrechner': 'Rechner',
     }
     match = re.fullmatch(
-        r'(?:öffne|starte)\\s+(?:den\\s+|das\\s+)?'
+        r'(?:öffne|starte)\s+(?:den\s+|das\s+)?'
         r'(editor|notepad|rechner|taschenrechner)',
         text, flags=re.I
     )
@@ -138,7 +138,7 @@ def desktop_voice_intent(phrase):
         return ('apps', aliases[match.group(1).casefold()])
 
     if re.fullmatch(
-        r'(?:sprachmodus|gesprächsmodus|mikrofon)\\s+'
+        r'(?:sprachmodus|gesprächsmodus|mikrofon)\s+'
         r'(?:stoppen|beenden|ausschalten)',
         text, flags=re.I
     ):
