@@ -88,6 +88,70 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         show_tools.assert_called_once_with(query='Firefox', list_windows=False)
         send.assert_not_called()
 
+    def test_typing_while_agent_runs_routes_to_parallel_chat(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        try:
+            self.window.input.setPlainText('Was ist Python?')
+            with patch.object(self.window, 'ask_parallel') as side:
+                self.window.send()
+            side.assert_called_once_with('Was ist Python?', spoken=False)
+            self.assertEqual(self.window.input.toPlainText(), '')
+            self.assertFalse(running.stop_event.is_set())
+        finally:
+            self.window.worker = None
+
+    def test_speaking_while_agent_runs_does_not_interrupt_job(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        try:
+            with patch.object(self.window, 'ask_parallel') as side:
+                self.window.received_voice_command('Erzähl mir etwas über Python')
+            side.assert_called_once_with('Erzähl mir etwas über Python', spoken=True)
+            self.assertFalse(running.stop_event.is_set())
+        finally:
+            self.window.worker = None
+
+    def test_spoken_progress_question_reports_without_pausing(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        try:
+            with patch.object(self.window, 'report_agent_status') as status, \
+                 patch.object(self.window, 'ask_parallel') as side:
+                self.window.received_voice_command('Wie weit bist du?')
+            status.assert_called_once_with('Wie weit bist du?', spoken=True)
+            side.assert_not_called()
+            self.assertFalse(running.stop_event.is_set())
+        finally:
+            self.window.worker = None
+
+    def test_only_explicit_stop_cancels_running_job(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        try:
+            with patch.object(self.window, 'stop_speech'), \
+                 patch.object(self.window, '_conversation_ready'):
+                self.window.received_voice_command('Stopp')
+            self.assertTrue(running.stop_event.is_set())
+        finally:
+            self.window.worker = None
+
     def test_first_message_replaces_empty_state_without_losing_text(self):
         from PySide6.QtWidgets import QFrame, QLabel
         self.assertIsNotNone(self.window.empty_widget)
