@@ -122,4 +122,27 @@ QMenu {{ background: #191519; border: 1px solid #523740; border-radius: 9px;
     padding: 6px; }}
 QMenu::item {{ padding: 8px 24px; border-radius: 5px; }}
 QMenu::item:selected {{ background: #48202B; }}
+QPushButton#panelToggle {{
+    background: #1E171B; border: 1px solid #483039;
+    border-radius: 10px; padding: 9px 15px; color: #E9D7DB;
+}}
+QPushButton#panelToggle:hover {{ background: #302027;
+    border-color: #A84551; color: #FFF7F8; }}
+QPushButton#panelToggle:checked {{ background: #45212B;
+    border-color: #B74755; color: #FFFFFF; }}
+QPushButton:focus, QLineEdit:focus, QComboBox:focus {{
+    border-color: #E26570;
+}}
+QLineEdit#chatSearch {{
+    background: #171419; border: 1px solid #34272E;
+    border-radius: 11px; padding: 11px 13px;
+}}
+QLineEdit#chatSearch:focus {{ background: #20181D;
+    border-color: #A84551; }}
+QFrame#utilityCard:hover {{ border-color: #49323B; }}
+QWidget#messageSurface {{ background: #09090C; }}
+QScrollBar:horizontal {{ background: #100F12; height: 8px; border: none; }}
+QScrollBar::handle:horizontal {{ background: #47343D; border-radius: 4px;
+    min-width: 28px; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
 """
