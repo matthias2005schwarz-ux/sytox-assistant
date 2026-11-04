@@ -1,3 +1,11 @@
+## Neu im aktuellen Entwicklungsstand: Sprach- und Desktop-Steuerung (noch ohne Release-Installer)
+
+- Im rechten Panel unter **Agent Control → Windows-Steuerung** können geöffnete Fenster angezeigt und Programme anhand von Windows-Startmenü-/Desktop-Verknüpfungen gesucht werden.
+- Ein Fenster wird nur **nach deiner Bestätigung** in den Vordergrund gebracht. Ein gefundenes Programm wird nur nach Auswahl und ausdrücklicher Bestätigung gestartet. Keine versteckten Shell-Befehle oder automatische Texteingabe.
+- Nach aktiviertem lokalem Gesprächsmodus mit „Hey Sytox“ funktionieren zusätzliche Befehle wie **„Zeig mir die offenen Fenster“**, **„Suche Programm Firefox“**, **„Öffne Editor“** und **„Mikrofon ausschalten“**. Die ersten drei öffnen nur die sichere Windows-Steuerzentrale; es wird dadurch noch nichts gestartet. Alle anderen Sprachaufträge laufen wie bisher über Agent/Tool-Freigaben.
+- Die Offline-Spracherkennung benötigt weiterhin das deutsche Vosk-Modell und ein funktionsfähiges Mikrofon. Für Windows-Tests wurden simulierte Desktop-/Zustimmungsprüfungen ergänzt; reale Mikrofon- und Desktop-Hardware müssen auf dem eigenen Windows-PC geprüft werden.
+- Diese Änderungen sind **Quellcode**. Eine neue, erfolgreich verifizierte Windows-EXE und ein Installer wurden für diesen Entwicklungsstand noch nicht bereitgestellt.
+
 # SYTOX Assistant – Windows 0.3.2 (Black & Crimson Desktop Design)
 
 ## Neu in 0.3.2: Vollständige Neugestaltung der nativen Qt-Oberfläche
