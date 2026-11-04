@@ -37,7 +37,11 @@ try {
     # All 107 component tests and 6 Qt tests still run; none are skipped.
     Invoke-Native 'Python-Komponententests ohne native Qt-Fenster' $python @('tools/run_nonqt_tests.py')
     $env:PYTHONPATH = (Join-Path $PSScriptRoot 'tests') + ';' + $PSScriptRoot
+    # The isolated model-dialog test does not touch user data. Use the runner's
+    # normal APPDATA to avoid an offscreen-Qt teardown failure on Windows.
+    $env:APPDATA = $beforeAppData
     Invoke-Native 'Qt-Dialog/Setup-Thread-Tests' $python @('-m','unittest','-v','test_ollama_ui.OllamaAutoSetupQtTests')
+    $env:APPDATA = $testHome
     Invoke-Native 'Qt-Hauptfenster-Verbindungstests' $python @('-m','unittest','-v','test_ollama_ui.OllamaQtOnboardingTests')
     Invoke-Native 'Echte Win32-Fensterliste und UI-Automation laden' $python @('-c',
         "from sytox.pc_control import WindowsDesktop; from pywinauto import Desktop; wins = WindowsDesktop().windows(); print('Windows-Fenster gefunden:', len(wins)); assert isinstance(wins,list); Desktop(backend='uia'); print('Win32 + UIA OK')")
