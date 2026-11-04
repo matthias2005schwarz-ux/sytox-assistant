@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from .agent import OllamaClient
+from .work_intents import work_intent
 
 
 SYSTEM_PROMPT = (
@@ -62,6 +63,7 @@ class ParallelChatDialog(QDialog):
     """Temporary chat with its own context, separate from the active task."""
 
     answer_ready = Signal(str, bool)
+    control_requested = Signal(str, str, bool)
 
     def __init__(self, config, parent=None):
         super().__init__(parent)
@@ -121,6 +123,12 @@ class ParallelChatDialog(QDialog):
         text = str(question or '').strip()
         if not text:
             return False
+        intent = work_intent(text)
+        if intent:
+            # Treat explicit task-control statements as control messages,
+            # not as tool-free LLM questions. The MainWindow handles them.
+            self.control_requested.emit(intent, text, bool(spoken))
+            return True
         if self.reply_worker is not None and self.reply_worker.isRunning():
             self.status_label.setText('Ich beantworte noch die vorherige Frage.')
             return False
