@@ -1087,7 +1087,7 @@ class MainWindow(QMainWindow):
         self.stopvoicebtn.clicked.connect(self.stop_speech)
         self.stopvoicebtn.setEnabled(False)
         voice.addWidget(self.stopvoicebtn)
-        diagnostics_button = QPushButton('🎙  Mikrofon & Unterbrechung testen')
+        diagnostics_button = QPushButton('🎙  Mikrofon und Unterbrechung testen')
         diagnostics_button.clicked.connect(self.open_voice_diagnostics)
         voice.addWidget(diagnostics_button)
         r.addWidget(voice_card)
