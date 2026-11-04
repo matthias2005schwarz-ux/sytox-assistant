@@ -57,3 +57,38 @@ class OllamaQtOnboardingTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+# Integration checks for the guided one-click model onboarding (no real downloads).
+@unittest.skipUnless(QT_AVAILABLE, 'PySide6 is unavailable on this platform')
+class OllamaAutoSetupQtTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication(['sytox-unit-test'])
+
+    def test_model_selector_exposes_low_ram_option(self):
+        dialog = OllamaHelpDialog('qwen2.5-coder:7b', None)
+        self.assertEqual(dialog.chosen_model(), 'qwen2.5-coder:7b')
+        dialog.model_choice.setCurrentIndex(dialog.model_choice.findData('qwen2.5-coder:3b'))
+        self.assertEqual(dialog.chosen_model(), 'qwen2.5-coder:3b')
+        self.assertIn('qwen2.5-coder:3b', dialog.command_box.text())
+        dialog.close()
+
+    def test_cancelled_consent_never_starts_download(self):
+        from PySide6.QtWidgets import QMessageBox
+        dialog = OllamaHelpDialog('qwen2.5-coder:7b', None)
+        with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.No), \
+             patch('sytox.ui.OllamaSetupWorker') as worker:
+            dialog.begin_install()
+            worker.assert_not_called()
+        dialog.close()
+
+    def test_accepted_consent_starts_qthread_for_selected_model(self):
+        from PySide6.QtWidgets import QMessageBox
+        dialog = OllamaHelpDialog('qwen2.5-coder:7b', None)
+        dialog.model_choice.setCurrentIndex(dialog.model_choice.findData('qwen2.5-coder:3b'))
+        with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.Yes), \
+             patch('sytox.ui.OllamaSetupWorker') as worker:
+            dialog.begin_install()
+            worker.assert_called_once_with('http://localhost:11434', 'qwen2.5-coder:3b', dialog)
+            worker.return_value.start.assert_called_once_with()
+        dialog.close()

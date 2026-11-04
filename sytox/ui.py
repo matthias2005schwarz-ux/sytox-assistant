@@ -16,12 +16,13 @@ from PySide6.QtWidgets import (
     QApplication,QWidget,QMainWindow,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,
     QTextEdit,QPlainTextEdit,QListWidget,QListWidgetItem,QScrollArea,QSplitter,
     QMessageBox,QFileDialog,QLineEdit,QDialog,QFormLayout,QCheckBox,QComboBox,
-    QSystemTrayIcon,QMenu,QInputDialog,QSpinBox,QFrame
+    QSystemTrayIcon,QMenu,QInputDialog,QSpinBox,QFrame,QProgressBar
 )
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
+from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
 
 # SYTOX 0.2.5 design system: deep navy, raspberry accents, quiet status elements.
 BG='#0B0D13'; PANEL='#121620'; SURFACE='#1B202D'; RED='#D34A7B'; LIGHT='#F4F5FA'; MUTED='#98A0B4'
@@ -239,44 +240,170 @@ class OllamaProbe(QThread):
         self.checked.emit(check_ollama_status(self.url, self.model))
 
 
+class OllamaSetupWorker(QThread):
+    """Blocking model download and package installation stay off Qt's UI thread."""
+    progress = Signal(str, object)
+    result = Signal(bool, str)
+
+    def __init__(self, url: str, model: str, parent=None):
+        super().__init__(parent)
+        self.url = url
+        self.model = model
+        self.cancel_event = threading.Event()
+
+    def run(self):
+        try:
+            model = setup_local_ollama(self.url, self.model, self.cancel_event,
+                                       self.progress.emit)
+            self.result.emit(True, model)
+        except SetupCancelled:
+            self.result.emit(False, 'Einrichtung abgebrochen. Bereits geladene Teile bleiben erhalten.')
+        except Exception as exc:
+            self.result.emit(False, f'{type(exc).__name__}: {exc}')
+
+
 class OllamaHelpDialog(QDialog):
-    """Setup guidance with explicit user actions; never silently downloads models."""
+    """User-consented Windows setup, with cancellable background model downloads."""
     def __init__(self, model: str, status: OllamaStatus | None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('SYTOX · KI einrichten')
-        self.resize(540, 310)
+        self.setWindowTitle('SYTOX · Lokale KI einrichten')
+        self.resize(610, 430)
+        self.worker = None
+        self.installed_model = None
+        self._pending_accept = False
+        self.url = parent.config.get('ollama_url', 'http://localhost:11434') if parent else 'http://localhost:11434'
         lay = QVBoxLayout(self)
         heading = QLabel('◈  DEINE LOKALE KI EINRICHTEN')
         heading.setStyleSheet('font-size:19px;font-weight:800;color:#F0F1F6')
         lay.addWidget(heading)
-        details = QLabel(status.details if status else 'Noch nicht geprüft.')
+        details = QLabel(status.details if status else 'Wähle dein Modell und starte die Einrichtung.')
         details.setWordWrap(True)
         lay.addWidget(details)
-        guide = QLabel('1. Ollama auf Windows installieren und starten.\n'
-                       '2. Das gewünschte KI-Modell herunterladen.\n'
-                       '3. Zurück in SYTOX auf „KI prüfen“ klicken.')
+        guide = QLabel('SYTOX kann Ollama über den Windows-Paketmanager installieren, im '
+                       'Hintergrund starten und dein gewünschtes KI-Modell herunterladen. '
+                       'Dafür ist Internet erforderlich. Das Modell wird anschließend lokal verwendet.')
         guide.setWordWrap(True)
         guide.setStyleSheet('color:#C3C7D3;line-height:1.4')
         lay.addWidget(guide)
-        try:
-            command = model_pull_command(model)
-        except ValueError:
-            command = ''
-        command_box = QLineEdit(command or 'Modellname zuerst in den Einstellungen korrigieren')
-        command_box.setReadOnly(True)
-        lay.addWidget(command_box)
+        lay.addWidget(QLabel('KI-Modell auswählen'))
+        self.model_choice = QComboBox()
+        self.model_choice.setEditable(True)
+        for label, value in MODEL_CHOICES:
+            self.model_choice.addItem(label, value)
+        initial = self.model_choice.findData(model)
+        if initial >= 0:
+            self.model_choice.setCurrentIndex(initial)
+        else:
+            self.model_choice.setEditText(model)
+        self.model_choice.currentTextChanged.connect(self._refresh_command)
+        lay.addWidget(self.model_choice)
+        self.command_box = QLineEdit()
+        self.command_box.setReadOnly(True)
+        lay.addWidget(self.command_box)
+        self._refresh_command()
         buttons = QHBoxLayout()
-        download = QPushButton('Ollama herunterladen')
+        download = QPushButton('Offizielle Ollama-Webseite')
         download.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(OLLAMA_DOWNLOAD)))
         buttons.addWidget(download)
-        copy_button = QPushButton('Modellbefehl kopieren')
-        copy_button.setEnabled(bool(command))
-        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(command))
+        copy_button = QPushButton('Befehl kopieren')
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.command_box.text()))
         buttons.addWidget(copy_button)
         lay.addLayout(buttons)
-        close = QPushButton('Schließen')
-        close.clicked.connect(self.accept)
-        lay.addWidget(close)
+        self.progress_label = QLabel('Bereit zum Einrichten.')
+        self.progress_label.setWordWrap(True)
+        self.progress_label.setObjectName('muted')
+        lay.addWidget(self.progress_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        lay.addWidget(self.progress_bar)
+        action_row = QHBoxLayout()
+        self.install_button = QPushButton('◈  Ollama + Modell einrichten')
+        self.install_button.setObjectName('primary')
+        self.install_button.clicked.connect(self.begin_install)
+        action_row.addWidget(self.install_button)
+        self.cancel_button = QPushButton('Schließen')
+        self.cancel_button.clicked.connect(self.reject)
+        action_row.addWidget(self.cancel_button)
+        lay.addLayout(action_row)
+
+    def chosen_model(self):
+        index = self.model_choice.currentIndex()
+        # The combobox contains friendly labels; preserve the exact underlying model tag.
+        if index >= 0 and self.model_choice.currentText() == self.model_choice.itemText(index):
+            return self.model_choice.itemData(index)
+        return self.model_choice.currentText().strip()
+
+    def _refresh_command(self, *_):
+        try:
+            self.command_box.setText(model_pull_command(self.chosen_model()))
+        except ValueError:
+            self.command_box.setText('Ungültiger Modellname')
+
+    def begin_install(self):
+        if self.worker and self.worker.isRunning():
+            return
+        try:
+            address = valid_local_endpoint(self.url)
+            command = model_pull_command(self.chosen_model())
+        except (ValueError, RuntimeError) as exc:
+            QMessageBox.warning(self, 'KI-Einrichtung', str(exc))
+            return
+        answer = QMessageBox.question(
+            self, 'KI lokal einrichten',
+            'SYTOX wird – falls nötig – Ollama über den Windows-Paketmanager '
+            'installieren und anschließend das Modell „' + self.chosen_model() + '“ laden.\n\n'
+            'Dafür werden mehrere GB freier Speicherplatz und Internet benötigt. '
+            'Die Installation kann einige Minuten dauern. Fortfahren?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer != QMessageBox.Yes:
+            return
+        self._pending_accept = False
+        self.install_button.setEnabled(False)
+        self.model_choice.setEnabled(False)
+        self.cancel_button.setText('Abbrechen')
+        self.progress_bar.setRange(0, 0)
+        self.progress_label.setText('Einrichtung startet …')
+        self.worker = OllamaSetupWorker(address, self.chosen_model(), self)
+        self.worker.progress.connect(self._progress)
+        self.worker.result.connect(self._result)
+        self.worker.finished.connect(self._worker_finished)
+        self.worker.start()
+
+    def _progress(self, message, percent):
+        self.progress_label.setText(str(message))
+        if percent is None:
+            self.progress_bar.setRange(0, 0)
+        else:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(int(percent))
+
+    def _result(self, success, message):
+        if success:
+            self.installed_model = message
+            self._pending_accept = True
+            self.progress_label.setText('Lokale KI ist bereit!')
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(100)
+        else:
+            self.progress_label.setText(str(message))
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+
+    def _worker_finished(self):
+        self.install_button.setEnabled(True)
+        self.model_choice.setEnabled(True)
+        self.cancel_button.setText('Schließen')
+        if self._pending_accept:
+            super().accept()
+
+    def reject(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.cancel_event.set()
+            self.cancel_button.setEnabled(False)
+            self.progress_label.setText('Einrichtung wird angehalten …')
+            return
+        super().reject()
 
 
 class SettingsDialog(QDialog):
@@ -851,7 +978,14 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.check_model_status)
 
     def show_model_help(self):
-        OllamaHelpDialog(self.config['model'], self.ollama_status, self).exec()
+        dialog = OllamaHelpDialog(self.config['model'], self.ollama_status, self)
+        if dialog.exec() == QDialog.Accepted and dialog.installed_model:
+            self.config['model'] = dialog.installed_model
+            self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2),
+                                        encoding='utf-8')
+            self.model_name.setText(self.config['model'])
+            self.log('System', 'Ollama eingerichtet: ' + self.config['model'])
+        self.check_model_status()
 
     def edit_settings(self):
         dialog=SettingsDialog(self.config,self)

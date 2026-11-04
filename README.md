@@ -1,6 +1,20 @@
-# SYTOX Assistant – Entwicklungsstand 0.2.8 (Ollama-Einrichtung und Verbindungsstatus)
+# SYTOX Assistant – Entwicklungsstand 0.2.9 (Ollama auf Knopfdruck einrichten)
 
-## Neu in 0.2.8
+## Neu in 0.2.9
+
+- **Direkt im Fenster:** Rechts auf **Einrichten** klicken, ein Modell auswählen und **Ollama + Modell einrichten** drücken. Erst nach expliziter Bestätigung startet die Installation.
+- **Windows-Paketmanager:** Ist Ollama nicht installiert, installiert SYTOX ausschließlich das Paket `Ollama.Ollama` aus der offiziellen `winget`-Quelle. Kein ungeprüfter Download und keine verdeckte Ausführung über eine Shell. Falls winget fehlt, ist ein Link zur offiziellen Ollama-Webseite verfügbar.
+- **Lokaler Ollama-Server:** Läuft Ollama noch nicht, versucht SYTOX, `ollama serve` im Hintergrund zu starten. Bestehende Ollama-Instanzen werden weiterverwendet.
+- **Modell-Download:** Lädt das ausgewählte Modell per Ollama-API mit Fortschrittsanzeige. Standard bleibt `qwen2.5-coder:7b`; alternativ ist `qwen2.5-coder:3b` für langsame CPUs / weniger RAM auswählbar. Der Download dauert je nach Internet, Speicherplatz und Modell mehrere Minuten und kann abgebrochen werden.
+- **Verifizierter Abschluss:** Erst wenn Ollama das Modell nach dem Download in seiner Modellliste meldet, wird es als einsatzbereit gespeichert. Das Herunterladen und die Installation erfordern Internet; die späteren Chatantworten sind lokal.
+- **Einschränkungen:** Keine automatische Neuinstallation auf fremden Rechnern, keine Hintergrunddownloads ohne ausdrücklichen Klick. Der Nutzer muss den Installations- und Modell-Download ausdrücklich genehmigen. Die Antwortqualität und Reaktionsgeschwindigkeit eines lokalen 3B-/7B-Modells sind nicht mit ChatGPT gleichzusetzen.
+- **Tests:** Unit-Tests für lokale Endpunkte, sichere Paketmanager-Argumente, Abbruch, Erfolgsvalidierung und Qt-Klicks plus vollständiger Windows-Build-Workflow. **Ein Download von mehreren GB und eine reale Ollama-Erstinstallation werden im CI nicht ausgeführt.**
+
+---
+
+# SYTOX Assistant – Entwicklungsstand 0.2.9 (Ollama-Einrichtung und Verbindungsstatus)
+
+## Neu in 0.2.9
 
 - **KI-Verbindungsstatus direkt im Hauptfenster:** SYTOX zeigt nach dem Start ausdrücklich, ob Ollama erreichbar ist und ob das ausgewählte Modell installiert ist. Die App behauptet nicht länger, dass die KI bereit ist, wenn nur das Fenster geöffnet wurde.
 - **Einrichtungsdialog:** Offizieller Ollama-Windows-Download, kopierbarer `ollama pull ...`-Befehl und erneuter Verbindungscheck. Weder Programme noch Modelle werden ohne ausdrückliche Handlung des Benutzers installiert.
@@ -10,7 +24,7 @@
 
 ## Windows-Build-Status
 
-Die Basisversion 0.2.7 wurde in einem echten GitHub-Actions-Windows-Runner gebaut und inklusive Installation, Start und Deinstallation erfolgreich geprüft. Version 0.2.8 muss nach diesen Änderungen erneut per Windows-CI getestet werden.
+Die Basisversion 0.2.7 wurde in einem echten GitHub-Actions-Windows-Runner gebaut und inklusive Installation, Start und Deinstallation erfolgreich geprüft. Version 0.2.9 muss nach diesen Änderungen erneut per Windows-CI getestet werden.
 
 ---
 
