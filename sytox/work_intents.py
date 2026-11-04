@@ -46,7 +46,8 @@ def work_intent(utterance: str) -> str | None:
     text = re.sub(r'\s+(?:bitte|danke)$', '', text).strip()
     # Strip other harmless courtesy tokens without altering the action.
     text = re.sub(r'\b(?:bitte|mal|doch|einfach)\b', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'\\s+', ' ', text).strip()
+    text = re.sub(r'^(?:also|okay|ok|naja|ach|so)\\s+', '', text).strip()
 
     domain = r'(?:programmier(?:en|ung)?|coden|code schreiben|arbeiten|deine arbeit|'
     domain += r'(?:dem|den|die|das|der|meinem|meinen|meiner) (?:auftrag|projekt|programmieren|arbeit))'
@@ -66,12 +67,12 @@ def work_intent(utterance: str) -> str | None:
         rf'(?:\s+(?:den auftrag|die arbeit|das projekt|die programmierung|'
         rf'das programmieren|mit dem programmieren|mich|es))?',
         rf'(?:mach|mache)(?:\s+(?:jetzt|kurz|erstmal|vorerst))?'
-        rf'\s+(?:eine|ne|n)\s+pause(?:\s+(?:mit\s+{domain}))?',
+        rf'\\s+(?:eine|ne|n)?\\s*pause(?:\\s+(?:mit\\s+{domain}))?',
         rf'(?:warte|wart)(?:\s+(?:jetzt|kurz|erstmal|vorerst))?'
         rf'\s+mit\s+{domain}',
         r'(?:(?:jetzt|kurz|erstmal)\s+)?'
         r'aufhören\s+zu\s+(?:programmieren|arbeiten|coden)',
-                r'(?:programmier|programmiere|arbeite)\s+(?:jetzt\s+)?nicht\s+weiter',
+        r'(?:programmier|programmiere|arbeite)\s+(?:jetzt\s+)?nicht\s+weiter',
         r'lass\s+(?:das\s+)?(?:programmieren|arbeiten|projekt)\s+'
         r'(?:erstmal|vorerst|für heute)\s+sein',
     )
@@ -90,7 +91,8 @@ def work_intent(utterance: str) -> str | None:
         r'\s+(?:weitermachen|weiterarbeiten|weiterprogrammieren)',
         r'(?:weiter\s+(?:mit\s+)?(?:dem|den|der|die|das)\s+'
         r'(?:programmieren|auftrag|arbeit|projekt|programmierung))',
-        r'(?:kannst du)\s+(?:jetzt\s+)?(?:wieder\s+)?'
+        r'(?:(?:jetzt|wieder)\\s+)?(?:weitermachen|weiterarbeiten|weiterprogrammieren)',
+        r'(?:kannst du)\\s+(?:jetzt\\s+)?(?:wieder\\s+)?'
         r'(?:weiterprogrammieren|weitermachen|weiterarbeiten)',
     )
 
