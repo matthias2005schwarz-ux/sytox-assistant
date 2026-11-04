@@ -38,6 +38,18 @@ class BlackCrimsonDesignTests(unittest.TestCase):
         self.assertIn('QPropertyAnimation(', ui)
         self.assertIn('QGraphicsOpacityEffect(', ui)
 
+
+    def test_focus_mode_has_native_toggle_and_keyboard_shortcuts(self):
+        ui = (ROOT / 'sytox/ui.py').read_text(encoding='utf-8')
+        theme = (ROOT / 'sytox/theme.py').read_text(encoding='utf-8')
+        self.assertIn("setObjectName('panelToggle')", ui)
+        self.assertIn("self.utility_panel.setVisible(not checked)", ui)
+        self.assertIn("QShortcut(QKeySequence('Ctrl+Shift+F'), self)", ui)
+        self.assertIn("QShortcut(QKeySequence('Ctrl+K'), self)", ui)
+        self.assertIn("QShortcut(QKeySequence('Ctrl+N'), self)", ui)
+        self.assertIn('QPushButton#panelToggle:checked', theme)
+        self.assertIn('QLineEdit#chatSearch:focus', theme)
+
     def test_ui_version_label_matches_package(self):
         ui = (ROOT / 'sytox/ui.py').read_text(encoding='utf-8')
         version = (ROOT / 'sytox/__init__.py').read_text(encoding='utf-8')

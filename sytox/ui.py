@@ -10,7 +10,7 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QTextCursor, QDesktopServices, QLinearGradient, QPen
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QTextCursor, QDesktopServices, QLinearGradient, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,QWidget,QMainWindow,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,
@@ -847,11 +847,13 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(1)
+        self.splitter = splitter
         layout.addWidget(splitter)
 
         # Left: simple navigation, with a distinctive native vector brand.
         left = QFrame()
         left.setObjectName('sidebar')
+        self.navigation_panel = left
         left.setMinimumWidth(218)
         l = QVBoxLayout(left)
         l.setContentsMargins(14, 23, 14, 17)
@@ -880,6 +882,8 @@ class MainWindow(QMainWindow):
         l.addWidget(btn_new)
         l.addSpacing(7)
         self.search = QLineEdit()
+        self.search.setObjectName('chatSearch')
+        self.search.setAccessibleName('Gespräche durchsuchen')
         self.search.setPlaceholderText('Chats durchsuchen')
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.reload_chats)
@@ -931,6 +935,14 @@ class MainWindow(QMainWindow):
         titles.addWidget(self.chat_heading)
         th.addLayout(titles)
         th.addStretch(1)
+        self.focus_btn = QPushButton('Fokusmodus')
+        self.focus_btn.setObjectName('panelToggle')
+        self.focus_btn.setAccessibleName('Steuerzentrale ein- oder ausblenden')
+        self.focus_btn.setCheckable(True)
+        self.focus_btn.setToolTip('Steuerzentrale ausblenden (Strg+Umschalt+F)')
+        self.focus_btn.clicked.connect(self.toggle_focus_mode)
+        th.addWidget(self.focus_btn, 0, Qt.AlignVCenter)
+        th.addSpacing(14)
         connection = QVBoxLayout()
         connection.setSpacing(4)
         self.model_name = QLabel(self.config['model'])
@@ -952,7 +964,7 @@ class MainWindow(QMainWindow):
         self.msg_layout = QVBoxLayout(self.msg_container)
         self.msg_layout.setAlignment(Qt.AlignTop)
         self.msg_layout.setSpacing(16)
-        self.msg_layout.setContentsMargins(34, 28, 34, 28)
+        self.msg_layout.setContentsMargins(28, 30, 28, 30)
         scroll.setWidget(self.msg_container)
         c.addWidget(scroll, 1)
         self.scroll = scroll
@@ -1000,8 +1012,9 @@ class MainWindow(QMainWindow):
         right_buttons.addWidget(self.mic_btn)
         card_row.addLayout(right_buttons)
         cbox.addWidget(input_card)
-        hint = QLabel('ENTER ZUM SENDEN     ·     SHIFT + ENTER FÜR ZEILENUMBRUCH     ·     KI LÄUFT LOKAL')
+        hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   KI LÄUFT LOKAL')
         hint.setObjectName('version')
+        hint.setWordWrap(True)
         cbox.addWidget(hint)
         c.addWidget(compose)
         splitter.addWidget(center)
@@ -1009,6 +1022,7 @@ class MainWindow(QMainWindow):
         # Right: purpose-built dark cards rather than an endless button list.
         right = QFrame()
         right.setObjectName('right')
+        self.utility_panel = right
         right.setMinimumWidth(268)
         right_column = QVBoxLayout(right)
         right_column.setContentsMargins(12, 13, 12, 13)
@@ -1114,6 +1128,33 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setSizes([255, 830, 296])
         splitter.setStretchFactor(1, 1)
+        self._focus_shortcut = QShortcut(QKeySequence('Ctrl+Shift+F'), self)
+        self._focus_shortcut.activated.connect(self.toggle_focus_mode)
+        self._search_shortcut = QShortcut(QKeySequence('Ctrl+K'), self)
+        self._search_shortcut.activated.connect(self.search.setFocus)
+        self._new_chat_shortcut = QShortcut(QKeySequence('Ctrl+N'), self)
+        self._new_chat_shortcut.activated.connect(self.create_chat)
+        self.input.setFocus()
+
+    def toggle_focus_mode(self, checked=None):
+        """Give the conversation more room without stopping AI, voice or agent tasks."""
+        if checked is None:
+            checked = not self.focus_btn.isChecked()
+        checked = bool(checked)
+        if checked:
+            self._utility_last_width = max(268, self.utility_panel.width())
+        self.focus_btn.setChecked(checked)
+        self.utility_panel.setVisible(not checked)
+        self.focus_btn.setText('Steuerzentrale' if checked else 'Fokusmodus')
+        self.focus_btn.setToolTip(
+            'Steuerzentrale einblenden (Strg+Umschalt+F)' if checked
+            else 'Steuerzentrale ausblenden (Strg+Umschalt+F)'
+        )
+        if not checked:
+            sidebar_width = max(218, self.navigation_panel.width())
+            panel_width = getattr(self, '_utility_last_width', 296)
+            center_width = max(450, self.splitter.width() - sidebar_width - panel_width - 2)
+            self.splitter.setSizes([sidebar_width, center_width, panel_width])
         self.input.setFocus()
 
     def _animate_appearance(self, widget, duration=260):
