@@ -91,4 +91,8 @@ class OllamaAutoSetupQtTests(unittest.TestCase):
             dialog.begin_install()
             worker.assert_called_once_with('http://localhost:11434', 'qwen2.5-coder:3b', dialog)
             worker.return_value.start.assert_called_once_with()
+            # Qt must see the fake worker as finished before dialog teardown.
+            worker.return_value.isRunning.return_value = False
         dialog.close()
+        dialog.deleteLater()
+        self.app.processEvents()
