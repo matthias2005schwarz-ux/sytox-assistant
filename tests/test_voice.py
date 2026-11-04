@@ -8,7 +8,7 @@ import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from sytox.voice_features import VoiceTurnRouter, render_speech_file, transcribe_wav, spoken_text, desktop_voice_intent
+from sytox.voice_features import VoiceTurnRouter, render_speech_file, transcribe_wav, spoken_text, desktop_voice_intent, agent_status_intent
 
 
 class TestVoiceRouting(unittest.TestCase):
@@ -92,6 +92,21 @@ class TestDesktopVoiceIntents(unittest.TestCase):
         self.assertIsNone(desktop_voice_intent('öffne die private Datei'))
         self.assertIsNone(desktop_voice_intent('suche Programm A'))
         self.assertIsNone(desktop_voice_intent(''))
+
+
+class TestAgentStatusVoiceIntents(unittest.TestCase):
+    def test_progress_questions_are_informational(self):
+        for phrase in ('Wie weit bist du?', 'Was machst du gerade?',
+                       'Arbeitest du noch?', 'Läuft mein Auftrag noch?',
+                       'Wie ist der aktuelle Stand?'):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(agent_status_intent(phrase), 'status')
+
+    def test_progress_intent_does_not_catch_new_task_or_stop(self):
+        for phrase in ('Programmier eine Webseite', 'Stopp',
+                       'Öffne Notepad', 'Wie spät ist es?', ''):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(agent_status_intent(phrase))
 
 
 class TestVoiceRendering(unittest.TestCase):

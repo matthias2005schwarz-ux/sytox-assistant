@@ -146,6 +146,20 @@ def desktop_voice_intent(phrase):
     return None
 
 
+def agent_status_intent(phrase):
+    """Only informational requests; no project actions or cancellation."""
+    text = ' '.join(str(phrase or '').lower().strip().split()).strip(' ,.!?')
+    if re.fullmatch(
+        r'(?:wie weit bist du|was machst du(?: gerade)?|'
+        r'arbeitest du noch|läuft (?:der |mein )?(?:auftrag|job|programmierung) noch|'
+        r'wie (?:ist|steht) (?:der |mein )?(?:status|stand|fortschritt)|'
+        r'wie ist der aktuelle stand)',
+        text,
+    ):
+        return 'status'
+    return None
+
+
 VOSK_DE_MODEL_NAME = 'vosk-model-small-de-0.15'
 VOSK_DE_MODEL_URL = 'https://alphacephei.com/vosk/models/' + VOSK_DE_MODEL_NAME + '.zip'
 

@@ -21,8 +21,10 @@ from PySide6.QtWidgets import (
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
-from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent
+from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
+from .parallel_chat import ParallelChatDialog
+from .work_intents import work_intent
 from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
@@ -798,6 +800,9 @@ class MainWindow(QMainWindow):
         self.voice_download_dialog=None
         self.voice_diagnostic_dialog=None
         self.desktop_tools_dialog=None
+        self.parallel_chat=None
+        self._resume_after_pause=False
+        self._agent_last_status='Auftrag gestartet; noch kein konkreter Fortschritt gemeldet.'
         self.active_speaker=None
         self._voice_generation=0
         self._audio_path=None
@@ -1083,6 +1088,11 @@ class MainWindow(QMainWindow):
         self.resume = QPushButton('Letzte Aufgabe fortsetzen')
         self.resume.clicked.connect(self.resume_task)
         task.addWidget(self.resume)
+        self.parallel_btn = QPushButton('Während der Arbeit chatten')
+        self.parallel_btn.setObjectName('subtle')
+        self.parallel_btn.setToolTip('Nebenunterhaltung öffnen; laufende Agent-Aufgabe bleibt aktiv')
+        self.parallel_btn.clicked.connect(self.show_parallel_chat)
+        task.addWidget(self.parallel_btn)
         self.desktop_btn = QPushButton('Windows-Steuerung')
         self.desktop_btn.setObjectName('subtle')
         self.desktop_btn.setToolTip('Fenster anzeigen oder Programme suchen, mit Bestätigung vor jeder Änderung')
@@ -1264,6 +1274,10 @@ class MainWindow(QMainWindow):
                     'Der Download wird noch beendet. Bitte gleich erneut versuchen.')
                 return
         self.stop_speech()
+        if self.parallel_chat and not self.parallel_chat.stop_reply():
+            QMessageBox.information(self, 'Nebenunterhaltung',
+                'Die kurze KI-Antwort wird noch beendet. Bitte danach erneut schließen.')
+            return
         if self.listener and self.listener.isRunning():
             self.listener.stop_event.set();self.listener.wait(3000)
         if self.recorder and self.recorder.isRunning():
@@ -1378,12 +1392,24 @@ class MainWindow(QMainWindow):
     def log(self,kind,text):
         self.logs.appendPlainText(f'{kind}: {text}')
         if kind in ('Status','Aktion'):
+            self._agent_last_status = str(text)[:130]
             self.state.setText(('● ' if kind=='Status' else '◆ ')+str(text)[:80])
 
     def send(self):
         txt=self.input.toPlainText().strip()
         if not txt:return
-        if self.worker and self.worker.isRunning():return
+        intent = work_intent(txt)
+        if intent:
+            self.input.clear()
+            self.handle_work_control(intent, txt, spoken=False)
+            return
+        if self.worker and self.worker.isRunning():
+            self.input.clear()
+            if agent_status_intent(txt):
+                self.report_agent_status(txt, spoken=False)
+            else:
+                self.ask_parallel(txt, spoken=False)
+            return
         self.stop_speech()
         self.voice_muted.set()
         self.store.add_message(self.chat_id,'user',txt)
@@ -1403,18 +1429,83 @@ class MainWindow(QMainWindow):
         self.start_worker(mode,hours)
 
     def start_worker(self,mode='once',hours=1.0,task_id=None):
-        self.voice_muted.set()
+        # The Agent runs in its own thread. Listening for follow-up questions
+        # must remain available while it writes code in that thread.
+        if self.listener and self.listener.isRunning() and not self._speaking:
+            self.voice_muted.clear()
+        else:
+            self.voice_muted.set()
+        self._agent_last_status='Auftrag gestartet; noch kein konkreter Fortschritt gemeldet.'
         self.worker=Worker(self.store,self.chat_id,self.config.copy(),mode,hours,task_id)
         self.worker.log_line.connect(self.log)
         self.worker.approval_request.connect(self.handle_approval)
         self.worker.completed.connect(self.worker_done)
-        self.stopbtn.setEnabled(True);self.send_btn.setEnabled(False)
+        self.worker.finished.connect(self._agent_thread_finished)
+        self.stopbtn.setEnabled(True)
+        # Sending during work routes to the separate, tool-free conversation.
+        self.send_btn.setEnabled(True)
         self.task_state.setText('Läuft: '+(mode if mode!='timed' else f'{hours:g} h'))
         self.worker.start()
 
     def stop_work(self):
         if self.worker and self.worker.isRunning():
             self.worker.stop_event.set();self.log('Status','Stopp angefordert …')
+
+
+    def _agent_thread_finished(self):
+        """A resume requested during shutdown waits for the old QThread to exit."""
+        if not self._resume_after_pause:
+            return
+        self._resume_after_pause = False
+        candidates = [task for task in self.store.tasks(self.chat_id)
+                      if task['status'] == 'paused']
+        if candidates:
+            self.resume_task()
+
+    def handle_work_control(self, intent, original='', spoken=False):
+        """Interpret conversational task controls without altering side questions."""
+        active = bool(self.worker and self.worker.isRunning())
+        stopping = bool(active and self.worker.stop_event.is_set())
+        if intent == 'silence':
+            self.stop_speech()
+            message = 'Okay, ich bin still. Der Programmierauftrag bleibt unverändert.'
+        elif intent == 'pause':
+            self._resume_after_pause = False
+            if active and not stopping:
+                self.stop_work()
+                message = ('Okay, ich pausiere die Arbeit nach dem aktuellen Schritt. '
+                           'Der gespeicherte Zwischenstand bleibt erhalten.')
+            elif stopping:
+                message = 'Die Pause wurde bereits angefordert.'
+            else:
+                message = 'Gerade läuft kein Auftrag, den ich pausieren könnte.'
+        elif intent == 'resume':
+            if active and stopping:
+                self._resume_after_pause = True
+                message = ('Ich mache weiter, sobald der laufende Schritt '
+                           'beendet und die Pause gespeichert ist.')
+            elif active:
+                message = 'Ich arbeite bereits weiter an deinem Auftrag.'
+            else:
+                candidates = [task for task in self.store.tasks(self.chat_id)
+                              if task['status'] in ('paused', 'failed', 'time_elapsed')]
+                if candidates:
+                    self.resume_task()
+                    message = 'Ich setze den letzten unterbrochenen Auftrag fort.'
+                else:
+                    message = 'Ich habe gerade keinen pausierten Auftrag zum Fortsetzen.'
+        else:
+            return
+        self.log('Stimme' if spoken else 'System', 'Auftragssteuerung: ' + message)
+        if self.parallel_chat is not None:
+            self.parallel_chat.transcript.appendPlainText(
+                'DU: ' + str(original or '') + '\nSYTOX: ' + message + '\n'
+            )
+        if spoken and self.listener and self.listener.isRunning():
+            self.start_speech(message)
+        else:
+            self._conversation_ready()
+        return message
 
     def handle_approval(self,label,desc,payload):
         if not self.isVisible():
@@ -1441,7 +1532,14 @@ class MainWindow(QMainWindow):
         self.log('Status','Aufgabe: '+result.get('status','unbekannt'))
         if result.get('status')=='failed' and ('Ollama' in answer or 'Modell' in answer):
             self.check_model_status()
-        if (self.config.get('voice_enabled') or (self.listener and self.listener.isRunning())) and answer:
+        side_busy = (self.parallel_chat is not None and
+                     self.parallel_chat.reply_worker is not None and
+                     self.parallel_chat.reply_worker.isRunning())
+        if side_busy or self._speaking:
+            # Do not interrupt a side-chat answer just because the Agent finished.
+            self.log('System','Der Hauptauftrag ist beendet; Ergebnis im Hauptchat.')
+        elif (self.config.get('voice_enabled') or
+              (self.listener and self.listener.isRunning())) and answer:
             self.start_speech(answer)
         else:
             self._conversation_ready()
@@ -1662,6 +1760,52 @@ class MainWindow(QMainWindow):
         dialog.show()
         worker.start()
 
+    def show_parallel_chat(self):
+        """Show temporary conversational context, never the agent's workspace."""
+        if self.parallel_chat is None:
+            self.parallel_chat = ParallelChatDialog(self.config, self)
+            self.parallel_chat.answer_ready.connect(self._parallel_answer_ready)
+            self.parallel_chat.control_requested.connect(self.handle_work_control)
+        self.parallel_chat.show()
+        self.parallel_chat.raise_()
+        self.parallel_chat.activateWindow()
+        return self.parallel_chat
+
+    def ask_parallel(self, question, spoken=False):
+        dialog = self.show_parallel_chat()
+        if not dialog.ask(question, spoken=spoken):
+            self.log('Stimme' if spoken else 'System',
+                     'Nebenunterhaltung ist gerade beschäftigt.')
+            if spoken:
+                self._conversation_ready()
+
+    def _parallel_answer_ready(self, answer, spoken):
+        # The main Worker and its stop_event are never touched here.
+        if spoken and self.listener and self.listener.isRunning():
+            self.start_speech(answer)
+        else:
+            self._conversation_ready()
+
+    def report_agent_status(self, question='', spoken=False):
+        active = bool(self.worker and self.worker.isRunning() and
+                      not self.worker.stop_event.is_set())
+        stopping = bool(self.worker and self.worker.isRunning() and
+                        self.worker.stop_event.is_set())
+        if active:
+            message = ('Der Programmierauftrag läuft weiter. Zuletzt gemeldet: '
+                       + self._agent_last_status)
+        elif stopping:
+            message = 'Das Stoppen wurde angefordert; der Auftrag beendet gerade den laufenden Schritt.'
+        else:
+            message = 'Derzeit läuft kein Programmierauftrag.'
+        dialog = self.show_parallel_chat()
+        dialog.transcript.appendPlainText('DU: ' + question + '\\nSYTOX: ' + message + '\\n')
+        if spoken and self.listener and self.listener.isRunning():
+            self.start_speech(message)
+        else:
+            self._conversation_ready()
+        return message
+
     def show_desktop_tools(self, query='', list_windows=False):
         """Open local desktop discovery; a separate approval precedes every action."""
         if self.desktop_tools_dialog is None:
@@ -1743,14 +1887,12 @@ class MainWindow(QMainWindow):
 
     def received_voice_command(self,text):
         self.log('Stimme','Befehl gehört: '+text[:120])
-        if re.fullmatch(r'\s*(?:stopp|stop|anhalten|sei still|ruhe)\s*[.!?]*',text.lower()):
-            self.stop_speech()
-            self.stop_work()
-            self._conversation_ready()
+        intent = work_intent(text)
+        if intent:
+            self.handle_work_control(intent, text, spoken=True)
             return
-        if self.worker and self.worker.isRunning():
-            self.log('Stimme','Noch beschäftigt. Bitte nach dem Auftrag erneut sprechen.')
-            self._conversation_ready()
+        if agent_status_intent(text):
+            self.report_agent_status(text, spoken=True)
             return
         intent = desktop_voice_intent(text)
         if intent:
@@ -1765,6 +1907,9 @@ class MainWindow(QMainWindow):
                                     list_windows=kind == 'windows')
             self.log('Stimme', 'Windows-Steuerzentrale geöffnet; keine PC-Aktion ausgeführt.')
             self._conversation_ready()
+            return
+        if self.worker and self.worker.isRunning():
+            self.ask_parallel(text, spoken=True)
             return
         self.input.setPlainText(text)
         self.send()

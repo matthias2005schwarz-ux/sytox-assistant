@@ -1,3 +1,23 @@
+# Entwicklungsstand: Sprechen während SYTOX programmiert
+
+### Natürliche Arbeitsunterbrechung und Fortsetzung
+
+SYTOX kann neben den bisherigen kurzen Befehlen auch höfliche, natürlich formulierte Anweisungen unterscheiden:
+
+- **Auftrag pausieren:** „Hör kurz auf zu programmieren“, „Kannst du bitte kurz aufhören zu programmieren?“, „Mach eine Pause“ oder „Warte mit dem Programmieren“. Die Agent-Schleife erhält einen Stoppwunsch und speichert einen wiederaufnehmbaren Zwischenstand; bereits laufende externe Aktionen lassen sich nicht immer sofort unterbrechen.
+- **Wieder aufnehmen:** „Mach wieder weiter“, „Programmiere weiter“, „Setz die Arbeit fort“ oder „Fang wieder an“. Bei noch laufendem Abbruch wird der Wiederbeginn nach dem Abschluss des alten Threads eingeplant.
+- **Nur Stimme stoppen:** „Sei still“ oder „Hör auf zu reden“ lässt den Programmierauftrag weiterlaufen.
+- **Gewöhnliches Gespräch:** Fragen oder Sätze wie „Hör nicht auf zu programmieren“ sind kein Abbruchbefehl. Die getrennte Nebenunterhaltung bleibt verfügbar.
+- **Sicherheit:** Mehrdeutige Sätze führen nicht zu einer verdeckten PC-Aktion. Die freie Unterhaltung verwendet keine Agent-Werkzeuge. Das System kann nicht garantieren, jede denkbare Formulierung korrekt zu verstehen. Pausen/Auftragsfortsetzungen erfordern weiterhin, dass SYTOX auf dem Rechner läuft.
+
+
+
+- **Parallel statt Stopp:** Der Haupt-Agent bearbeitet den ursprünglichen Auftrag im eigenen QThread weiter. Fragen per Texteingabe oder Stimme werden währenddessen in einer separaten, temporären Nebenunterhaltung beantwortet. Diese Nebenunterhaltung hat bewusst **keine PC-/Dateiwerkzeuge** und verändert den laufenden Auftrag nicht.
+- **Bedienung:** Im Bereich „Agent Control“ auf „Während der Arbeit chatten“ klicken, oder während eines laufenden Auftrags einfach eine weitere Frage schreiben bzw. nach „Hey Sytox“ sprechen.
+- **Status:** „Wie weit bist du?“, „Arbeitest du noch?“ oder „Was machst du gerade?“ melden den tatsächlich bekannten Status; es werden keine erfundenen Prozentwerte angegeben.
+- **Stopp eindeutig:** „Stopp“ fordert das Beenden des Auftrags an. „Sei still“ unterbricht lediglich das Vorlesen. Der Werkzeug-Agent behält sämtliche bisherigen Freigabeprüfungen.
+- **Grenzen:** Der PC und SYTOX müssen eingeschaltet bleiben. Bei einem einzigen lokalen Ollama-Modell kann die parallele Sprachantwort die Modellarbeit verlangsamen oder in Ollama warten, ohne den Agent-Thread abzubrechen. Sprachqualität, tatsächliche Multitasking-Leistung und Mikrofon-Interaktion müssen auf dem Anwender-PC erprobt werden. Noch kein neues Installationspaket mit dieser Funktion als Release bestätigt.
+
 ## Neu im aktuellen Entwicklungsstand: Sprach- und Desktop-Steuerung (noch ohne Release-Installer)
 
 - Im rechten Panel unter **Agent Control → Windows-Steuerung** können geöffnete Fenster angezeigt und Programme anhand von Windows-Startmenü-/Desktop-Verknüpfungen gesucht werden.
