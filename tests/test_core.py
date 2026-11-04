@@ -32,6 +32,30 @@ class TestStore(unittest.TestCase):
         instance.client.chat = MagicMock(side_effect=list(responses))
         return instance
 
+    def test_public_question_automatically_includes_sourced_search(self):
+        from unittest.mock import patch
+        sources = [{'title': 'Profil', 'url': 'https://example.org/jenna',
+                    'snippet': 'Schauspielerin'}]
+        with patch('sytox.agent.search_web', return_value=sources) as search:
+            agent = self.agent('Wer ist Jenna Ortega?', [
+                {'role': 'assistant', 'content': 'Jenna Ortega ist Schauspielerin.'}
+            ])
+            result = agent.run(self.cid, 'once')
+        self.assertEqual(result['status'], 'done')
+        self.assertIn('https://example.org/jenna', result['content'])
+        search.assert_called_once()
+        call_messages = agent.client.chat.call_args.args[0]
+        self.assertIn('https://example.org/jenna', call_messages[-1]['content'])
+
+    def test_coding_task_does_not_auto_search_or_expose_project(self):
+        from unittest.mock import patch
+        with patch('sytox.agent.search_web') as search:
+            agent = self.agent('Programmiere ein privates Python-Projekt', [
+                {'role': 'assistant', 'content': 'Ich beginne.'}
+            ])
+            self.assertEqual(agent.run(self.cid, 'once')['status'], 'done')
+            search.assert_not_called()
+
     def test_chat_crud(self):
         self.assertEqual(self.store.chats()[0]['id'], self.cid)
         self.store.add_message(self.cid, 'user', 'Das ist ein Minecraft Projekt')
