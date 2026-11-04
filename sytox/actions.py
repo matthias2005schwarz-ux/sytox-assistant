@@ -284,6 +284,50 @@ class Toolkit:
             if re.search(r'Ran\s+0\s+tests?', output, re.IGNORECASE):
                 return False
             return True
+        if not self.unvalidated_paths:
+            return False
+        changed = {Path(path).suffix.lower() for path in self.unvalidated_paths}
+        parts = command.lower().strip().split()
+        if not parts:
+            return False
+        # Only compilation of a relevant workspace project is accepted here.
+        # These are not "safe" shell commands: run_command still asks permission.
+        if parts[:2] in (['dotnet', 'build'], ['dotnet', 'test']):
+            projects = list(self.workspace.glob('*.csproj')) + list(self.workspace.glob('*/*.csproj'))
+            return ('--no-build' not in parts and bool(projects)
+                    and changed <= {'.cs', '.csproj', '.sln', '.slnx', '.xaml', '.resx'})
+        if parts[:2] in (['cargo', 'check'], ['cargo', 'build'], ['cargo', 'test']):
+            return ((self.workspace / 'Cargo.toml').is_file()
+                    and changed <= {'.rs', '.toml'})
+        if parts[:2] in (['go', 'build'], ['go', 'test']):
+            return ((self.workspace / 'go.mod').is_file()
+                    and changed <= {'.go', '.mod', '.sum'})
+        if parts[0] in ('tsc', 'tsc.cmd') and '--noemit' in parts:
+            return ((self.workspace / 'tsconfig.json').is_file()
+                    and changed <= {'.ts', '.tsx', '.json'}
+                    and any(self.workspace.rglob('*.ts')))
+        if parts[:2] == ['node', '--check'] and len(parts) == 3:
+            try:
+                file = self._path(command.strip().split()[2])
+                return (file.is_file() and file.suffix.lower() in ('.js', '.mjs', '.cjs')
+                        and all(self._path(p) == file for p in self.unvalidated_paths))
+            except (ValueError, PermissionError):
+                return False
+        if parts[0] in ('javac', 'javac.exe') and len(parts) >= 2:
+            try:
+                targets = [self._path(p) for p in command.split()[1:]]
+                return (all(p.is_file() and p.suffix == '.java' for p in targets)
+                        and all(self._path(p) in targets for p in self.unvalidated_paths))
+            except (ValueError, PermissionError):
+                return False
+        if parts[0] in ('clang', 'clang++', 'gcc', 'g++') and '-fsyntax-only' in parts:
+            try:
+                targets = [self._path(p) for p in command.split()[1:]
+                           if Path(p).suffix.lower() in ('.c', '.cpp', '.cc', '.cxx')]
+                return (bool(targets) and all(p.is_file() for p in targets)
+                        and all(self._path(p) in targets for p in self.unvalidated_paths))
+            except (ValueError, PermissionError):
+                return False
         return False
 
     def action_toolchain_inspect(self, task=''):
