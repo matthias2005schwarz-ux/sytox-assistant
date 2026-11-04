@@ -19,11 +19,11 @@ def content(relative):
 class WindowsReleaseContracts(unittest.TestCase):
     def test_all_windows_package_versions_match_project(self):
         version = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", content('sytox/__init__.py')).group(1)
-        self.assertEqual(version, '0.3.3')
+        self.assertEqual(version, '0.3.4')
         for name in ('Windows_Installer.iss', 'Build_Installer.ps1', '.github/workflows/windows-ci.yml',
                      'Installer_Install_Smoke_Test.ps1'):
             with self.subTest(name=name):
-                self.assertIn('0.3.3', content(name))
+                self.assertIn('0.3.4', content(name))
                 self.assertNotIn('0.2.5', content(name))
 
     def test_installer_ci_tests_installed_exe_and_retains_profile_data(self):
@@ -40,7 +40,7 @@ class WindowsReleaseContracts(unittest.TestCase):
         self.assertIn('runs-on: windows-latest', workflow)
         self.assertIn('Installer_Install_Smoke_Test.ps1', workflow)
         self.assertIn('actions/upload-artifact', workflow)
-        self.assertIn('installer/SYTOX_Assistant_Setup_0.3.3.exe', workflow)
+        self.assertIn('installer/SYTOX_Assistant_Setup_0.3.4.exe', workflow)
         self.assertIn('dist/SYTOX_Assistant/', workflow)
 
     def test_bundle_contains_required_release_scripts(self):
@@ -66,7 +66,7 @@ class WindowsInstallerTimeoutTests(unittest.TestCase):
         workflow = content('.github/workflows/windows-ci.yml')
         self.assertIn('timeout-minutes: 35', workflow)
         self.assertIn('actions/upload-artifact@v4', workflow)
-        self.assertIn('SYTOX_Assistant_Setup_0.3.3.exe', workflow)
+        self.assertIn('SYTOX_Assistant_Setup_0.3.4.exe', workflow)
 
 
 class FatalStartupReportTests(unittest.TestCase):
