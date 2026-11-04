@@ -31,7 +31,7 @@ jobs:
       - name: Upload visual workspace preview
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-ui-preview-0.3.2
+          name: sytox-ui-preview-0.3.3
           path: preview/sytox-black-crimson.png
           if-no-files-found: error
       - name: Build EXE and smoke-test startup
@@ -50,7 +50,7 @@ jobs:
         shell: powershell
         run: |
           .\Build_Installer.ps1 -SkipExeBuild
-          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.2.exe')) { throw 'Installer was not built' }
+          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.3.exe')) { throw 'Installer was not built' }
       - name: Install, launch, uninstall and verify user data on Windows runner
         shell: powershell
         run: .\Installer_Install_Smoke_Test.ps1
@@ -58,19 +58,19 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            'installer/SYTOX_Assistant_Setup_0.3.2.exe',
+            'installer/SYTOX_Assistant_Setup_0.3.3.exe',
             'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
           )
           foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
       - name: Archive Windows standalone app (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-app-0.3.2
+          name: sytox-windows-app-0.3.3
           path: dist/SYTOX_Assistant/
           if-no-files-found: error
       - name: Archive Windows installer (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.2
-          path: installer/SYTOX_Assistant_Setup_0.3.2.exe
+          name: sytox-windows-setup-0.3.3
+          path: installer/SYTOX_Assistant_Setup_0.3.3.exe
           if-no-files-found: error

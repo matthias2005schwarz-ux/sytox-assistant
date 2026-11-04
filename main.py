@@ -4,6 +4,11 @@ import sys
 
 def main():
     args = sys.argv[1:]
+    if len(args) == 3 and args[0] == '--apply-update':
+        # Minimal installer helper: wait for this app to exit before Inno starts.
+        # Deliberately run without QApplication, agent, microphone or app mutex.
+        from sytox.updater import run_update_helper
+        return run_update_helper(args[1], args[2])
     valid = ([], ['--background'], ['--smoke-test'], ['--smoke-test', '--background'])
     if args not in valid:
         raise SystemExit('Unbekanntes Argument. Erlaubt: --background, --smoke-test.')

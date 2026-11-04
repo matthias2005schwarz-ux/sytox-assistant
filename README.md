@@ -290,3 +290,15 @@ Für fortgeschrittene, unbeaufsichtigte Nutzung reicht diese Version noch nicht:
 - Startfehlerprotokolle der installierten Anwendung werden im fehlgeschlagenen Test ausgegeben.
 - Das ist **kein** unter Windows ausgeführter Testlauf: Der echte Inno-/Windows-Test benötigt
   weiterhin einen Windows-Runner. Auch die Windows-EXE liegt diesem Quellpaket nicht bei.
+
+
+### SYTOX Auto-Update (ab 0.3.3)
+
+- **Automatische Versionssuche:** Beim Start fragt die App GitHub Releases nach einer neueren stabilen Version ab (im Menü *Einstellungen* abschaltbar). Über *Nach Updates suchen* in der linken Leiste lässt sich die Prüfung jederzeit manuell starten.
+- **Keine stille Installation:** Der Download und das Starten des Installers erfordern jeweils eine ausdrückliche Bestätigung. Laufende Agent-Aufträge werden nicht automatisch beendet.
+- **Geprüfte Dateien:** Nur der offizielle Installer `SYTOX_Assistant_Setup_<version>.exe` aus dem GitHub-Release mit gleichnamiger `.sha256`-Datei wird akzeptiert. Stimmt der SHA-256-Hash nicht, wird die heruntergeladene Datei verworfen.
+- **Erst App schließen, dann installieren:** Der gestartete Update-Helfer wartet auf das Ende der bisherigen SYTOX-Instanz und öffnet anschließend Inno Setup. Chatverlauf und Einstellungen liegen separat unter `%APPDATA%\SytoxAssistant` und werden nicht überschrieben.
+- **Windows-Installer erforderlich:** Die Installation funktioniert mit der regulär installierten Windows-EXE. Beim Betrieb aus Python/Quellcode wird nur auf das verfügbare Release hingewiesen.
+- **Releases veröffentlichen:** Eine Version muss in `sytox/__init__.py`, `Windows_Installer.iss` und den zugehörigen Release-Skripten identisch sein. Ein Git-Tag wie `v0.3.3` löst `.github/workflows/windows-release.yml` aus: Tests → Windows-EXE → Installer → Installations-Smoketest → Release mit Installer und SHA-256-Datei. **CI-Artefakte allein sind keine automatischen Updates.** Solange kein GitHub Release veröffentlicht wurde, meldet SYTOX keine neue Version.
+
+Hinweis: Ein SHA-256-Hash erkennt einen beschädigten oder geänderten Download gegenüber der veröffentlichten Datei, ersetzt aber keine Code-Signatur des Herausgebers.
