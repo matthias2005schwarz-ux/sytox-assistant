@@ -129,6 +129,13 @@ class InstallationApprovalTests(unittest.TestCase):
         self.assertEqual(self.prompts, [])
         popen.assert_not_called()
 
+    @patch("sytox.actions.subprocess.Popen")
+    def test_build_command_also_requires_approval(self, popen):
+        with self.assertRaises(Denied):
+            self.toolkit.action_run_command("dotnet build")
+        self.assertEqual(self.prompts[0][0], "Befehl ausführen")
+        popen.assert_not_called()
+
     def test_build_evidence_requires_matching_project(self):
         root = self.toolkit.workspace
         (root / "App.cs").write_text("class App {}", encoding="utf-8")
