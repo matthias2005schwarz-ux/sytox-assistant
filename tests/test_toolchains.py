@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from sytox.actions import Toolkit, Denied
-from sytox.toolchains import TOOLCHAINS, canonical_language, project_language, propose
+from sytox.toolchains import TOOLCHAINS, canonical_language, project_language, propose, status
 
 
 class LanguageDetectionTests(unittest.TestCase):
@@ -34,6 +34,16 @@ class LanguageDetectionTests(unittest.TestCase):
             (deps / "fake.ts").write_text("", encoding="utf-8")
             (Path(d) / "real.py").write_text("", encoding="utf-8")
             self.assertEqual(project_language(Path(d)), "python")
+
+    def test_project_local_typescript_is_recognized(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d) / "node_modules" / ".bin"
+            folder.mkdir(parents=True)
+            (folder / "tsc.cmd").write_text("@echo off", encoding="utf-8")
+            with patch("sytox.toolchains.shutil.which", side_effect=lambda exe: {
+                    "node": "node.exe", "npm": "npm.cmd"}.get(exe)):
+                self.assertTrue(status("typescript", Path(d))["ready"])
+                self.assertIn("tsc (projektlokal)", status("typescript", Path(d))["found"])
 
     def test_arbitrary_package_ids_cannot_be_requested(self):
         for value in ("evil.EvilPackage", "python --id Evil", "../cpp", "", "c++; rm -rf /"):
@@ -107,6 +117,15 @@ class InstallationApprovalTests(unittest.TestCase):
     def test_non_windows_never_installs(self, _status, _platform, popen):
         with self.assertRaises(RuntimeError):
             self.toolkit.action_toolchain_install("java")
+        self.assertEqual(self.prompts, [])
+        popen.assert_not_called()
+
+    @patch("sytox.actions.subprocess.Popen")
+    @patch("sytox.actions.status", side_effect=[
+        {"ready": False}, {"ready": True}])
+    def test_typescript_missing_does_not_reinstall_node(self, _status, popen):
+        result = self.toolkit.action_toolchain_install("typescript")
+        self.assertIn("npm install --save-dev typescript", result)
         self.assertEqual(self.prompts, [])
         popen.assert_not_called()
 
