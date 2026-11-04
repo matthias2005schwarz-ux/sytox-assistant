@@ -1,12 +1,28 @@
+# SYTOX Assistant – Entwicklungsstand 0.2.8 (Ollama-Einrichtung und Verbindungsstatus)
+
+## Neu in 0.2.8
+
+- **KI-Verbindungsstatus direkt im Hauptfenster:** SYTOX zeigt nach dem Start ausdrücklich, ob Ollama erreichbar ist und ob das ausgewählte Modell installiert ist. Die App behauptet nicht länger, dass die KI bereit ist, wenn nur das Fenster geöffnet wurde.
+- **Einrichtungsdialog:** Offizieller Ollama-Windows-Download, kopierbarer `ollama pull ...`-Befehl und erneuter Verbindungscheck. Weder Programme noch Modelle werden ohne ausdrückliche Handlung des Benutzers installiert.
+- **Keine blockierte Oberfläche:** Die Startprüfung läuft in einem Qt-Hintergrundthread mit Zeitlimit; neue Einstellungen lösen danach eine weitere Prüfung aus.
+- **Prüfungen:** Zusätzliche automatisierte Tests für nicht erreichbare Ollama-Server, fehlende Modelle, ungültige Adressen und ungültige Modellnamen.
+- **Voraussetzungen:** Ollama selbst und ein kompatibles heruntergeladenes Modell sind weiterhin separat erforderlich. Eine erfolgreiche Installer-Prüfung auf einer GitHub-Windows-VM belegt nicht die Qualität des lokalen KI-Modells oder seiner Antwortgeschwindigkeit.
+
+## Windows-Build-Status
+
+Die Basisversion 0.2.7 wurde in einem echten GitHub-Actions-Windows-Runner gebaut und inklusive Installation, Start und Deinstallation erfolgreich geprüft. Version 0.2.8 muss nach diesen Änderungen erneut per Windows-CI getestet werden.
+
+---
+
 # SYTOX Assistant – Entwicklungsstand 0.2.7 (Windows Build/Installer-Verifikation)
 
 ## Neu in Version 0.2.7
 
 - Windows-CI erstellt eine portable Windows-App (`dist/SYTOX_Assistant/`) und einen Inno-Setup-Installer.
-- Echter *automatisierter* Installations-Smoketest in einer **isolierten GitHub-Actions-Windows-VM**: Installieren, die installierte EXE mit `--smoke-test` starten, deinstallieren, erhaltene Benutzerdaten kontrollieren. Dieser Test läuft **nicht** auf Linux; er wurde in dieser Chat-Sitzung nicht ausgeführt.
+- Echter *automatisierter* Installations-Smoketest in einer **isolierten GitHub-Actions-Windows-VM**: Installieren, die installierte EXE mit `--smoke-test` starten, deinstallieren, erhaltene Benutzerdaten kontrollieren. Dieser Test läuft **nicht** auf Linux. Für 0.2.7 lief er in GitHub Actions auf Windows erfolgreich durch.
 - Beim EXE-Startabsturz wird `startup_error.log` unter `%APPDATA%\SytoxAssistant` geschrieben, um Fehler eines Windows-GUI-Programms ohne Konsolenfenster zu diagnostizieren.
 - Build nimmt die Installer-Quellen in das für Self-Development bereitgestellte Bundle auf.
-- Die Windows-CI veröffentlicht die fertige EXE (als Verzeichnis-ZIP) und den Installer als getrennte Build-Artefakte **nur nach** erfolgreichen Tests. Zum Ausführen muss der Projektordner als GitHub-Repository veröffentlicht und die Workflow-Aktion gestartet werden. Hier wurde kein Windows-Installer erzeugt.
+- Die Windows-CI veröffentlicht die fertige EXE (als Verzeichnis-ZIP) und den Installer als getrennte Build-Artefakte **nur nach** erfolgreichen Tests. Zum Ausführen muss der Projektordner als GitHub-Repository veröffentlicht und die Workflow-Aktion gestartet werden. Für Version 0.2.7 wurde ein Windows-Installer in GitHub Actions erfolgreich erzeugt und getestet.
 - **Eine VM-Prüfung ist kein Ersatz für die Prüfung auf dem eigenen PC** (Audio, PC-Steuerung, Antiviren-/Rechteumgebung, Tray, Autostart, Performance).
 
 ### Windows Build / automatisierte Tests
@@ -16,7 +32,7 @@
 3. Installer: `Build_Installer.ps1 -SkipExeBuild`.
 4. Auf GitHub: Projektinhalt als Repository-Root hochladen; unter `Actions` den Workflow **SYTOX Windows Checks** starten. Nur die isolierte CI-VM führt `Installer_Install_Smoke_Test.ps1` aus; es installiert bewusst **nicht** auf deinem normalen PC. Bei erfolgreichem Workflow die zwei Artefakte herunterladen.
 
-**Status:** Eine unter Windows gebaute und erfolgreich installierte EXE konnte hier mangels Windows-Laufzeit nicht verifiziert werden. Linux-Komponententests und statische Build-Vertragsprüfungen sind separat.
+**Status 0.2.7:** Der Windows-Installer wurde am 03.11.2026 auf einem GitHub-Actions-Windows-Runner erfolgreich gebaut und per Installations-/Deinstallations-Smoke-Test geprüft. Das ersetzt keine Tests auf dem eigenen PC.
 
 ---
 

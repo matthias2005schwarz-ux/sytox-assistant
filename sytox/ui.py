@@ -10,7 +10,7 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QTextCursor
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QTextCursor, QDesktopServices
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,QWidget,QMainWindow,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter
+from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 
 # SYTOX 0.2.5 design system: deep navy, raspberry accents, quiet status elements.
 BG='#0B0D13'; PANEL='#121620'; SURFACE='#1B202D'; RED='#D34A7B'; LIGHT='#F4F5FA'; MUTED='#98A0B4'
@@ -225,6 +226,59 @@ class SpeechSynthesizer(QThread):
             self.error.emit(f'Sprachausgabe: {type(e).__name__}: {e}')
 
 
+class OllamaProbe(QThread):
+    """Avoid freezing the Qt event loop while checking a local model server."""
+    checked = Signal(object)
+
+    def __init__(self, url: str, model: str):
+        super().__init__()
+        self.url = url
+        self.model = model
+
+    def run(self):
+        self.checked.emit(check_ollama_status(self.url, self.model))
+
+
+class OllamaHelpDialog(QDialog):
+    """Setup guidance with explicit user actions; never silently downloads models."""
+    def __init__(self, model: str, status: OllamaStatus | None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('SYTOX · KI einrichten')
+        self.resize(540, 310)
+        lay = QVBoxLayout(self)
+        heading = QLabel('◈  DEINE LOKALE KI EINRICHTEN')
+        heading.setStyleSheet('font-size:19px;font-weight:800;color:#F0F1F6')
+        lay.addWidget(heading)
+        details = QLabel(status.details if status else 'Noch nicht geprüft.')
+        details.setWordWrap(True)
+        lay.addWidget(details)
+        guide = QLabel('1. Ollama auf Windows installieren und starten.\n'
+                       '2. Das gewünschte KI-Modell herunterladen.\n'
+                       '3. Zurück in SYTOX auf „KI prüfen“ klicken.')
+        guide.setWordWrap(True)
+        guide.setStyleSheet('color:#C3C7D3;line-height:1.4')
+        lay.addWidget(guide)
+        try:
+            command = model_pull_command(model)
+        except ValueError:
+            command = ''
+        command_box = QLineEdit(command or 'Modellname zuerst in den Einstellungen korrigieren')
+        command_box.setReadOnly(True)
+        lay.addWidget(command_box)
+        buttons = QHBoxLayout()
+        download = QPushButton('Ollama herunterladen')
+        download.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(OLLAMA_DOWNLOAD)))
+        buttons.addWidget(download)
+        copy_button = QPushButton('Modellbefehl kopieren')
+        copy_button.setEnabled(bool(command))
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(command))
+        buttons.addWidget(copy_button)
+        lay.addLayout(buttons)
+        close = QPushButton('Schließen')
+        close.clicked.connect(self.accept)
+        lay.addWidget(close)
+
+
 class SettingsDialog(QDialog):
     def __init__(self,settings,parent=None):
         super().__init__(parent);self.setWindowTitle('Einstellungen');self.setMinimumWidth(560)
@@ -298,11 +352,14 @@ class SettingsDialog(QDialog):
         if folder:self.folder.setText(folder)
 
     def check_ollama(self):
-        try:
-            names=OllamaClient(self.url.text().strip(),self.model.text().strip()).installed()
-            QMessageBox.information(self,'Ollama','Verbindung hergestellt. Modelle:\n'+(', '.join(names) or '(keine installiert)'))
-        except Exception as e:
-            QMessageBox.warning(self,'Nicht verbunden',str(e))
+        status = check_ollama_status(self.url.text(), self.model.text())
+        message = status.details
+        if status.available_models:
+            message += '\nInstallierte Modelle: ' + ', '.join(status.available_models[:8])
+        if status.ready:
+            QMessageBox.information(self, status.title, message)
+        else:
+            QMessageBox.warning(self, status.title, message)
 
     def values(self):
         return {'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
@@ -339,6 +396,9 @@ class MainWindow(QMainWindow):
         self.player.errorOccurred.connect(self._media_error)
         self.tray=None
         self._is_exiting=False
+        self.ollama_status=None
+        self.ollama_probe=None
+        self._probe_again=False
         self.setWindowTitle('SYTOX Assistant · Dein KI-Workspace')
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
@@ -346,6 +406,7 @@ class MainWindow(QMainWindow):
         if self.chatlist.count()==0:self.create_chat()
         else:self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
         self.log('System','Bereit. Lokale Daten: '+str(default_data_dir()))
+        QTimer.singleShot(700, self.check_model_status)
 
     def load_settings(self):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
@@ -390,7 +451,7 @@ class MainWindow(QMainWindow):
         th.addWidget(self.chat_heading);th.addStretch()
         self.model_name=QLabel(self.config['model']);self.model_name.setObjectName('muted')
         th.addWidget(self.model_name)
-        self.status_chip=QLabel('●  App bereit')
+        self.status_chip=QLabel('◌  KI wird geprüft')
         self.status_chip.setObjectName('statusChip')
         th.addSpacing(14);th.addWidget(self.status_chip)
         c.addWidget(top)
@@ -418,6 +479,20 @@ class MainWindow(QMainWindow):
         splitter.addWidget(center)
 
         right=QFrame();right.setObjectName('right');r=QVBoxLayout(right);r.setContentsMargins(12,16,12,12)
+        ollama_title=QLabel('◈  KI-VERBINDUNG');ollama_title.setObjectName('sectionTitle')
+        r.addWidget(ollama_title)
+        self.model_status_label=QLabel('Verbindung wird geprüft …')
+        self.model_status_label.setObjectName('muted')
+        self.model_status_label.setWordWrap(True)
+        r.addWidget(self.model_status_label)
+        status_buttons=QHBoxLayout()
+        check_model=QPushButton('↻ Prüfen')
+        check_model.clicked.connect(self.check_model_status)
+        status_buttons.addWidget(check_model)
+        setup_model=QPushButton('Einrichten')
+        setup_model.clicked.connect(self.show_model_help)
+        status_buttons.addWidget(setup_model)
+        r.addLayout(status_buttons)
         lab=QLabel('◈  AGENT CONTROL');lab.setObjectName('sectionTitle')
         r.addWidget(lab)
         self.task_state=QLabel('Keine aktive Aufgabe');self.task_state.setWordWrap(True)
@@ -469,6 +544,8 @@ class MainWindow(QMainWindow):
         if self.listener and self.listener.isRunning():
             self.listener.stop_event.set()
             self.listener.wait(3000)
+        if self.ollama_probe and self.ollama_probe.isRunning():
+            self.ollama_probe.wait(6000)  # bounded 5s HTTP probe must not outlive Qt
         event.accept()
 
     def exit_app(self):
@@ -486,6 +563,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self,'Bitte warten','Der Vorgang beendet noch einen laufenden Aufruf.')
                 return
         self._is_exiting=True
+        if self.ollama_probe and self.ollama_probe.isRunning():
+            self.ollama_probe.wait(6000)
         self.tray.hide() if self.tray else None
         QApplication.quit()
 
@@ -620,6 +699,8 @@ class MainWindow(QMainWindow):
         answer = result.get('content','')
         self.add_bubble('assistant',answer)
         self.log('Status','Aufgabe: '+result.get('status','unbekannt'))
+        if result.get('status')=='failed' and ('Ollama' in answer or 'Modell' in answer):
+            self.check_model_status()
         if (self.config.get('voice_enabled') or (self.listener and self.listener.isRunning())) and answer:
             self.start_speech(answer)
         else:
@@ -735,6 +816,43 @@ class MainWindow(QMainWindow):
         delbtn.clicked.connect(delete_memory);lay.addWidget(delbtn)
         dialog.exec()
 
+    def check_model_status(self):
+        """Check the configured Ollama model without blocking mouse/keyboard UI."""
+        if self.ollama_probe and self.ollama_probe.isRunning():
+            self._probe_again = True
+            return
+        self.status_chip.setText('◌  KI wird geprüft')
+        self.model_status_label.setText('Verbindung wird geprüft …')
+        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.config['model'])
+        self.ollama_probe.checked.connect(self._model_status_checked)
+        self.ollama_probe.finished.connect(self._model_probe_finished)
+        self.ollama_probe.start()
+
+    def _model_status_checked(self, status: OllamaStatus):
+        if self.ollama_probe and (self.ollama_probe.url != self.config['ollama_url'] or
+                                  self.ollama_probe.model != self.config['model']):
+            self._probe_again = True
+        else:
+            self.ollama_status = status
+            self.model_status_label.setText(status.details)
+            self.model_status_label.setToolTip(status.details)
+            if status.ready:
+                self.status_chip.setText('●  KI bereit')
+                self.status_chip.setStyleSheet('color:#86E1BD;background:#16372E;'
+                    'border:1px solid #295B4C;border-radius:11px;padding:5px 11px;')
+            else:
+                self.status_chip.setText('●  ' + status.title)
+                self.status_chip.setStyleSheet('color:#FFD7A7;background:#47301C;'
+                    'border:1px solid #785332;border-radius:11px;padding:5px 11px;')
+                self.log('System', status.details)
+    def _model_probe_finished(self):
+        if self._probe_again:
+            self._probe_again = False
+            QTimer.singleShot(0, self.check_model_status)
+
+    def show_model_help(self):
+        OllamaHelpDialog(self.config['model'], self.ollama_status, self).exec()
+
     def edit_settings(self):
         dialog=SettingsDialog(self.config,self)
         if dialog.exec()==QDialog.Accepted:
@@ -742,6 +860,7 @@ class MainWindow(QMainWindow):
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
             self.model_name.setText(self.config['model'])
             self.log('System','Einstellungen gespeichert.')
+            self.check_model_status()
 
     def toggle_listener(self):
         if self.listener and self.listener.isRunning():

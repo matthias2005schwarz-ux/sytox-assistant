@@ -52,6 +52,10 @@ class OllamaClient:
             with requests.post(self.url + '/api/chat', json=payload, stream=True,
                                timeout=(8, 600)) as response:
                 if not response.ok:
+                    if response.status_code == 404 and 'model' in response.text.lower():
+                        raise OllamaError(
+                            f'Das KI-Modell „{self.model}“ ist in Ollama nicht verfügbar. '
+                            'In SYTOX auf „Einrichten“ klicken und den Modellbefehl kopieren.')
                     raise OllamaError(f'Ollama HTTP {response.status_code}: {response.text[:500]}')
                 reply = {'role': 'assistant', 'content': '', 'tool_calls': []}
                 for line in response.iter_lines():
