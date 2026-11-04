@@ -74,6 +74,20 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.assertEqual(self.window.focus_btn.text(), 'Fokusmodus')
         self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 4)
 
+    def test_spoken_desktop_command_opens_panel_without_issuing_agent_task(self):
+        with patch.object(self.window, 'show_desktop_tools') as show_tools, \
+             patch.object(self.window, 'send') as send:
+            self.window.received_voice_command('Zeig mir die offenen Fenster')
+        show_tools.assert_called_once_with(query='', list_windows=True)
+        send.assert_not_called()
+
+    def test_spoken_app_search_still_needs_click_and_approval(self):
+        with patch.object(self.window, 'show_desktop_tools') as show_tools, \
+             patch.object(self.window, 'send') as send:
+            self.window.received_voice_command('Suche Programm Firefox')
+        show_tools.assert_called_once_with(query='Firefox', list_windows=False)
+        send.assert_not_called()
+
     def test_first_message_replaces_empty_state_without_losing_text(self):
         from PySide6.QtWidgets import QFrame, QLabel
         self.assertIsNotNone(self.window.empty_widget)
