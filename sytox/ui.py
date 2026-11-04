@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
-from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter
+from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
 
@@ -133,14 +133,18 @@ class VoiceRecorder(QThread):
 class WakeListener(QThread):
     """Local speech listener with wake word and timed conversational follow-ups."""
     wake_command = Signal(str)
+    interrupted = Signal(str)
     error = Signal(str)
     hearing = Signal(str)
 
-    def __init__(self, model_path, require_wake=True, follow_up_seconds=25, mute_event=None):
+    def __init__(self, model_path, require_wake=True, follow_up_seconds=25,
+                 mute_event=None, speaking_event=None, allow_interruption=True):
         super().__init__()
         self.model_path = model_path
         self.stop_event = threading.Event()
-        self.mute_event = mute_event or threading.Event()
+        self.mute_event = mute_event if mute_event is not None else threading.Event()
+        self.speaking_event = speaking_event if speaking_event is not None else threading.Event()
+        self.allow_interruption = bool(allow_interruption)
         self.router = VoiceTurnRouter(require_wake, follow_up_seconds)
 
     def allow_follow_up(self):
@@ -155,7 +159,8 @@ class WakeListener(QThread):
             recognizer = KaldiRecognizer(Model(self.model_path), 16000)
             audio_queue = queue.Queue(maxsize=16)
             def on_audio(data, frame_count, timing, status):
-                if self.mute_event.is_set():
+                if self.mute_event.is_set() and not (
+                        self.allow_interruption and self.speaking_event.is_set()):
                     return
                 try:
                     audio_queue.put_nowait(bytes(data))
@@ -163,19 +168,25 @@ class WakeListener(QThread):
                     pass
 
             muted_before = False
+            was_speaking = False
+            barge_latched = False
             with sd.RawInputStream(samplerate=16000, channels=1, dtype='int16',
                                    callback=on_audio, blocksize=4000):
                 while not self.stop_event.is_set():
-                    if self.mute_event.is_set():
+                    speaking = self.speaking_event.is_set()
+                    if self.mute_event.is_set() and not (self.allow_interruption and speaking):
                         muted_before = True
                         while True:
                             try: audio_queue.get_nowait()
                             except queue.Empty: break
                         self.stop_event.wait(.06)
                         continue
-                    if muted_before:
-                        recognizer.Reset()  # no fragments from the previous utterance
+                    if muted_before or (was_speaking and not speaking):
+                        recognizer.Reset()  # no fragments from a muted/previous utterance
                         muted_before = False
+                    if not speaking:
+                        barge_latched = False
+                    was_speaking = speaking
                     try:
                         audio = audio_queue.get(timeout=.25)
                     except queue.Empty:
@@ -183,6 +194,15 @@ class WakeListener(QThread):
                     if not recognizer.AcceptWaveform(audio):
                         continue
                     phrase = json.loads(recognizer.Result()).get('text', '').strip()
+                    if speaking:
+                        interrupt, next_command = interruption_command(
+                            phrase, free_listening=not self.router.require_wake)
+                        if interrupt and not barge_latched:
+                            barge_latched = True
+                            self.router.allow_follow_up()
+                            self.mute_event.set()
+                            self.interrupted.emit(next_command)
+                        continue
                     command = self.router.command_for(phrase)
                     if command:
                         # Do not capture a second command while Qt is processing this turn.
@@ -190,6 +210,25 @@ class WakeListener(QThread):
                         self.wake_command.emit(command)
         except Exception as e:
             self.error.emit(f'Spracherkennung: {type(e).__name__}: {e}')
+
+
+class VoiceModelDownload(QThread):
+    progress_update = Signal(int, str)
+    installed = Signal(str)
+    error = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.cancel_event = threading.Event()
+
+    def run(self):
+        try:
+            dest = download_german_voice_model(self.progress_update.emit, self.cancel_event)
+            self.installed.emit(str(dest))
+        except InterruptedError:
+            self.error.emit('Sprachmodell-Download wurde abgebrochen.')
+        except Exception as exc:
+            self.error.emit(f'{type(exc).__name__}: {exc}')
 
 
 class Speaker(QThread):
@@ -437,6 +476,10 @@ class SettingsDialog(QDialog):
         self.edge_voice.setCurrentIndex(max(0,self.edge_voice.findData(settings.get('edge_voice','de-DE-KatjaNeural'))))
         self.edge_consent=QCheckBox('Ich erlaube, dass gesprochene Antworten für die Online-Stimme an Microsoft übertragen werden.')
         self.edge_consent.setChecked(settings.get('edge_consent',False))
+        self.auto_voice=QCheckBox('Beim App-Start automatisch auf „Hey Sytox“ hören (Mikrofon aktiv)')
+        self.auto_voice.setChecked(settings.get('voice_auto_start', False))
+        self.interruption=QCheckBox('Sprachausgabe durch „Hey Sytox“ oder „Stopp“ unterbrechen')
+        self.interruption.setChecked(settings.get('voice_interruptible', True))
         self.no_wake=QCheckBox('Nach Start des Gesprächs ohne „Hey Sytox“ zuhören (Mikrofon bleibt aktiv)')
         self.no_wake.setChecked(settings.get('voice_no_wake',False))
         self.follow_up=QSpinBox()
@@ -453,6 +496,8 @@ class SettingsDialog(QDialog):
         form.addRow('Neurale Stimme',self.edge_voice)
         form.addRow('',self.edge_consent)
         form.addRow('',self.voice)
+        form.addRow('',self.auto_voice)
+        form.addRow('',self.interruption)
         form.addRow('',self.no_wake)
         form.addRow('Zeitfenster für Anschlussfrage',self.follow_up)
         form.addRow('Gmail OAuth-Desktop-Client JSON',self.gmail)
@@ -498,6 +543,8 @@ class SettingsDialog(QDialog):
                 'edge_consent':self.edge_consent.isChecked(),
                 'edge_rate':'+8%',
                 'voice_no_wake':self.no_wake.isChecked(),
+                'voice_auto_start':self.auto_voice.isChecked(),
+                'voice_interruptible':self.interruption.isChecked(),
                 'voice_followup_seconds':self.follow_up.value(),
                 'gmail_client_secrets':self.gmail.text().strip()}
 
@@ -510,7 +557,10 @@ class MainWindow(QMainWindow):
         self.config=self.load_settings()
         self.chat_id=None;self.worker=None;self.recorder=None;self.listener=None;self.speakers=[]
         self.voice_muted=threading.Event()
+        self.voice_speaking=threading.Event()
         self.voice_jobs=[]
+        self.voice_download=None
+        self.voice_download_dialog=None
         self.active_speaker=None
         self._voice_generation=0
         self._audio_path=None
@@ -534,6 +584,8 @@ class MainWindow(QMainWindow):
         else:self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
         self.log('System','Bereit. Lokale Daten: '+str(default_data_dir()))
         QTimer.singleShot(700, self.check_model_status)
+        if self.config.get('voice_auto_start', False):
+            QTimer.singleShot(1600, lambda: self.toggle_listener(auto=True))
 
     def load_settings(self):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
@@ -542,6 +594,7 @@ class MainWindow(QMainWindow):
                   'piper_exe':'','piper_model':'','voice_enabled':False,
                   'speech_engine':'windows','edge_voice':'de-DE-KatjaNeural','edge_rate':'+8%',
                   'edge_consent':False,'voice_no_wake':False,'voice_followup_seconds':25,
+                  'voice_auto_start':False,'voice_interruptible':True,
                   'gmail_client_secrets':''}
         default_model=base/'models'/'vosk-model-small-de-0.15'
         if default_model.is_dir(): settings['vosk_model']=str(default_model)
@@ -631,6 +684,9 @@ class MainWindow(QMainWindow):
         self.wakebtn=QPushButton('◉  Gesprächsmodus starten')
         self.wakebtn.clicked.connect(self.toggle_listener);r.addWidget(self.wakebtn)
         self.voice_state=QLabel('Mikrofon aus');self.voice_state.setObjectName('muted');r.addWidget(self.voice_state)
+        model_button=QPushButton('↓  Deutsches Sprachmodell laden')
+        model_button.clicked.connect(self.install_voice_model)
+        r.addWidget(model_button)
         self.stopvoicebtn=QPushButton('🔇  Sprachausgabe stoppen')
         self.stopvoicebtn.clicked.connect(self.stop_speech)
         self.stopvoicebtn.setEnabled(False);r.addWidget(self.stopvoicebtn)
@@ -658,6 +714,10 @@ class MainWindow(QMainWindow):
         self.show();self.showNormal();self.raise_();self.activateWindow()
 
     def closeEvent(self,event):
+        if self.voice_download and self.voice_download.isRunning() and self._is_exiting:
+            self.voice_download.cancel_event.set()
+            event.ignore()
+            return
         # Closing the window should NOT shut down the assistant. Exit through
         # the tray menu (or Windows session shutdown) to quit the background app.
         if self.tray and not self._is_exiting:
@@ -676,6 +736,12 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def exit_app(self):
+        if self.voice_download and self.voice_download.isRunning():
+            self.voice_download.cancel_event.set()
+            if not self.voice_download.wait(6000):
+                QMessageBox.information(self,'Sprachmodell',
+                    'Der Download wird noch beendet. Bitte gleich erneut versuchen.')
+                return
         self.stop_speech()
         if self.listener and self.listener.isRunning():
             self.listener.stop_event.set();self.listener.wait(3000)
@@ -806,6 +872,8 @@ class MainWindow(QMainWindow):
             self.worker.stop_event.set();self.log('Status','Stopp angefordert …')
 
     def handle_approval(self,label,desc,payload):
+        if not self.isVisible():
+            self.show_window()  # Do not hide sensitive action approvals in the tray.
         dialog=QMessageBox(self)
         dialog.setIcon(QMessageBox.Warning)
         dialog.setWindowTitle('Freigabe erforderlich')
@@ -843,6 +911,7 @@ class MainWindow(QMainWindow):
     def start_speech(self, text):
         self.stop_speech()
         self.voice_muted.set()
+        self.voice_speaking.set()
         self._speaking=True
         self._voice_generation+=1
         generation=self._voice_generation
@@ -895,6 +964,7 @@ class MainWindow(QMainWindow):
             self._finish_voice()
 
     def _finish_voice(self):
+        self.voice_speaking.clear()
         self._speaking=False
         self.stopvoicebtn.setEnabled(False)
         self.player.stop()
@@ -996,15 +1066,71 @@ class MainWindow(QMainWindow):
             self.log('System','Einstellungen gespeichert.')
             self.check_model_status()
 
-    def toggle_listener(self):
+    def install_voice_model(self):
+        """Download an optional offline speech model only after explicit consent."""
+        if self.voice_download and self.voice_download.isRunning():
+            return
+        if QMessageBox.question(
+            self, 'Spracherkennung einrichten',
+            'Deutsches Vosk-Sprachmodell herunterladen (ca. 45 MB)?\n'
+            'Das Mikrofon bleibt lokal; für den Download wird Internet benötigt.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        ) != QMessageBox.Yes:
+            return
+        dialog=QDialog(self)
+        dialog.setWindowTitle('Deutsche Spracherkennung')
+        dialog.setMinimumWidth(420)
+        box=QVBoxLayout(dialog)
+        message=QLabel('Download wird vorbereitet …')
+        box.addWidget(message)
+        bar=QProgressBar();bar.setRange(0,100);box.addWidget(bar)
+        cancel=QPushButton('Download abbrechen');box.addWidget(cancel)
+        worker=VoiceModelDownload()
+        self.voice_download=worker
+        self.voice_download_dialog=dialog
+
+        def request_cancel():
+            worker.cancel_event.set()
+            cancel.setEnabled(False)
+            message.setText('Download wird abgebrochen …')
+
+        def downloaded(path):
+            self.config['vosk_model']=path
+            self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
+            self.log('Sprache','Deutsches Sprachmodell eingerichtet.')
+            self.voice_state.setText('Sprachmodell bereit – Gesprächsmodus starten')
+            dialog.accept()
+
+        def download_error(text):
+            self.log('Sprache',text)
+            dialog.reject()
+            QMessageBox.warning(self,'Sprachmodell',text)
+
+        worker.progress_update.connect(lambda pct,msg: (bar.setValue(pct),message.setText(msg)))
+        worker.installed.connect(downloaded)
+        worker.error.connect(download_error)
+        cancel.clicked.connect(request_cancel)
+        dialog.rejected.connect(request_cancel)
+        worker.finished.connect(lambda: setattr(self,'voice_download',None))
+        worker.finished.connect(lambda: setattr(self,'voice_download_dialog',None))
+        worker.finished.connect(dialog.deleteLater)
+        dialog.show()
+        worker.start()
+
+    def toggle_listener(self, auto=False):
         if self.listener and self.listener.isRunning():
             self.listener.stop_event.set()
             self.wakebtn.setText('◉  Gesprächsmodus starten')
             self.voice_state.setText('Mikrofon aus')
             self.log('Sprache','Gesprächsmodus wird beendet.')
             return
-        model=Path(self.config.get('vosk_model',''))
-        if not model.is_dir():
+        model_value = self.config.get('vosk_model','')
+        model=Path(model_value)
+        if not model_value or not model.is_dir() or not (model/'conf').is_dir():
+            if auto:
+                self.log('Sprache', 'Auto-Zuhören nicht gestartet: deutsches Vosk-Modell fehlt.')
+                self.voice_state.setText('Sprachmodell fehlt – Einstellungen öffnen')
+                return
             QMessageBox.information(self,'Sprachmodell fehlt',
                 'Bitte erst Setup_Sprache.ps1 ausführen oder in den Einstellungen '
                 'den Ordner eines deutschen Vosk-Sprachmodells eintragen.')
@@ -1014,8 +1140,11 @@ class MainWindow(QMainWindow):
             return
         require_wake=not self.config.get('voice_no_wake',False)
         self.listener=WakeListener(str(model), require_wake,
-                                   self.config.get('voice_followup_seconds',25), self.voice_muted)
+                                   self.config.get('voice_followup_seconds',25), self.voice_muted,
+                                   self.voice_speaking,
+                                   self.config.get('voice_interruptible', True))
         self.listener.wake_command.connect(self.received_voice_command)
+        self.listener.interrupted.connect(self._voice_interrupted)
         self.listener.error.connect(lambda error:self.log('Fehler',error))
         self.listener.finished.connect(self._listener_finished)
         self.listener.start()
@@ -1026,6 +1155,14 @@ class MainWindow(QMainWindow):
     def _listener_finished(self):
         self.wakebtn.setText('◉  Gesprächsmodus starten')
         self.voice_state.setText('Mikrofon aus')
+
+    def _voice_interrupted(self, next_command):
+        """A wake phrase interrupts TTS; the resulting command uses normal approvals."""
+        self.stop_speech()
+        if next_command.strip():
+            self.received_voice_command(next_command)
+        else:
+            self._conversation_ready()
 
     def received_voice_command(self,text):
         self.log('Stimme','Befehl gehört: '+text[:120])

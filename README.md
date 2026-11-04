@@ -1,3 +1,28 @@
+# SYTOX Assistant – Windows 0.3.0 (Sprachmodus)
+
+## Neu in 0.3.0
+
+- Sprachsteuerung weiterentwickelt: „Hey Sytox“ bzw. „Stopp“ kann laufende
+  Sprachausgabe unterbrechen. Nach „Hey Sytox“ ist eine Folgefrage möglich.
+  Auf Wunsch unterbricht auch ein längerer Satz ohne Wakeword; das erhöht
+  allerdings die Gefahr, dass die eigene Lautsprecherausgabe erkannt wird.
+  **Für Sprachunterbrechungen sind Kopfhörer empfehlenswert.** Die Reaktionszeit
+  hängt außerdem davon ab, wie schnell Vosk eine Äußerung als beendet erkennt.
+- Windows-Systemstimme spielt über asynchrones SAPI ab und reagiert auf Stopp;
+  Piper/Edge-Audio kann weiterhin über den vorhandenen Qt-Player gestoppt werden.
+- Option in Einstellungen, den Gesprächsmodus beim Programmstart automatisch
+  zu aktivieren (standardmäßig AUS; aktiviert das Mikrofon, auch im Tray).
+- Deutsches Vosk-Modell direkt aus dem Sprachbereich der Anwendung herunterladen,
+  mit Fortschritt, Abbrechen, begrenzten Größen und geschützter ZIP-Extraktion.
+  Download erfolgt nur mit Zustimmung; Mikrofonaufnahmen bleiben lokal.
+- Sprachbefehle wie „Hey Sytox, öffne Discord“ werden an den vorhandenen
+  Agenten weitergereicht. Die Eingriffsfreigaben für PC-Aktionen bleiben bestehen.
+  Wird bei im Tray versteckter App eine Freigabe nötig, öffnet sich das Fenster.
+- Echte Mikrofon-/Lautsprechertests und Sprachgenauigkeit müssen auf dem PC
+  geprüft werden. Der CI-Test simuliert den Download und die TTS-Abbruchlogik.
+- Falls die Windows-GUI/Installer-Pipeline erfolgreich abschließt, werden
+  die Builds in GitHub Actions als Artefakte verfügbar.
+
 # SYTOX Assistant – Entwicklungsstand 0.2.9 (Ollama auf Knopfdruck einrichten)
 
 ## Neu in 0.2.9

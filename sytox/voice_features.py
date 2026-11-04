@@ -60,6 +60,130 @@ class VoiceTurnRouter:
             return text
 
 
+
+# A spoken answer may be interrupted, but ordinary background conversation must
+# not be sent to the assistant while its own loudspeaker is active.  An explicit
+# wake phrase (or stop command) is required by default to prevent audio echo
+# from silently launching PC actions.
+_INTERRUPT_RE = re.compile(r'^\s*(?:stopp|stop|halt|anhalten|ruhe|sei still|sytox stopp|sytox stop)\s*[.!?]*$', re.I)
+
+
+def interruption_command(phrase, free_listening=False):
+    """Return (interrupt, next_command) while speech output is active.
+
+    Empty next_command means to stop speaking and wait for a new utterance.
+    No next_command is run without a human wake phrase unless the user opted in
+    to the less conservative free-listening mode.
+    """
+    text = ' '.join(str(phrase).split())
+    if not text:
+        return False, ''
+    if _INTERRUPT_RE.fullmatch(text):
+        return True, ''
+    wake = _WAKE_RE.search(text)
+    if wake:
+        return True, text[wake.end():].strip(' ,.!?')
+    if free_listening and len(text.split()) >= 3:
+        return True, text
+    return False, ''
+
+
+VOSK_DE_MODEL_NAME = 'vosk-model-small-de-0.15'
+VOSK_DE_MODEL_URL = 'https://alphacephei.com/vosk/models/' + VOSK_DE_MODEL_NAME + '.zip'
+
+
+def download_german_voice_model(progress, cancel_event=None, data_dir=None, opener=None):
+    """Explicitly requested Vosk download, validated and installed atomically.
+
+    Never unpack network archives directly into the user's live model directory.
+    The archive is a fixed, publicly documented Vosk small German model;
+    rejects redirected hosts, traversal, links and decompression bombs.
+    """
+    import os
+    import shutil
+    import stat
+    import tempfile
+    import urllib.parse
+    import urllib.request
+    import zipfile
+
+    cancel_event = cancel_event if cancel_event is not None else threading.Event()
+    models = (Path(data_dir) if data_dir is not None else default_data_dir()) / 'models'
+    target = models / VOSK_DE_MODEL_NAME
+    if (target / 'conf').is_dir():
+        progress(100, 'Deutsches Sprachmodell ist bereits eingerichtet.')
+        return target
+    if cancel_event.is_set():
+        raise InterruptedError('Sprachmodell-Download abgebrochen.')
+    models.mkdir(parents=True, exist_ok=True)
+    progress(0, 'Lade deutsches Sprachmodell von alphacephei.com …')
+    request = urllib.request.Request(VOSK_DE_MODEL_URL, headers={'User-Agent': 'SYTOXAssistant/0.3'})
+    open_fn = opener or urllib.request.urlopen
+    with tempfile.TemporaryDirectory(prefix='.sytox_voice_', dir=str(models)) as tmp:
+        staging = Path(tmp)
+        archive = staging / 'model.zip'
+        with open_fn(request, timeout=35) as response, archive.open('wb') as output:
+            actual_url = response.geturl()
+            address = urllib.parse.urlsplit(actual_url)
+            if address.scheme != 'https' or address.hostname != 'alphacephei.com':
+                raise ValueError('Sprachmodell-Download wurde auf eine unerwartete Adresse umgeleitet.')
+            expected = int(response.headers.get('Content-Length', '0') or 0)
+            if expected and not (1_000_000 <= expected <= 150_000_000):
+                raise ValueError('Unerwartete Downloadgröße des Sprachmodells.')
+            total = 0
+            while True:
+                if cancel_event.is_set():
+                    raise InterruptedError('Sprachmodell-Download abgebrochen.')
+                data = response.read(65536)
+                if not data:
+                    break
+                total += len(data)
+                if total > 150_000_000:
+                    raise ValueError('Sprachmodell-Archiv ist zu groß.')
+                output.write(data)
+                if expected:
+                    progress(min(85, int(total * 85 / expected)), 'Lade deutsches Sprachmodell …')
+            if total < 1_000_000:
+                raise ValueError('Sprachmodell-Datei ist unvollständig.')
+        progress(86, 'Prüfe Sprachmodell-Archiv …')
+        root = staging / VOSK_DE_MODEL_NAME
+        with zipfile.ZipFile(archive) as zf:
+            entries = zf.infolist()
+            if len(entries) > 4500 or sum(info.file_size for info in entries) > 700_000_000:
+                raise ValueError('Sprachmodell-Archiv überschreitet sichere Grenzen.')
+            for entry in entries:
+                name = entry.filename.replace('\\', '/')
+                parts = name.split('/')
+                mode = entry.external_attr >> 16
+                if (not parts or parts[0] != VOSK_DE_MODEL_NAME or
+                        any(p in ('..', '') for p in parts[:-1]) or
+                        name.startswith('/') or ':' in name or
+                        stat.S_ISLNK(mode)):
+                    raise ValueError('Sprachmodell-Archiv enthält einen unsicheren Pfad.')
+            for index, entry in enumerate(entries):
+                if cancel_event.is_set():
+                    raise InterruptedError('Sprachmodell-Download abgebrochen.')
+                name = entry.filename.replace('\\', '/')
+                dest = staging.joinpath(*name.split('/'))
+                if entry.is_dir():
+                    dest.mkdir(parents=True, exist_ok=True)
+                else:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(entry) as source, dest.open('wb') as output:
+                        shutil.copyfileobj(source, output, 65536)
+                if index % 60 == 0:
+                    progress(86 + int(index / max(1, len(entries)) * 12), 'Entpacke Sprachmodell …')
+        if not (root / 'conf').is_dir() or not (root / 'am').is_dir():
+            raise ValueError('Sprachmodell-Archiv ist unvollständig.')
+        if cancel_event.is_set():
+            raise InterruptedError('Sprachmodell-Download abgebrochen.')
+        if not target.exists():
+            root.rename(target)
+        if not (target / 'conf').is_dir():
+            raise RuntimeError('Sprachmodell konnte nicht eingerichtet werden.')
+        progress(100, 'Deutsches Sprachmodell ist bereit.')
+        return target
+
 def spoken_text(text, limit=2200):
     """Turn a chat answer into pronounceable prose rather than reading Markdown."""
     raw = str(text)
@@ -172,11 +296,39 @@ def render_speech_file(text, settings, cancel_event=None):
         raise
 
 
-def speak(text, piper_exe='', piper_model='', stop_event=None):
-    """Legacy offline speech path for Windows SAPI / pyttsx3.
 
-    Piper playback is now handled through render_speech_file + Qt multimedia;
-    this helper retains compatibility with previous callers.
+def speak_with_windows_sapi(text, stop_event=None):
+    """Use Windows COM async speech, polling the cancellation event."""
+    import pythoncom
+    from win32com.client import Dispatch
+    pythoncom.CoInitialize()
+    try:
+        speaker = Dispatch('SAPI.SpVoice')
+        try:
+            for candidate in speaker.GetVoices():
+                description = str(candidate.GetDescription()).lower()
+                if 'german' in description or 'de-de' in description:
+                    speaker.Voice = candidate
+                    break
+        except Exception:
+            pass
+        speaker.Rate = 1
+        speaker.Speak(text, 1)  # SVSFlagsAsync
+        while not speaker.WaitUntilDone(100):
+            if stop_event and stop_event.is_set():
+                speaker.Speak('', 3)  # SVSFlagsAsync | SVSFPurgeBeforeSpeak
+                return
+        if stop_event and stop_event.is_set():
+            speaker.Speak('', 3)
+    finally:
+        pythoncom.CoUninitialize()
+
+def speak(text, piper_exe='', piper_model='', stop_event=None):
+    """Interruptible Windows SAPI playback, with a platform fallback.
+
+    A regular ``pyttsx3.runAndWait`` call blocks without observing stop_event.
+    Windows SAPI's async mode lets us purge its queue within 100 ms when the
+    user clicks Stop or says a wake phrase during playback.
     """
     text = spoken_text(text)
     if not text or (stop_event and stop_event.is_set()):
@@ -186,25 +338,30 @@ def speak(text, piper_exe='', piper_model='', stop_event=None):
         path = render_speech_file(text, {'speech_engine': 'piper', 'piper_exe': piper_exe,
                                          'piper_model': piper_model}, stop_event)
         try:
-            if stop_event and stop_event.is_set():
-                return
-            winsound.PlaySound(str(path), winsound.SND_FILENAME)
+            if not (stop_event and stop_event.is_set()):
+                winsound.PlaySound(str(path), winsound.SND_FILENAME)
         finally:
             path.unlink(missing_ok=True)
         return
+    if __import__('os').name == 'nt':
+        try:
+            speak_with_windows_sapi(text, stop_event)
+        except ImportError:
+            pass  # Some minimal Windows environments lack pywin32.
+        else:
+            return
     import pyttsx3
     engine = pyttsx3.init()
     try:
-        voices = engine.getProperty('voices')
-        for voice in voices:
-            lang = ' '.join(str(v) for v in voice.languages).lower()
-            if 'de' in lang or 'german' in voice.name.lower():
-                engine.setProperty('voice', voice.id)
+        for available in engine.getProperty('voices'):
+            lang = ' '.join(str(v) for v in available.languages).lower()
+            if 'de' in lang or 'german' in available.name.lower():
+                engine.setProperty('voice', available.id)
                 break
         engine.setProperty('rate', 192)
         if stop_event and stop_event.is_set():
             return
         engine.say(text)
-        engine.runAndWait()
+        engine.runAndWait()  # Fallback for non-Windows systems; may not interrupt.
     finally:
         engine.stop()

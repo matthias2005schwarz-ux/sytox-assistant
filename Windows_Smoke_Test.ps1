@@ -33,9 +33,8 @@ New-Item -ItemType Directory -Path $testHome -Force | Out-Null
 try {
     $env:APPDATA = $testHome
     if ($env:GITHUB_ACTIONS -eq 'true') { $env:QT_QPA_PLATFORM = 'offscreen' }
-    # Native Qt GUI tests must own their QApplication in isolated processes.
-    # Qt model-download thread UI test has a native offscreen shutdown failure.
-    # Pure model setup logic and existing Qt main-window tests remain in CI.
+    # PySide6 can crash on Windows process shutdown when QApplication is mixed
+    # with unrelated unittest fixtures. Keep verified Qt main-window tests isolated.
     Invoke-Native 'Python-Komponententests ohne native Qt-Fenster' $python @('tools/run_nonqt_tests.py')
     $env:PYTHONPATH = (Join-Path $PSScriptRoot 'tests') + ';' + $PSScriptRoot
     Invoke-Native 'Qt-Hauptfenster-Verbindungstests' $python @('-m','unittest','-v','test_ollama_ui.OllamaQtOnboardingTests')
