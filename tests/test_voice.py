@@ -8,7 +8,7 @@ import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from sytox.voice_features import VoiceTurnRouter, render_speech_file, transcribe_wav, spoken_text
+from sytox.voice_features import VoiceTurnRouter, render_speech_file, transcribe_wav, spoken_text, desktop_voice_intent
 
 
 class TestVoiceRouting(unittest.TestCase):
@@ -69,6 +69,29 @@ class TestVoiceRouting(unittest.TestCase):
         router.allow_follow_up()
         self.clock[0] += 121
         self.assertIsNone(router.command_for('weiter'))
+
+
+class TestDesktopVoiceIntents(unittest.TestCase):
+    def test_windows_and_control_panel(self):
+        self.assertEqual(desktop_voice_intent('Zeig mir die offenen Fenster'), ('windows', ''))
+        self.assertEqual(desktop_voice_intent('zeige mir alle Fenster'), ('windows', ''))
+        self.assertEqual(desktop_voice_intent('öffne PC-Steuerung'), ('panel', ''))
+
+    def test_program_search_only(self):
+        self.assertEqual(desktop_voice_intent('suche Programm Firefox'), ('apps', 'Firefox'))
+        self.assertEqual(desktop_voice_intent('öffne Editor'), ('apps', 'Editor'))
+        self.assertEqual(desktop_voice_intent('starte Taschenrechner'), ('apps', 'Rechner'))
+
+    def test_spoken_mic_off(self):
+        self.assertEqual(desktop_voice_intent('Mikrofon ausschalten'), ('stop_listening', ''))
+        self.assertEqual(desktop_voice_intent('Sprachmodus beenden'), ('stop_listening', ''))
+
+    def test_unrelated_requests_remain_agent_tasks(self):
+        self.assertIsNone(desktop_voice_intent('Wie ist das Wetter?'))
+        self.assertIsNone(desktop_voice_intent('Schreib mir eine Datei'))
+        self.assertIsNone(desktop_voice_intent('öffne die private Datei'))
+        self.assertIsNone(desktop_voice_intent('suche Programm A'))
+        self.assertIsNone(desktop_voice_intent(''))
 
 
 class TestVoiceRendering(unittest.TestCase):
