@@ -1,3 +1,14 @@
+# Neu im Entwicklungszweig: Automatische Erkennung von Programmiersprachen und Entwicklungswerkzeugen
+
+- **Neue Agent-Werkzeuge:** `toolchain_inspect` prüft vorhandene Projektdateien, empfiehlt anhand des Auftrags eine Sprache und meldet fehlende Compiler, ohne Code auszuführen oder Software zu installieren.
+- **Sprachen:** Python, JavaScript, TypeScript, C#, Java, C, C++, Go, Rust sowie Erkennung von PHP, Lua und Kotlin. Für PHP, Lua und Kotlin ist aktuell noch kein automatisches Installationspaket freigegeben.
+- **Windows-Installation auf ausdrücklichen Wunsch:** `toolchain_install` nutzt ausschließlich fest hinterlegte winget-Paket-IDs (z. B. .NET SDK, Node.js LTS, Python, Temurin JDK, LLVM, Go, rustup). Der Nutzer sieht vor **jedem** Installationsversuch das genaue Paket und muss ausdrücklich zustimmen. Es gibt weder eine verdeckte Installation noch eine frei wählbare Paket-ID.
+- **Wichtig:** TypeScript benötigt zusätzlich zum Node.js-Paket die projektbezogene TypeScript-Installation; C/C++ und Rust können weitere Windows-Build-Werkzeuge benötigen. Ein erfolgreicher winget-Lauf beweist noch keinen funktionierenden Compiler: eine erneute Prüfung bzw. ein Neustart kann nötig sein.
+- **Projekt-Builds:** `run_command` erfordert für ausführbare Entwicklungsbefehle weiterhin Freigaben. Der Agent kann einige zusätzliche echte Projekt-Builds als Prüfung bewerten, aber ein grüner Compileraufruf ist **kein** Beleg für eine getestete Windows-EXE.
+- **Lieferstand:** Quellcode und automatisierte Regressionstests im Entwicklungszweig; echte Installations- und Build-Tests auf dem Nutzer-PC sowie eine veröffentlichte EXE/Installer-Version sind noch offen.
+
+---
+
 # Entwicklungsstand: Sprechen während SYTOX programmiert
 
 ### Natürliche Arbeitsunterbrechung und Fortsetzung
