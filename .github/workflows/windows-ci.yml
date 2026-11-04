@@ -19,17 +19,6 @@ jobs:
           & .\.venv\Scripts\python.exe -m pip install --upgrade pip
           & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
           if ($LASTEXITCODE -ne 0) { throw 'pip failed' }
-      - name: Diagnose Ollama Qt shutdown independently
-        shell: powershell
-        run: |
-          $env:QT_QPA_PLATFORM = 'offscreen'
-          $env:PYTHONPATH = "$PWD\tests;$PWD"
-          & .\.venv\Scripts\python.exe -m unittest -v test_ollama_ui.OllamaAutoSetupQtTests
-          Write-Host "QT_AUTO_EXIT=$LASTEXITCODE"
-          & .\.venv\Scripts\python.exe -m unittest -v test_ollama_ui.OllamaQtOnboardingTests
-          Write-Host "QT_EXISTING_EXIT=$LASTEXITCODE"
-          & .\.venv\Scripts\python.exe -m unittest discover -s tests -p 'test_ollama_install.py' -v
-          Write-Host "OLLAMA_UNIT_EXIT=$LASTEXITCODE"
       - name: Windows unit, Win32, and Qt startup tests
         shell: powershell
         run: .\Windows_Smoke_Test.ps1

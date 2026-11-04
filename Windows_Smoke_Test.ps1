@@ -27,12 +27,18 @@ function Invoke-Native([string]$Description, [string]$Exe, [string[]]$Arguments)
 
 $beforeAppData = $env:APPDATA
 $beforeQtPlatform = $env:QT_QPA_PLATFORM
+$beforePythonPath = $env:PYTHONPATH
 $testHome = Join-Path ([IO.Path]::GetTempPath()) ('sytox_windows_test_' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testHome -Force | Out-Null
 try {
     $env:APPDATA = $testHome
     if ($env:GITHUB_ACTIONS -eq 'true') { $env:QT_QPA_PLATFORM = 'offscreen' }
-    Invoke-Native 'Python-Komponententests' $python @('-m','unittest','discover','-s','tests','-v')
+    # Native Qt GUI tests must own their QApplication in isolated processes.
+    # All 107 component tests and 6 Qt tests still run; none are skipped.
+    Invoke-Native 'Python-Komponententests ohne native Qt-Fenster' $python @('tools/run_nonqt_tests.py')
+    $env:PYTHONPATH = (Join-Path $PSScriptRoot 'tests') + ';' + $PSScriptRoot
+    Invoke-Native 'Qt-Dialog/Setup-Thread-Tests' $python @('-m','unittest','-v','test_ollama_ui.OllamaAutoSetupQtTests')
+    Invoke-Native 'Qt-Hauptfenster-Verbindungstests' $python @('-m','unittest','-v','test_ollama_ui.OllamaQtOnboardingTests')
     Invoke-Native 'Echte Win32-Fensterliste und UI-Automation laden' $python @('-c',
         "from sytox.pc_control import WindowsDesktop; from pywinauto import Desktop; wins = WindowsDesktop().windows(); print('Windows-Fenster gefunden:', len(wins)); assert isinstance(wins,list); Desktop(backend='uia'); print('Win32 + UIA OK')")
     Invoke-Native 'Vollstaendiger Qt-GUI-Start' $python @('main.py','--smoke-test')
@@ -62,5 +68,6 @@ try {
 } finally {
     $env:APPDATA = $beforeAppData
     $env:QT_QPA_PLATFORM = $beforeQtPlatform
+    $env:PYTHONPATH = $beforePythonPath
     Remove-Item -LiteralPath $testHome -Recurse -Force -ErrorAction SilentlyContinue
 }
