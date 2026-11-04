@@ -260,7 +260,7 @@ class Toolkit:
         if not output.startswith('Exit code: 0\n'):
             return False
         tokens = command.lower().strip().split()
-        if len(tokens) < 3:
+        if not tokens:
             return False
         if tokens[0] in ('python', 'python.exe', 'py', 'py.exe') and tokens[1:3] == ['-m', 'compileall']:
             targets = [t for t in command.strip().split()[3:] if not t.startswith('-')]
