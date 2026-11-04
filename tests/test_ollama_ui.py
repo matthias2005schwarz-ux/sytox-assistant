@@ -47,6 +47,25 @@ class OllamaQtOnboardingTests(unittest.TestCase):
                                                       'Ollama verbunden · qwen2.5-coder:7b'))
         self.assertIn('KI bereit', self.window.status_chip.text())
 
+    def test_dark_red_workspace_controls_and_suggestion(self):
+        from PySide6.QtWidgets import QFrame
+        cards = self.window.findChildren(QFrame, 'utilityCard')
+        self.assertEqual(len(cards), 4)
+        self.assertIsNotNone(self.window.empty_widget)
+        self.window._use_suggestion('Erstelle eine Funktion')
+        self.assertEqual(self.window.input.toPlainText(), 'Erstelle eine Funktion')
+        self.assertEqual(self.window.chatlist.count(), 1)
+
+    def test_first_message_replaces_empty_state_without_losing_text(self):
+        from PySide6.QtWidgets import QFrame, QLabel
+        self.assertIsNotNone(self.window.empty_widget)
+        self.window.add_bubble('user', '<script>not executable</script>')
+        self.assertIsNone(self.window.empty_widget)
+        messages = self.window.findChildren(QFrame, 'bubbleUser')
+        self.assertEqual(len(messages), 1)
+        self.assertTrue(any(label.text() == '<script>not executable</script>'
+                            for label in messages[0].findChildren(QLabel)))
+
     def test_setup_dialog_contains_copyable_command(self):
         dialog = OllamaHelpDialog('qwen2.5-coder:7b', None, self.window)
         from PySide6.QtWidgets import QLineEdit

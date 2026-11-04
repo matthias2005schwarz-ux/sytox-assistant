@@ -1,3 +1,15 @@
+# SYTOX Assistant – Windows 0.3.2 (Black & Crimson Desktop Design)
+
+## Neu in 0.3.2: Vollständige Neugestaltung der nativen Qt-Oberfläche
+
+- **Farbwelt:** Tiefschwarz, Graphit und Dunkelrot, ohne die bisherige Pink-/Navy-Palette. Grüne/gelbliche Statusfarben werden ausschließlich für echte Bereit-/Warnzustände verwendet.
+- **Fenster:** Überarbeitete Chat-Navigation links, großzügiger Nachrichtenbereich in der Mitte und übersichtliche Steuerkarten für KI, Agent, Sprache und Aktivitäten rechts. Keine Website oder WebView.
+- **Neuer Chat:** Begrüßungskarte mit funktionierenden Vorschlägen, die Text in das Eingabefeld übernehmen (nichts wird ohne Klick auf Senden abgeschickt).
+- **Chat:** Unterschiedliche dunkelrote Benutzer- und neutrale KI-Sprechblasen, sichere Nur-Text-Anzeige, ruhige Abstände und besser lesbare Schrift.
+- **Mikroanimationen:** Kurze, nicht blockierende Einblendungen statt dauerhaft blinkender Effekte. Vektor-Logo mit dezentem rotem Licht.
+- **Bestand:** Alle Agent-, Ollama-, Sprach- und Datenspeicherfunktionen bleiben im selben Projekt. Keine Migration und kein Löschen alter Chats.
+- **Test:** UI-Vertragsprüfungen plus Windows-Komponententests, nativer Qt-Start, EXE- und Installer-Test in GitHub Actions. Die finale optische Wirkung und Bildschirm-DPI müssen zusätzlich auf dem Anwender-PC beurteilt werden.
+
 # SYTOX Assistant – Windows 0.3.1 (Mikrofon-Diagnose)
 
 ## Neu in 0.3.1: Interaktiver Mikrofon- und Sprachunterbrechungstest

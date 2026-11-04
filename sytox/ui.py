@@ -9,15 +9,16 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QTextCursor, QDesktopServices
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QTextCursor, QDesktopServices, QLinearGradient, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,QWidget,QMainWindow,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,
     QTextEdit,QPlainTextEdit,QListWidget,QListWidgetItem,QScrollArea,QSplitter,
     QMessageBox,QFileDialog,QLineEdit,QDialog,QFormLayout,QCheckBox,QComboBox,
-    QSystemTrayIcon,QMenu,QInputDialog,QSpinBox,QFrame,QProgressBar
+    QSystemTrayIcon,QMenu,QInputDialog,QSpinBox,QFrame,QProgressBar, QGraphicsOpacityEffect, QGraphicsDropShadowEffect
 )
+from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model
@@ -25,43 +26,37 @@ from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
 
-# SYTOX 0.2.5 design system: deep navy, raspberry accents, quiet status elements.
-BG='#0B0D13'; PANEL='#121620'; SURFACE='#1B202D'; RED='#D34A7B'; LIGHT='#F4F5FA'; MUTED='#98A0B4'
-QSS=f'''
-QWidget {{ background: {BG}; color: {LIGHT}; font-family: 'Segoe UI'; font-size: 13px; }}
-QToolTip {{ background: #242A39; color: white; border: 1px solid #3B4257; padding: 6px; }}
-QFrame#sidebar {{ background: #10141E; border-right: 1px solid #252B3A; }}
-QFrame#right {{ background: #10141E; border-left: 1px solid #252B3A; }}
-QFrame#topbar {{ background: #121722; border-bottom: 1px solid #292F40; }}
-QFrame#statusCard {{ background: #1A1F2C; border: 1px solid #30374B; border-radius: 14px; }}
-QFrame#composePanel {{ background: #131824; border-top: 1px solid #272E3F; }}
-QLabel#statusChip {{ color: #86E1BD; background: #16372E; border: 1px solid #295B4C;
-    border-radius: 11px; padding: 5px 11px; font-weight: 600; font-size: 11px; }}
-QLabel#sectionTitle {{ color: #DBE1F0; font-weight: 800; letter-spacing: 1px; font-size: 11px; }}
-QPushButton {{ background: #252B3A; border: 1px solid #384054; border-radius: 11px;
-    padding: 10px 14px; color: #F0F1F6; font-weight: 600; }}
-QPushButton:hover {{ background: #30374B; border-color: #717B93; }}
-QPushButton:pressed {{ background: #1B2131; }}
-QPushButton:disabled {{ color: #687083; background: #1A1F2B; border-color: #292F3D; }}
-QPushButton#primary {{ background: #B73565; border: 1px solid #E05283; color: white; }}
-QPushButton#primary:hover {{ background: #CB4072; border-color: #FF85A9; }}
-QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox {{ background: #1D2331;
-    border: 1px solid #394156; border-radius: 11px; padding: 10px;
-    color: #F4F5FA; selection-background-color: #A52E60; }}
-QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{ border: 1px solid #D54C7E; }}
-QListWidget {{ background: transparent; border: none; outline: none; }}
-QListWidget::item {{ border-radius: 9px; padding: 10px 12px; margin: 3px 4px; }}
-QListWidget::item:selected {{ background: #493046; color: white; }}
-QListWidget::item:hover {{ background: #242A3B; }}
-QScrollArea {{ border: 0; }}
-QScrollBar:vertical {{ background: #111620; width: 9px; }}
-QScrollBar::handle:vertical {{ background: #414B63; border-radius: 4px; min-height: 22px; }}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
-QLabel#muted {{ color: {MUTED}; }}
-QMenu {{ background: #202638; border: 1px solid #3A4358; border-radius: 8px; padding: 5px; }}
-QMenu::item {{ padding: 7px 25px; }}
-QMenu::item:selected {{ background: #644057; }}
-'''
+class BrandMark(QWidget):
+    """Vector-drawn SYTOX monogram; no external image or web UI required."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(50, 50)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        gradient = QLinearGradient(2, 1, 48, 49)
+        gradient.setColorAt(0, QColor('#E44B56'))
+        gradient.setColorAt(.56, QColor('#A62535'))
+        gradient.setColorAt(1, QColor('#641E2B'))
+        p.setBrush(gradient)
+        p.setPen(QPen(QColor('#FF6D78'), 1))
+        p.drawRoundedRect(3, 3, 44, 44, 13, 13)
+        p.setPen(QColor('#FFFFFF'))
+        p.setFont(QFont('Segoe UI', 25, QFont.Black))
+        p.drawText(self.rect(), Qt.AlignCenter, 'S')
+        p.end()
+
+
+def subtle_glow(widget, color='#92303E', radius=23, opacity=135):
+    """Create restrained red illumination, never a blocking animation."""
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(radius)
+    effect.setColor(QColor(color))
+    effect.setOffset(0, 1)
+    widget.setGraphicsEffect(effect)
+    return effect
 
 
 def app_icon():
@@ -71,7 +66,7 @@ def app_icon():
         return QIcon(str(icon_file))
     pix=QPixmap(64,64);pix.fill(Qt.transparent)
     p=QPainter(pix);p.setRenderHint(QPainter.Antialiasing)
-    p.setBrush(QColor(155,23,59));p.setPen(Qt.NoPen);p.drawRoundedRect(3,3,58,58,15,15)
+    p.setBrush(QColor(178,37,52));p.setPen(Qt.NoPen);p.drawRoundedRect(3,3,58,58,15,15)
     p.setPen(QColor('#ffffff'));f=QFont('Segoe UI',30,QFont.Bold);p.setFont(f)
     p.drawText(pix.rect(),Qt.AlignCenter,'S');p.end()
     return QIcon(pix)
@@ -844,103 +839,337 @@ class MainWindow(QMainWindow):
         return settings
 
     def build_ui(self):
-        central=QWidget();self.setCentralWidget(central)
-        layout=QHBoxLayout(central);layout.setContentsMargins(0,0,0,0);layout.setSpacing(0)
-        splitter=QSplitter(Qt.Horizontal);splitter.setHandleWidth(1);layout.addWidget(splitter)
-        left=QFrame();left.setObjectName('sidebar');left.setMinimumWidth(210)
-        l=QVBoxLayout(left);l.setContentsMargins(12,17,12,12)
-        title=QLabel('◈  SYTOX  AI');title.setStyleSheet('font-size: 25px; font-weight: 900; color: #F5F5FB; padding: 11px 7px 3px')
-        l.addWidget(title)
-        subtitle=QLabel('DEIN PERSÖNLICHER ASSISTENT');subtitle.setObjectName('muted')
-        subtitle.setStyleSheet('font-size: 10px; letter-spacing: 1px; color:#A0A8BB; padding: 0 8px 18px')
-        l.addWidget(subtitle)
-        btn_new=QPushButton('＋   Neuer Chat');btn_new.setObjectName('primary')
-        btn_new.clicked.connect(self.create_chat);l.addWidget(btn_new)
-        self.search=QLineEdit();self.search.setPlaceholderText('Chats suchen …')
-        self.search.textChanged.connect(self.reload_chats);l.addWidget(self.search)
-        self.chatlist=QListWidget();self.chatlist.itemClicked.connect(lambda it:self.select_chat(it.data(Qt.UserRole)))
-        l.addWidget(self.chatlist,1)
-        rename=QPushButton('Chat umbenennen');rename.clicked.connect(self.rename_chat);l.addWidget(rename)
-        delete=QPushButton('Chat löschen');delete.clicked.connect(self.delete_chat);l.addWidget(delete)
-        cfg=QPushButton('⚙  Einstellungen');cfg.clicked.connect(self.edit_settings);l.addWidget(cfg)
+        central = QWidget()
+        central.setObjectName('appRoot')
+        self.setCentralWidget(central)
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(1)
+        layout.addWidget(splitter)
+
+        # Left: simple navigation, with a distinctive native vector brand.
+        left = QFrame()
+        left.setObjectName('sidebar')
+        left.setMinimumWidth(218)
+        l = QVBoxLayout(left)
+        l.setContentsMargins(14, 23, 14, 17)
+        l.setSpacing(9)
+        identity = QHBoxLayout()
+        identity.setSpacing(11)
+        mark = BrandMark()
+        subtle_glow(mark)
+        identity.addWidget(mark)
+        names = QVBoxLayout()
+        names.setSpacing(1)
+        title = QLabel('SYTOX')
+        title.setObjectName('brandName')
+        names.addWidget(title)
+        subtitle = QLabel('DESKTOP AI')
+        subtitle.setObjectName('brandSubtitle')
+        names.addWidget(subtitle)
+        identity.addLayout(names)
+        identity.addStretch(1)
+        l.addLayout(identity)
+        l.addSpacing(21)
+        btn_new = QPushButton('＋   Neuer Chat')
+        btn_new.setObjectName('primary')
+        btn_new.clicked.connect(self.create_chat)
+        btn_new.setMinimumHeight(44)
+        l.addWidget(btn_new)
+        l.addSpacing(7)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText('⌕  Chats durchsuchen')
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.reload_chats)
+        l.addWidget(self.search)
+        l.addSpacing(3)
+        recent = QLabel('DEINE GESPRÄCHE')
+        recent.setObjectName('sectionTitle')
+        l.addWidget(recent)
+        self.chatlist = QListWidget()
+        self.chatlist.setSpacing(2)
+        self.chatlist.itemClicked.connect(lambda it: self.select_chat(it.data(Qt.UserRole)))
+        l.addWidget(self.chatlist, 1)
+        rename = QPushButton('✎   Chat umbenennen')
+        rename.setObjectName('ghost')
+        rename.clicked.connect(self.rename_chat)
+        l.addWidget(rename)
+        delete = QPushButton('⌫   Chat löschen')
+        delete.setObjectName('ghost')
+        delete.clicked.connect(self.delete_chat)
+        l.addWidget(delete)
+        cfg = QPushButton('⚙   Einstellungen')
+        cfg.setObjectName('subtle')
+        cfg.clicked.connect(self.edit_settings)
+        l.addWidget(cfg)
+        version = QLabel('SYTOX  /  VERSION 0.3.2')
+        version.setObjectName('version')
+        version.setAlignment(Qt.AlignCenter)
+        l.addSpacing(7)
+        l.addWidget(version)
         splitter.addWidget(left)
 
-        center=QWidget();c=QVBoxLayout(center);c.setContentsMargins(0,0,0,0);c.setSpacing(0)
-        top=QFrame();top.setObjectName('topbar');th=QHBoxLayout(top);th.setContentsMargins(20,13,22,13)
-        self.chat_heading=QLabel('SYTOX  /  Chat');self.chat_heading.setStyleSheet('font-size: 18px; font-weight: 750; color: #F2F3F9')
-        th.addWidget(self.chat_heading);th.addStretch()
-        self.model_name=QLabel(self.config['model']);self.model_name.setObjectName('muted')
-        th.addWidget(self.model_name)
-        self.status_chip=QLabel('◌  KI wird geprüft')
+        # Center: spacious conversation, quiet header, floating composer.
+        center = QWidget()
+        center.setObjectName('chatCenter')
+        c = QVBoxLayout(center)
+        c.setContentsMargins(0, 0, 0, 0)
+        c.setSpacing(0)
+        top = QFrame()
+        top.setObjectName('topbar')
+        th = QHBoxLayout(top)
+        th.setContentsMargins(24, 14, 24, 14)
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        breadcrumb = QLabel('WORKSPACE  /  KONVERSATION')
+        breadcrumb.setObjectName('sectionTitle')
+        titles.addWidget(breadcrumb)
+        self.chat_heading = QLabel('Neuer Chat')
+        self.chat_heading.setObjectName('chatTitle')
+        titles.addWidget(self.chat_heading)
+        th.addLayout(titles)
+        th.addStretch(1)
+        connection = QVBoxLayout()
+        connection.setSpacing(4)
+        self.model_name = QLabel(self.config['model'])
+        self.model_name.setObjectName('muted')
+        self.model_name.setAlignment(Qt.AlignRight)
+        connection.addWidget(self.model_name)
+        self.status_chip = QLabel('◌  KI wird geprüft')
         self.status_chip.setObjectName('statusChip')
-        th.addSpacing(14);th.addWidget(self.status_chip)
+        self.status_chip.setAlignment(Qt.AlignCenter)
+        connection.addWidget(self.status_chip, 0, Qt.AlignRight)
+        th.addLayout(connection)
         c.addWidget(top)
-        scroll=QScrollArea();scroll.setWidgetResizable(True)
-        self.msg_container=QWidget();self.msg_layout=QVBoxLayout(self.msg_container)
-        self.msg_layout.setAlignment(Qt.AlignTop);self.msg_layout.setSpacing(15)
-        self.msg_layout.setContentsMargins(27,20,27,20)
-        scroll.setWidget(self.msg_container);c.addWidget(scroll,1);self.scroll=scroll
-        compose=QFrame();compose.setObjectName('composePanel')
-        cbox=QVBoxLayout(compose);cbox.setContentsMargins(20,12,20,13)
-        upper=QHBoxLayout()
-        self.mode=QComboBox();self.mode.addItems(['Einmal','1 Stunde arbeiten','3 Stunden arbeiten','Bis fertig'])
-        self.mode.setMaximumWidth(220);upper.addWidget(self.mode)
-        self.state=QLabel('● Bereit');self.state.setObjectName('muted');upper.addWidget(self.state)
-        upper.addStretch();cbox.addLayout(upper)
-        row=QHBoxLayout();self.input=InputBox();self.input.setPlaceholderText('Schreib deinem Assistenten …   (Shift+Enter = Zeilenumbruch)')
-        self.input.setFixedHeight(85);self.input.send.connect(self.send)
-        row.addWidget(self.input,1)
-        right_buttons=QVBoxLayout()
-        self.send_btn=QPushButton('➤ Senden');self.send_btn.setObjectName('primary');self.send_btn.clicked.connect(self.send)
-        self.mic_btn=QPushButton('🎙 Memo');self.mic_btn.clicked.connect(self.toggle_memo)
-        right_buttons.addWidget(self.send_btn);right_buttons.addWidget(self.mic_btn)
-        row.addLayout(right_buttons);cbox.addLayout(row)
+        scroll = QScrollArea()
+        scroll.setObjectName('messageScroll')
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.msg_container = QWidget()
+        self.msg_container.setObjectName('messageSurface')
+        self.msg_layout = QVBoxLayout(self.msg_container)
+        self.msg_layout.setAlignment(Qt.AlignTop)
+        self.msg_layout.setSpacing(16)
+        self.msg_layout.setContentsMargins(34, 28, 34, 28)
+        scroll.setWidget(self.msg_container)
+        c.addWidget(scroll, 1)
+        self.scroll = scroll
+        self.empty_widget = None
+        self._rendering_history = False
+
+        compose = QFrame()
+        compose.setObjectName('composePanel')
+        cbox = QVBoxLayout(compose)
+        cbox.setContentsMargins(25, 16, 25, 18)
+        cbox.setSpacing(12)
+        upper = QHBoxLayout()
+        upper.setSpacing(12)
+        self.mode = QComboBox()
+        self.mode.addItems(['Einmal', '1 Stunde arbeiten', '3 Stunden arbeiten', 'Bis fertig'])
+        self.mode.setMaximumWidth(192)
+        self.mode.setToolTip('Wähle, wie lange SYTOX an deiner Aufgabe arbeiten soll.')
+        upper.addWidget(self.mode)
+        self.state = QLabel('●  Bereit für deine Aufgabe')
+        self.state.setObjectName('muted')
+        upper.addWidget(self.state)
+        upper.addStretch(1)
+        cbox.addLayout(upper)
+        input_card = QFrame()
+        input_card.setObjectName('inputCard')
+        card_row = QHBoxLayout(input_card)
+        card_row.setContentsMargins(9, 5, 9, 5)
+        card_row.setSpacing(9)
+        self.input = InputBox()
+        self.input.setObjectName('chatInput')
+        self.input.setPlaceholderText('Schreib SYTOX, was er für dich tun soll …')
+        self.input.setFixedHeight(76)
+        self.input.send.connect(self.send)
+        card_row.addWidget(self.input, 1)
+        right_buttons = QVBoxLayout()
+        right_buttons.setSpacing(7)
+        self.send_btn = QPushButton('➤  Senden')
+        self.send_btn.setObjectName('primary')
+        self.send_btn.clicked.connect(self.send)
+        self.send_btn.setMinimumWidth(106)
+        right_buttons.addWidget(self.send_btn)
+        self.mic_btn = QPushButton('🎙  Memo')
+        self.mic_btn.setObjectName('subtle')
+        self.mic_btn.clicked.connect(self.toggle_memo)
+        right_buttons.addWidget(self.mic_btn)
+        card_row.addLayout(right_buttons)
+        cbox.addWidget(input_card)
+        hint = QLabel('ENTER ZUM SENDEN     ·     SHIFT + ENTER FÜR ZEILENUMBRUCH     ·     KI LÄUFT LOKAL')
+        hint.setObjectName('version')
+        cbox.addWidget(hint)
         c.addWidget(compose)
         splitter.addWidget(center)
 
-        right=QFrame();right.setObjectName('right');r=QVBoxLayout(right);r.setContentsMargins(12,16,12,12)
-        ollama_title=QLabel('◈  KI-VERBINDUNG');ollama_title.setObjectName('sectionTitle')
-        r.addWidget(ollama_title)
-        self.model_status_label=QLabel('Verbindung wird geprüft …')
-        self.model_status_label.setObjectName('muted')
+        # Right: purpose-built dark cards rather than an endless button list.
+        right = QFrame()
+        right.setObjectName('right')
+        right.setMinimumWidth(268)
+        right_column = QVBoxLayout(right)
+        right_column.setContentsMargins(12, 13, 12, 13)
+        right_column.setSpacing(0)
+        tools_heading = QLabel('◈  STEUERZENTRALE')
+        tools_heading.setObjectName('sectionTitle')
+        right_column.addWidget(tools_heading)
+        right_column.addSpacing(14)
+        side_scroll = QScrollArea()
+        side_scroll.setWidgetResizable(True)
+        side_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        side_container = QWidget()
+        r = QVBoxLayout(side_container)
+        r.setContentsMargins(0, 0, 4, 8)
+        r.setSpacing(12)
+
+        def new_card():
+            card = QFrame()
+            card.setObjectName('utilityCard')
+            inner = QVBoxLayout(card)
+            inner.setContentsMargins(14, 15, 14, 14)
+            inner.setSpacing(9)
+            return card, inner
+
+        ollama_card, ollama = new_card()
+        ollama_title = QLabel('●  KI-VERBINDUNG')
+        ollama_title.setObjectName('sectionTitle')
+        ollama.addWidget(ollama_title)
+        self.model_status_label = QLabel('Verbindung wird geprüft …')
+        self.model_status_label.setObjectName('panelDescription')
         self.model_status_label.setWordWrap(True)
-        r.addWidget(self.model_status_label)
-        status_buttons=QHBoxLayout()
-        check_model=QPushButton('↻ Prüfen')
+        ollama.addWidget(self.model_status_label)
+        status_buttons = QHBoxLayout()
+        check_model = QPushButton('↻  Prüfen')
         check_model.clicked.connect(self.check_model_status)
         status_buttons.addWidget(check_model)
-        setup_model=QPushButton('Einrichten')
+        setup_model = QPushButton('Einrichten')
+        setup_model.setObjectName('subtle')
         setup_model.clicked.connect(self.show_model_help)
         status_buttons.addWidget(setup_model)
-        r.addLayout(status_buttons)
-        lab=QLabel('◈  AGENT CONTROL');lab.setObjectName('sectionTitle')
-        r.addWidget(lab)
-        self.task_state=QLabel('Keine aktive Aufgabe');self.task_state.setWordWrap(True)
-        self.task_state.setObjectName('muted');r.addWidget(self.task_state)
-        self.stopbtn=QPushButton('■  Stoppen');self.stopbtn.setEnabled(False)
-        self.stopbtn.clicked.connect(self.stop_work);r.addWidget(self.stopbtn)
-        self.resume=QPushButton('▶  Letzte Aufgabe fortsetzen');self.resume.clicked.connect(self.resume_task)
-        r.addWidget(self.resume)
-        self.wakebtn=QPushButton('◉  Gesprächsmodus starten')
-        self.wakebtn.clicked.connect(self.toggle_listener);r.addWidget(self.wakebtn)
-        self.voice_state=QLabel('Mikrofon aus');self.voice_state.setObjectName('muted');r.addWidget(self.voice_state)
-        model_button=QPushButton('↓  Deutsches Sprachmodell laden')
+        ollama.addLayout(status_buttons)
+        r.addWidget(ollama_card)
+
+        task_card, task = new_card()
+        lab = QLabel('◈  AGENT CONTROL')
+        lab.setObjectName('sectionTitle')
+        task.addWidget(lab)
+        self.task_state = QLabel('Keine aktive Aufgabe')
+        self.task_state.setObjectName('panelDescription')
+        self.task_state.setWordWrap(True)
+        task.addWidget(self.task_state)
+        self.stopbtn = QPushButton('■  Aufgabe stoppen')
+        self.stopbtn.setEnabled(False)
+        self.stopbtn.clicked.connect(self.stop_work)
+        task.addWidget(self.stopbtn)
+        self.resume = QPushButton('▶  Letzte Aufgabe fortsetzen')
+        self.resume.clicked.connect(self.resume_task)
+        task.addWidget(self.resume)
+        r.addWidget(task_card)
+
+        voice_card, voice = new_card()
+        voice_heading = QLabel('◉  SPRACHE & MIKROFON')
+        voice_heading.setObjectName('sectionTitle')
+        voice.addWidget(voice_heading)
+        self.voice_state = QLabel('Mikrofon aus')
+        self.voice_state.setObjectName('panelDescription')
+        voice.addWidget(self.voice_state)
+        self.wakebtn = QPushButton('◉  Gesprächsmodus starten')
+        self.wakebtn.setObjectName('subtle')
+        self.wakebtn.clicked.connect(self.toggle_listener)
+        voice.addWidget(self.wakebtn)
+        model_button = QPushButton('↓  Deutsches Sprachmodell laden')
         model_button.clicked.connect(self.install_voice_model)
-        r.addWidget(model_button)
-        self.stopvoicebtn=QPushButton('🔇  Sprachausgabe stoppen')
+        voice.addWidget(model_button)
+        self.stopvoicebtn = QPushButton('🔇  Sprachausgabe stoppen')
         self.stopvoicebtn.clicked.connect(self.stop_speech)
-        self.stopvoicebtn.setEnabled(False);r.addWidget(self.stopvoicebtn)
-        diagnostics_button=QPushButton('🎙  Mikrofon und Unterbrechung testen')
+        self.stopvoicebtn.setEnabled(False)
+        voice.addWidget(self.stopvoicebtn)
+        diagnostics_button = QPushButton('🎙  Mikrofon & Unterbrechung testen')
         diagnostics_button.clicked.connect(self.open_voice_diagnostics)
-        r.addWidget(diagnostics_button)
-        logs_title=QLabel('AKTIVITÄTEN');logs_title.setObjectName('sectionTitle');r.addWidget(logs_title)
-        self.logs=QPlainTextEdit();self.logs.setReadOnly(True)
-        self.logs.setMaximumBlockCount(250);r.addWidget(self.logs,1)
-        memory=QPushButton('Gespeicherte Erinnerungen');memory.clicked.connect(self.show_memories)
-        r.addWidget(memory)
+        voice.addWidget(diagnostics_button)
+        r.addWidget(voice_card)
+
+        activity_card, activity = new_card()
+        logs_title = QLabel('◆  AKTIVITÄTEN')
+        logs_title.setObjectName('sectionTitle')
+        activity.addWidget(logs_title)
+        self.logs = QPlainTextEdit()
+        self.logs.setObjectName('activityLog')
+        self.logs.setReadOnly(True)
+        self.logs.setMaximumBlockCount(250)
+        self.logs.setMinimumHeight(125)
+        activity.addWidget(self.logs)
+        memory = QPushButton('Gespeicherte Erinnerungen')
+        memory.setObjectName('ghost')
+        memory.clicked.connect(self.show_memories)
+        activity.addWidget(memory)
+        r.addWidget(activity_card)
+        r.addStretch(1)
+        side_scroll.setWidget(side_container)
+        right_column.addWidget(side_scroll, 1)
         splitter.addWidget(right)
-        splitter.setSizes([260,820,280]);splitter.setStretchFactor(1,1)
+        splitter.setSizes([255, 830, 296])
+        splitter.setStretchFactor(1, 1)
         self.input.setFocus()
+
+    def _animate_appearance(self, widget, duration=260):
+        """A short non-blocking fade; never animate ongoing voice/agent tasks."""
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b'opacity', widget)
+        animation.setDuration(duration)
+        animation.setStartValue(0.10)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.start()
+        # Animation is owned by its widget; no detached Qt objects or timers.
+        widget._intro_animation = animation
+
+    def _use_suggestion(self, prompt):
+        self.input.setPlainText(prompt)
+        self.input.setFocus()
+
+    def _show_empty_state(self):
+        hero = QFrame()
+        hero.setObjectName('hero')
+        hero.setMaximumWidth(670)
+        box = QVBoxLayout(hero)
+        box.setContentsMargins(32, 30, 32, 30)
+        box.setSpacing(13)
+        eyebrow = QLabel('◈  DEIN PERSÖNLICHER KI-WORKSPACE')
+        eyebrow.setObjectName('heroEyebrow')
+        box.addWidget(eyebrow)
+        title = QLabel('Was bauen wir heute?')
+        title.setObjectName('heroTitle')
+        title.setWordWrap(True)
+        box.addWidget(title)
+        subtitle = QLabel('Frag, plane, programmiere oder steuere deinen PC.\nSYTOX unterstützt dich – lokal und mit deiner Freigabe.')
+        subtitle.setObjectName('heroCopy')
+        subtitle.setWordWrap(True)
+        box.addWidget(subtitle)
+        box.addSpacing(9)
+        suggestions = (
+            ('✦  Eine Idee ausarbeiten', 'Hilf mir, eine neue Projektidee Schritt für Schritt auszuarbeiten.'),
+            ('⌘  Code schreiben', 'Erstelle mit mir eine neue Funktion für mein Projekt.'),
+            ('◉  Windows-Aufgabe erledigen', 'Hilf mir, eine Aufgabe auf meinem Windows-PC auszuführen.'),
+        )
+        for caption, prompt in suggestions:
+            button = QPushButton(caption)
+            button.setObjectName('suggestion')
+            button.clicked.connect(lambda checked=False, p=prompt: self._use_suggestion(p))
+            box.addWidget(button)
+        self.empty_widget = hero
+        outer = QWidget()
+        outer_lay = QHBoxLayout(outer)
+        outer_lay.setContentsMargins(0, 34, 0, 0)
+        outer_lay.addStretch(1)
+        outer_lay.addWidget(hero, 10)
+        outer_lay.addStretch(1)
+        self.msg_layout.addWidget(outer)
+        QTimer.singleShot(0, lambda: self._animate_appearance(outer) if not self._is_exiting else None)
 
     def setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():return
@@ -1028,7 +1257,16 @@ class MainWindow(QMainWindow):
         current=next((c for c in self.store.chats() if c['id']==cid),None)
         self.chat_heading.setText(current['title'] if current else 'Chat')
         self.reload_chats();self.clear_bubbles()
-        for m in self.store.messages(cid): self.add_bubble(m['role'],m['content'])
+        messages = self.store.messages(cid)
+        if not messages:
+            self._show_empty_state()
+        else:
+            self._rendering_history = True
+            try:
+                for m in messages:
+                    self.add_bubble(m['role'],m['content'])
+            finally:
+                self._rendering_history = False
         tasks=self.store.tasks(cid)
         self.task_state.setText((tasks[0]['status']+': '+tasks[0]['goal'][:85]) if tasks else 'Keine aktive Aufgabe')
 
@@ -1048,30 +1286,45 @@ class MainWindow(QMainWindow):
         else:self.create_chat()
 
     def clear_bubbles(self):
+        self.empty_widget = None
         while self.msg_layout.count():
-            item=self.msg_layout.takeAt(0)
-            if item.widget():item.widget().deleteLater()
+            item = self.msg_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
-    def add_bubble(self,role,message):
-        mine=role=='user'
-        body=QFrame()
-        body.setStyleSheet(('QFrame {background:#3B283E; border:1px solid #784362; border-radius:16px;}'
-                            if mine else 'QFrame {background:#1A202D; border:1px solid #323C53; border-radius:16px;}'))
-        b=QVBoxLayout(body);b.setContentsMargins(14,11,14,12);b.setSpacing(8)
-        header=QLabel('DU' if mine else '◆  SYTOX AI')
-        header.setStyleSheet('border:none;font-weight:800;font-size:11px;color:'+(('#FFC5DB' if mine else '#EC8DB5')))
+    def add_bubble(self, role, message):
+        if self.empty_widget is not None:
+            self.clear_bubbles()
+        mine = role == 'user'
+        body = QFrame()
+        body.setObjectName('bubbleUser' if mine else 'bubbleAssistant')
+        b = QVBoxLayout(body)
+        b.setContentsMargins(17, 14, 17, 16)
+        b.setSpacing(10)
+        header = QLabel('DU' if mine else '✦  SYTOX AI')
+        header.setObjectName('bubbleHeadingUser' if mine else 'bubbleHeadingAssistant')
         b.addWidget(header)
-        label=QLabel(message);label.setTextFormat(Qt.PlainText)
-        label.setWordWrap(True);label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        label.setStyleSheet('border:none; font-size:13px;line-height:1.5;')
+        label = QLabel(message)
+        label.setObjectName('bubbleContent')
+        label.setTextFormat(Qt.PlainText)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         b.addWidget(label)
-        body.setMaximumWidth(750)
-        row=QWidget();r=QHBoxLayout(row);r.setContentsMargins(0,0,0,0)
-        if mine:r.addStretch(1)
-        r.addWidget(body,5)
-        if not mine:r.addStretch(1)
+        body.setMaximumWidth(790)
+        row = QWidget()
+        row.setObjectName('messageRow')
+        r = QHBoxLayout(row)
+        r.setContentsMargins(0, 0, 0, 0)
+        if mine:
+            r.addStretch(1)
+        r.addWidget(body, 5)
+        if not mine:
+            r.addStretch(1)
         self.msg_layout.addWidget(row)
-        QTimer.singleShot(100,lambda:self.scroll.verticalScrollBar().setValue(self.scroll.verticalScrollBar().maximum()))
+        if not self._rendering_history and self.isVisible():
+            self._animate_appearance(row, 200)
+        QTimer.singleShot(100, lambda: self.scroll.verticalScrollBar().setValue(
+            self.scroll.verticalScrollBar().maximum()))
 
     def log(self,kind,text):
         self.logs.appendPlainText(f'{kind}: {text}')
@@ -1278,12 +1531,12 @@ class MainWindow(QMainWindow):
             self.model_status_label.setToolTip(status.details)
             if status.ready:
                 self.status_chip.setText('●  KI bereit')
-                self.status_chip.setStyleSheet('color:#86E1BD;background:#16372E;'
-                    'border:1px solid #295B4C;border-radius:11px;padding:5px 11px;')
+                self.status_chip.setStyleSheet('color:#86E1BD;background:#173027;'
+                    'border:1px solid #316049;border-radius:11px;padding:5px 11px;')
             else:
                 self.status_chip.setText('●  ' + status.title)
-                self.status_chip.setStyleSheet('color:#FFD7A7;background:#47301C;'
-                    'border:1px solid #785332;border-radius:11px;padding:5px 11px;')
+                self.status_chip.setStyleSheet('color:#F3BB95;background:#30231F;'
+                    'border:1px solid #6A4235;border-radius:11px;padding:5px 11px;')
                 self.log('System', status.details)
     def _model_probe_finished(self):
         if self._probe_again:
