@@ -140,6 +140,19 @@ QLineEdit#chatSearch {{
 QLineEdit#chatSearch:focus {{ background: #20181D;
     border-color: #A84551; }}
 QFrame#utilityCard:hover {{ border-color: #49323B; }}
+QGroupBox {{
+    background: #141115; border: 1px solid #3C2B34;
+    border-radius: 12px; margin-top: 15px; padding: 12px 11px 10px;
+    font-weight: 700; color: #F0DDE2;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin; left: 13px; padding: 0 5px;
+    color: #DFA3AD;
+}}
+QListWidget#desktopWindowList, QListWidget#desktopAppList {{
+    background: #171318; border: 1px solid #33252C;
+    border-radius: 9px; min-height: 90px;
+}}
 QWidget#messageSurface {{ background: #09090C; }}
 QScrollBar:horizontal {{ background: #100F12; height: 8px; border: none; }}
 QScrollBar::handle:horizontal {{ background: #47343D; border-radius: 4px;
