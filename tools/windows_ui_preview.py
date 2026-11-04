@@ -12,6 +12,7 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QFontDatabase
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -28,6 +29,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix='sytox_visual_') as folder:
         os.environ['APPDATA'] = folder
         app = QApplication.instance() or QApplication(['sytox-ui-preview'])
+        # Windows's offscreen Qt platform can fail to discover OS fonts itself.
+        # Load font *from the runner's own Windows installation*; no font bytes
+        # are bundled or redistributed with SYTOX.
+        windows_fonts = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Fonts'
+        for candidate in ('segoeui.ttf', 'arial.ttf'):
+            path = windows_fonts / candidate
+            if path.is_file():
+                fid = QFontDatabase.addApplicationFont(str(path))
+                print(f'[PREVIEW] Font {candidate}: id={fid}; families={QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []}', flush=True)
         window = MainWindow()
         window.resize(1440, 900)
         window.show()
