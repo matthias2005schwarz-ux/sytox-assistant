@@ -957,7 +957,7 @@ class MainWindow(QMainWindow):
         update_button.clicked.connect(lambda: self.check_for_updates(manual=True))
         l.addWidget(update_button)
         self.update_button = update_button
-        version = QLabel('SYTOX  /  VERSION 0.3.3')
+        version = QLabel('SYTOX  /  VERSION 0.3.4')
         version.setObjectName('version')
         version.setAlignment(Qt.AlignCenter)
         l.addSpacing(7)
