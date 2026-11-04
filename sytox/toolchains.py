@@ -87,7 +87,7 @@ def _executable(name: str) -> str | None:
     return path
 
 
-def status(language: str) -> dict:
+def status(language: str, workspace: Path | None = None) -> dict:
     key = canonical_language(language)
     spec = TOOLCHAINS[key]
     found, missing = [], []
@@ -96,6 +96,10 @@ def status(language: str) -> dict:
                            if (path := _executable(name))), None)
         if executable:
             found.append(executable[0])
+        elif key == "typescript" and "tsc" in alternatives and workspace is not None and (
+                (Path(workspace) / "node_modules" / ".bin" / "tsc.cmd").is_file()
+                or (Path(workspace) / "node_modules" / ".bin" / "tsc").is_file()):
+            found.append("tsc (projektlokal)")
         else:
             missing.append(" oder ".join(alternatives))
     return {
@@ -178,7 +182,7 @@ def propose(task: str, workspace: Path) -> dict:
     return {
         "recommendation": choice, "reason": reason,
         "existing_project_language": existing,
-        "toolchain": status(choice),
+        "toolchain": status(choice, workspace),
         "supported_languages": list(TOOLCHAINS),
         "windows_package_manager": bool(_executable("winget")),
         "instructions": (
