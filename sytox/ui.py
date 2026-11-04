@@ -24,6 +24,8 @@ from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
 from .parallel_chat import ParallelChatDialog
+from .updater import (check_for_update, download_verified_installer, is_installed_app,
+                      schedule_installer, RELEASES_PAGE)
 from .work_intents import work_intent
 from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
@@ -110,6 +112,32 @@ class Worker(QThread):
             self.completed.emit(result)
         except Exception as e:
             self.completed.emit({'status':'failed','content':f'{type(e).__name__}: {e}','task_id':self.task_id})
+
+
+class UpdateCheckWorker(QThread):
+    result_ready = Signal(object, str)
+
+    def run(self):
+        try:
+            self.result_ready.emit(check_for_update(), '')
+        except Exception as exc:
+            self.result_ready.emit(None, str(exc))
+
+
+class UpdateDownloadWorker(QThread):
+    progress = Signal(int)
+    result_ready = Signal(str, str)
+
+    def __init__(self, update):
+        super().__init__()
+        self.update = update
+
+    def run(self):
+        try:
+            path = download_verified_installer(self.update, self.progress.emit)
+            self.result_ready.emit(str(path), '')
+        except Exception as exc:
+            self.result_ready.emit('', str(exc))
 
 
 class VoiceRecorder(QThread):
@@ -713,6 +741,8 @@ class SettingsDialog(QDialog):
         self.edge_voice.setCurrentIndex(max(0,self.edge_voice.findData(settings.get('edge_voice','de-DE-KatjaNeural'))))
         self.edge_consent=QCheckBox('Ich erlaube, dass gesprochene Antworten für die Online-Stimme an Microsoft übertragen werden.')
         self.edge_consent.setChecked(settings.get('edge_consent',False))
+        self.auto_updates=QCheckBox('Automatisch nach neuen SYTOX-Versionen suchen (keine Installation ohne Zustimmung)')
+        self.auto_updates.setChecked(settings.get('auto_check_updates', True))
         self.auto_voice=QCheckBox('Beim App-Start automatisch auf „Hey Sytox“ hören (Mikrofon aktiv)')
         self.auto_voice.setChecked(settings.get('voice_auto_start', False))
         self.interruption=QCheckBox('Sprachausgabe durch „Hey Sytox“ oder „Stopp“ unterbrechen')
@@ -734,6 +764,7 @@ class SettingsDialog(QDialog):
         form.addRow('',self.edge_consent)
         form.addRow('',self.voice)
         form.addRow('',self.auto_voice)
+        form.addRow('',self.auto_updates)
         form.addRow('',self.interruption)
         form.addRow('',self.no_wake)
         form.addRow('Zeitfenster für Anschlussfrage',self.follow_up)
@@ -781,6 +812,7 @@ class SettingsDialog(QDialog):
                 'edge_rate':'+8%',
                 'voice_no_wake':self.no_wake.isChecked(),
                 'voice_auto_start':self.auto_voice.isChecked(),
+                'auto_check_updates':self.auto_updates.isChecked(),
                 'voice_interruptible':self.interruption.isChecked(),
                 'voice_followup_seconds':self.follow_up.value(),
                 'gmail_client_secrets':self.gmail.text().strip()}
@@ -801,6 +833,8 @@ class MainWindow(QMainWindow):
         self.voice_diagnostic_dialog=None
         self.desktop_tools_dialog=None
         self.parallel_chat=None
+        self._update_check_worker=None
+        self._update_download_worker=None
         self._resume_after_pause=False
         self._agent_last_status='Auftrag gestartet; noch kein konkreter Fortschritt gemeldet.'
         self.active_speaker=None
@@ -826,6 +860,8 @@ class MainWindow(QMainWindow):
         else:self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
         self.log('System','Bereit. Lokale Daten: '+str(default_data_dir()))
         QTimer.singleShot(700, self.check_model_status)
+        if self.config.get('auto_check_updates', True):
+            QTimer.singleShot(2200, self.check_for_updates)
         if self.config.get('voice_auto_start', False):
             QTimer.singleShot(1600, lambda: self.toggle_listener(auto=True))
 
@@ -837,6 +873,7 @@ class MainWindow(QMainWindow):
                   'speech_engine':'windows','edge_voice':'de-DE-KatjaNeural','edge_rate':'+8%',
                   'edge_consent':False,'voice_no_wake':False,'voice_followup_seconds':25,
                   'voice_auto_start':False,'voice_interruptible':True,
+                  'auto_check_updates':True,
                   'gmail_client_secrets':''}
         default_model=base/'models'/'vosk-model-small-de-0.15'
         if default_model.is_dir(): settings['vosk_model']=str(default_model)
@@ -915,7 +952,12 @@ class MainWindow(QMainWindow):
         cfg.setObjectName('subtle')
         cfg.clicked.connect(self.edit_settings)
         l.addWidget(cfg)
-        version = QLabel('SYTOX  /  VERSION 0.3.2')
+        update_button = QPushButton('Nach Updates suchen')
+        update_button.setObjectName('subtle')
+        update_button.clicked.connect(lambda: self.check_for_updates(manual=True))
+        l.addWidget(update_button)
+        self.update_button = update_button
+        version = QLabel('SYTOX  /  VERSION 0.3.3')
         version.setObjectName('version')
         version.setAlignment(Qt.AlignCenter)
         l.addSpacing(7)
@@ -1267,6 +1309,12 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def exit_app(self):
+        if self._update_download_worker and self._update_download_worker.isRunning():
+            QMessageBox.information(self, 'Update läuft',
+                                    'Bitte den laufenden Update-Download erst abschließen.')
+            return
+        if self._update_check_worker and self._update_check_worker.isRunning():
+            self._update_check_worker.wait(18000)
         if self.voice_download and self.voice_download.isRunning():
             self.voice_download.cancel_event.set()
             if not self.voice_download.wait(6000):
@@ -1708,6 +1756,80 @@ class MainWindow(QMainWindow):
             self.model_name.setText(self.config['model'])
             self.log('System','Einstellungen gespeichert.')
             self.check_model_status()
+
+    def check_for_updates(self, manual=False):
+        """Only query release metadata on a worker; never block the Qt interface."""
+        if self._update_check_worker and self._update_check_worker.isRunning():
+            return
+        if self._update_download_worker and self._update_download_worker.isRunning():
+            return
+        if manual:
+            self.update_button.setText('Prüfe GitHub …')
+            self.update_button.setEnabled(False)
+        worker = UpdateCheckWorker()
+        self._update_check_worker = worker
+        worker.result_ready.connect(lambda info, error: self._update_checked(info, error, manual))
+        worker.start()
+
+    def _update_checked(self, info, error, manual):
+        self.update_button.setText('Nach Updates suchen')
+        self.update_button.setEnabled(True)
+        if error:
+            self.log('Update', 'Suche fehlgeschlagen: ' + error)
+            if manual:
+                QMessageBox.warning(self, 'SYTOX Update', error)
+            return
+        if info is None:
+            if manual:
+                QMessageBox.information(self, 'SYTOX Update', 'Keine neuere veröffentlichte Version verfügbar.')
+            return
+        self.log('Update', 'Neue Version ' + info.version + ' auf GitHub verfügbar.')
+        if not is_installed_app():
+            QMessageBox.information(
+                self, 'SYTOX Update',
+                'Version ' + info.version + ' ist verfügbar. Automatische Installation '
+                'ist nur mit dem Windows-Installer möglich.\n' + info.release_url)
+            return
+        if QMessageBox.question(
+                self, 'SYTOX Update ' + info.version,
+                'SYTOX ' + info.version + ' ist verfügbar.\n'
+                'Installer von GitHub herunterladen und per SHA-256 überprüfen?\n'
+                'Eine Installation startet erst nach deiner zweiten Bestätigung.',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.update_button.setEnabled(False)
+        self.update_button.setText('Update wird geladen …')
+        worker = UpdateDownloadWorker(info)
+        self._update_download_worker = worker
+        worker.progress.connect(lambda pct: self.update_button.setText('Update: ' + str(pct) + '%'))
+        worker.result_ready.connect(self._update_downloaded)
+        worker.start()
+
+    def _update_downloaded(self, path, error):
+        self.update_button.setEnabled(True)
+        self.update_button.setText('Nach Updates suchen')
+        if error:
+            QMessageBox.warning(self, 'SYTOX Update', 'Download abgebrochen: ' + error)
+            return
+        self.log('Update', 'Installer heruntergeladen und SHA-256 geprüft.')
+        if self.worker and self.worker.isRunning():
+            QMessageBox.information(self, 'Auftrag läuft',
+                'Update sicher heruntergeladen. Bitte zuerst den laufenden Auftrag '
+                'abschließen oder stoppen und dann erneut nach Updates suchen.')
+            return
+        if QMessageBox.question(
+                self, 'SYTOX aktualisieren',
+                'Der neue Installer wurde erfolgreich überprüft.\n'
+                'SYTOX jetzt beenden und das Update installieren?\n'
+                'Deine Chats und Einstellungen bleiben gespeichert.',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            schedule_installer(path)
+        except Exception as exc:
+            QMessageBox.warning(self, 'SYTOX Update', str(exc))
+            return
+        self.exit_app()
 
     def install_voice_model(self):
         """Download an optional offline speech model only after explicit consent."""
