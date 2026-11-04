@@ -1,3 +1,11 @@
+# Entwicklungsstand: Sprechen während SYTOX programmiert
+
+- **Parallel statt Stopp:** Der Haupt-Agent bearbeitet den ursprünglichen Auftrag im eigenen QThread weiter. Fragen per Texteingabe oder Stimme werden währenddessen in einer separaten, temporären Nebenunterhaltung beantwortet. Diese Nebenunterhaltung hat bewusst **keine PC-/Dateiwerkzeuge** und verändert den laufenden Auftrag nicht.
+- **Bedienung:** Im Bereich „Agent Control“ auf „Während der Arbeit chatten“ klicken, oder während eines laufenden Auftrags einfach eine weitere Frage schreiben bzw. nach „Hey Sytox“ sprechen.
+- **Status:** „Wie weit bist du?“, „Arbeitest du noch?“ oder „Was machst du gerade?“ melden den tatsächlich bekannten Status; es werden keine erfundenen Prozentwerte angegeben.
+- **Stopp eindeutig:** „Stopp“ fordert das Beenden des Auftrags an. „Sei still“ unterbricht lediglich das Vorlesen. Der Werkzeug-Agent behält sämtliche bisherigen Freigabeprüfungen.
+- **Grenzen:** Der PC und SYTOX müssen eingeschaltet bleiben. Bei einem einzigen lokalen Ollama-Modell kann die parallele Sprachantwort die Modellarbeit verlangsamen oder in Ollama warten, ohne den Agent-Thread abzubrechen. Sprachqualität, tatsächliche Multitasking-Leistung und Mikrofon-Interaktion müssen auf dem Anwender-PC erprobt werden. Noch kein neues Installationspaket mit dieser Funktion als Release bestätigt.
+
 ## Neu im aktuellen Entwicklungsstand: Sprach- und Desktop-Steuerung (noch ohne Release-Installer)
 
 - Im rechten Panel unter **Agent Control → Windows-Steuerung** können geöffnete Fenster angezeigt und Programme anhand von Windows-Startmenü-/Desktop-Verknüpfungen gesucht werden.
