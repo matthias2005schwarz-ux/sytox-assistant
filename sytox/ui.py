@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
-from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model
+from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent
+from .desktop_ui import DesktopControlDialog
 from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
@@ -796,6 +797,7 @@ class MainWindow(QMainWindow):
         self.voice_download=None
         self.voice_download_dialog=None
         self.voice_diagnostic_dialog=None
+        self.desktop_tools_dialog=None
         self.active_speaker=None
         self._voice_generation=0
         self._audio_path=None
@@ -1081,6 +1083,11 @@ class MainWindow(QMainWindow):
         self.resume = QPushButton('Letzte Aufgabe fortsetzen')
         self.resume.clicked.connect(self.resume_task)
         task.addWidget(self.resume)
+        self.desktop_btn = QPushButton('Windows-Steuerung')
+        self.desktop_btn.setObjectName('subtle')
+        self.desktop_btn.setToolTip('Fenster anzeigen oder Programme suchen, mit Bestätigung vor jeder Änderung')
+        self.desktop_btn.clicked.connect(lambda: self.show_desktop_tools())
+        task.addWidget(self.desktop_btn)
         r.addWidget(task_card)
 
         voice_card, voice = new_card()
@@ -1655,6 +1662,20 @@ class MainWindow(QMainWindow):
         dialog.show()
         worker.start()
 
+    def show_desktop_tools(self, query='', list_windows=False):
+        """Open local desktop discovery; a separate approval precedes every action."""
+        if self.desktop_tools_dialog is None:
+            self.desktop_tools_dialog = DesktopControlDialog(parent=self)
+        dialog = self.desktop_tools_dialog
+        if list_windows:
+            dialog.refresh_windows()
+        if query:
+            dialog.app_query.setText(str(query))
+            dialog.search_apps()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def open_voice_diagnostics(self):
         if self.listener and self.listener.isRunning():
             QMessageBox.information(self,'Mikrofon belegt',
@@ -1674,6 +1695,7 @@ class MainWindow(QMainWindow):
     def toggle_listener(self, auto=False):
         if self.listener and self.listener.isRunning():
             self.listener.stop_event.set()
+            self.voice_muted.clear()
             self.wakebtn.setText('Gesprächsmodus starten')
             self.voice_state.setText('Mikrofon aus')
             self.log('Sprache','Gesprächsmodus wird beendet.')
@@ -1707,6 +1729,7 @@ class MainWindow(QMainWindow):
         self.log('Sprache','Gesprächsmodus aktiv; Spracherkennung läuft lokal.')
 
     def _listener_finished(self):
+        self.voice_muted.clear()
         self.wakebtn.setText('Gesprächsmodus starten')
         self.voice_state.setText('Mikrofon aus')
 
@@ -1727,6 +1750,20 @@ class MainWindow(QMainWindow):
             return
         if self.worker and self.worker.isRunning():
             self.log('Stimme','Noch beschäftigt. Bitte nach dem Auftrag erneut sprechen.')
+            self._conversation_ready()
+            return
+        intent = desktop_voice_intent(text)
+        if intent:
+            kind, argument = intent
+            if kind == 'stop_listening':
+                if self.listener and self.listener.isRunning():
+                    self.toggle_listener()
+                self.voice_muted.clear()
+                self.log('Sprache', 'Sprachmodus per Sprachbefehl beendet.')
+                return
+            self.show_desktop_tools(query=argument if kind == 'apps' else '',
+                                    list_windows=kind == 'windows')
+            self.log('Stimme', 'Windows-Steuerzentrale geöffnet; keine PC-Aktion ausgeführt.')
             self._conversation_ready()
             return
         self.input.setPlainText(text)
