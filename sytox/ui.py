@@ -1806,6 +1806,10 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _update_downloaded(self, path, error):
+        # The completion signal is emitted just before QThread.run returns.
+        # Ensure shutdown does not mistake a completed download for an active one.
+        if self._update_download_worker:
+            self._update_download_worker.wait(2000)
         self.update_button.setEnabled(True)
         self.update_button.setText('Nach Updates suchen')
         if error:
