@@ -245,7 +245,7 @@ class VoiceDiagnosticsDialog(QDialog):
         self.interrupt_ok = False
         self.interrupt_pending = False
         layout = QVBoxLayout(self)
-        heading = QLabel('◈  SPRACHDIAGNOSE AUF DEINEM PC')
+        heading = QLabel('SPRACHDIAGNOSE AUF DEINEM PC')
         heading.setStyleSheet('font-weight:800;font-size:18px')
         layout.addWidget(heading)
         explain = QLabel('Die Tests nutzen dein echtes Mikrofon. Das Audio wird ausschließlich lokal verarbeitet, nicht gespeichert und nicht hochgeladen. Alle Tests starten nur nach deinem Klick.')
@@ -546,7 +546,7 @@ class OllamaHelpDialog(QDialog):
         self._pending_accept = False
         self.url = parent.config.get('ollama_url', 'http://localhost:11434') if parent else 'http://localhost:11434'
         lay = QVBoxLayout(self)
-        heading = QLabel('◈  DEINE LOKALE KI EINRICHTEN')
+        heading = QLabel('DEINE LOKALE KI EINRICHTEN')
         heading.setStyleSheet('font-size:19px;font-weight:800;color:#F0F1F6')
         lay.addWidget(heading)
         details = QLabel(status.details if status else 'Wähle dein Modell und starte die Einrichtung.')
@@ -873,14 +873,14 @@ class MainWindow(QMainWindow):
         identity.addStretch(1)
         l.addLayout(identity)
         l.addSpacing(21)
-        btn_new = QPushButton('＋   Neuer Chat')
+        btn_new = QPushButton('+  Neuer Chat')
         btn_new.setObjectName('primary')
         btn_new.clicked.connect(self.create_chat)
         btn_new.setMinimumHeight(44)
         l.addWidget(btn_new)
         l.addSpacing(7)
         self.search = QLineEdit()
-        self.search.setPlaceholderText('⌕  Chats durchsuchen')
+        self.search.setPlaceholderText('Chats durchsuchen')
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.reload_chats)
         l.addWidget(self.search)
@@ -892,15 +892,15 @@ class MainWindow(QMainWindow):
         self.chatlist.setSpacing(2)
         self.chatlist.itemClicked.connect(lambda it: self.select_chat(it.data(Qt.UserRole)))
         l.addWidget(self.chatlist, 1)
-        rename = QPushButton('✎   Chat umbenennen')
+        rename = QPushButton('Chat umbenennen')
         rename.setObjectName('ghost')
         rename.clicked.connect(self.rename_chat)
         l.addWidget(rename)
-        delete = QPushButton('⌫   Chat löschen')
+        delete = QPushButton('Chat löschen')
         delete.setObjectName('ghost')
         delete.clicked.connect(self.delete_chat)
         l.addWidget(delete)
-        cfg = QPushButton('⚙   Einstellungen')
+        cfg = QPushButton('Einstellungen')
         cfg.setObjectName('subtle')
         cfg.clicked.connect(self.edit_settings)
         l.addWidget(cfg)
@@ -937,7 +937,7 @@ class MainWindow(QMainWindow):
         self.model_name.setObjectName('muted')
         self.model_name.setAlignment(Qt.AlignRight)
         connection.addWidget(self.model_name)
-        self.status_chip = QLabel('◌  KI wird geprüft')
+        self.status_chip = QLabel('KI wird geprüft')
         self.status_chip.setObjectName('statusChip')
         self.status_chip.setAlignment(Qt.AlignCenter)
         connection.addWidget(self.status_chip, 0, Qt.AlignRight)
@@ -989,12 +989,12 @@ class MainWindow(QMainWindow):
         card_row.addWidget(self.input, 1)
         right_buttons = QVBoxLayout()
         right_buttons.setSpacing(7)
-        self.send_btn = QPushButton('➤  Senden')
+        self.send_btn = QPushButton('Senden')
         self.send_btn.setObjectName('primary')
         self.send_btn.clicked.connect(self.send)
         self.send_btn.setMinimumWidth(106)
         right_buttons.addWidget(self.send_btn)
-        self.mic_btn = QPushButton('🎙  Memo')
+        self.mic_btn = QPushButton('Memo')
         self.mic_btn.setObjectName('subtle')
         self.mic_btn.clicked.connect(self.toggle_memo)
         right_buttons.addWidget(self.mic_btn)
@@ -1013,7 +1013,7 @@ class MainWindow(QMainWindow):
         right_column = QVBoxLayout(right)
         right_column.setContentsMargins(12, 13, 12, 13)
         right_column.setSpacing(0)
-        tools_heading = QLabel('◈  STEUERZENTRALE')
+        tools_heading = QLabel('STEUERZENTRALE')
         tools_heading.setObjectName('sectionTitle')
         right_column.addWidget(tools_heading)
         right_column.addSpacing(14)
@@ -1042,7 +1042,7 @@ class MainWindow(QMainWindow):
         self.model_status_label.setWordWrap(True)
         ollama.addWidget(self.model_status_label)
         status_buttons = QHBoxLayout()
-        check_model = QPushButton('↻  Prüfen')
+        check_model = QPushButton('Prüfen')
         check_model.clicked.connect(self.check_model_status)
         status_buttons.addWidget(check_model)
         setup_model = QPushButton('Einrichten')
@@ -1053,47 +1053,48 @@ class MainWindow(QMainWindow):
         r.addWidget(ollama_card)
 
         task_card, task = new_card()
-        lab = QLabel('◈  AGENT CONTROL')
+        lab = QLabel('AGENT CONTROL')
         lab.setObjectName('sectionTitle')
         task.addWidget(lab)
         self.task_state = QLabel('Keine aktive Aufgabe')
         self.task_state.setObjectName('panelDescription')
         self.task_state.setWordWrap(True)
         task.addWidget(self.task_state)
-        self.stopbtn = QPushButton('■  Aufgabe stoppen')
+        self.stopbtn = QPushButton('Aufgabe stoppen')
         self.stopbtn.setEnabled(False)
         self.stopbtn.clicked.connect(self.stop_work)
         task.addWidget(self.stopbtn)
-        self.resume = QPushButton('▶  Letzte Aufgabe fortsetzen')
+        self.resume = QPushButton('Letzte Aufgabe fortsetzen')
         self.resume.clicked.connect(self.resume_task)
         task.addWidget(self.resume)
         r.addWidget(task_card)
 
         voice_card, voice = new_card()
-        voice_heading = QLabel('◉  SPRACHE & MIKROFON')
+        voice_heading = QLabel('SPRACHE & MIKROFON')
         voice_heading.setObjectName('sectionTitle')
         voice.addWidget(voice_heading)
         self.voice_state = QLabel('Mikrofon aus')
         self.voice_state.setObjectName('panelDescription')
         voice.addWidget(self.voice_state)
-        self.wakebtn = QPushButton('◉  Gesprächsmodus starten')
+        self.wakebtn = QPushButton('Gesprächsmodus starten')
         self.wakebtn.setObjectName('subtle')
         self.wakebtn.clicked.connect(self.toggle_listener)
         voice.addWidget(self.wakebtn)
-        model_button = QPushButton('↓  Deutsches Sprachmodell laden')
+        model_button = QPushButton('Sprachmodell laden')
         model_button.clicked.connect(self.install_voice_model)
         voice.addWidget(model_button)
-        self.stopvoicebtn = QPushButton('🔇  Sprachausgabe stoppen')
+        self.stopvoicebtn = QPushButton('Sprache stoppen')
         self.stopvoicebtn.clicked.connect(self.stop_speech)
         self.stopvoicebtn.setEnabled(False)
         voice.addWidget(self.stopvoicebtn)
-        diagnostics_button = QPushButton('🎙  Mikrofon und Unterbrechung testen')
+        diagnostics_button = QPushButton('Mikrofon / Unterbrechung')
+        diagnostics_button.setToolTip('Mikrofon und Unterbrechung testen')
         diagnostics_button.clicked.connect(self.open_voice_diagnostics)
         voice.addWidget(diagnostics_button)
         r.addWidget(voice_card)
 
         activity_card, activity = new_card()
-        logs_title = QLabel('◆  AKTIVITÄTEN')
+        logs_title = QLabel('AKTIVITÄTEN')
         logs_title.setObjectName('sectionTitle')
         activity.addWidget(logs_title)
         self.logs = QPlainTextEdit()
@@ -1139,7 +1140,7 @@ class MainWindow(QMainWindow):
         box = QVBoxLayout(hero)
         box.setContentsMargins(32, 30, 32, 30)
         box.setSpacing(13)
-        eyebrow = QLabel('◈  DEIN PERSÖNLICHER KI-WORKSPACE')
+        eyebrow = QLabel('DEIN PERSÖNLICHER KI-WORKSPACE')
         eyebrow.setObjectName('heroEyebrow')
         box.addWidget(eyebrow)
         title = QLabel('Was bauen wir heute?')
@@ -1152,9 +1153,9 @@ class MainWindow(QMainWindow):
         box.addWidget(subtitle)
         box.addSpacing(9)
         suggestions = (
-            ('✦  Eine Idee ausarbeiten', 'Hilf mir, eine neue Projektidee Schritt für Schritt auszuarbeiten.'),
-            ('⌘  Code schreiben', 'Erstelle mit mir eine neue Funktion für mein Projekt.'),
-            ('◉  Windows-Aufgabe erledigen', 'Hilf mir, eine Aufgabe auf meinem Windows-PC auszuführen.'),
+            ('Eine Idee ausarbeiten', 'Hilf mir, eine neue Projektidee Schritt für Schritt auszuarbeiten.'),
+            ('Code schreiben', 'Erstelle mit mir eine neue Funktion für mein Projekt.'),
+            ('Windows-Aufgabe erledigen', 'Hilf mir, eine Aufgabe auf meinem Windows-PC auszuführen.'),
         )
         for caption, prompt in suggestions:
             button = QPushButton(caption)
@@ -1239,7 +1240,7 @@ class MainWindow(QMainWindow):
         self.chatlist.clear()
         for chat in self.store.chats():
             if search not in chat['title'].lower():continue
-            it=QListWidgetItem('◉  '+chat['title']);it.setData(Qt.UserRole,chat['id'])
+            it=QListWidgetItem(chat['title']);it.setData(Qt.UserRole,chat['id'])
             self.chatlist.addItem(it)
             if chat['id']==self.chat_id:self.chatlist.setCurrentItem(it)
 
@@ -1301,7 +1302,7 @@ class MainWindow(QMainWindow):
         b = QVBoxLayout(body)
         b.setContentsMargins(17, 14, 17, 16)
         b.setSpacing(10)
-        header = QLabel('DU' if mine else '✦  SYTOX AI')
+        header = QLabel('DU' if mine else 'SYTOX AI')
         header.setObjectName('bubbleHeadingUser' if mine else 'bubbleHeadingAssistant')
         b.addWidget(header)
         label = QLabel(message)
@@ -1514,7 +1515,7 @@ class MainWindow(QMainWindow):
         if self.ollama_probe and self.ollama_probe.isRunning():
             self._probe_again = True
             return
-        self.status_chip.setText('◌  KI wird geprüft')
+        self.status_chip.setText('KI wird geprüft')
         self.model_status_label.setText('Verbindung wird geprüft …')
         self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.config['model'])
         self.ollama_probe.checked.connect(self._model_status_checked)
@@ -1632,7 +1633,7 @@ class MainWindow(QMainWindow):
     def toggle_listener(self, auto=False):
         if self.listener and self.listener.isRunning():
             self.listener.stop_event.set()
-            self.wakebtn.setText('◉  Gesprächsmodus starten')
+            self.wakebtn.setText('Gesprächsmodus starten')
             self.voice_state.setText('Mikrofon aus')
             self.log('Sprache','Gesprächsmodus wird beendet.')
             return
@@ -1665,7 +1666,7 @@ class MainWindow(QMainWindow):
         self.log('Sprache','Gesprächsmodus aktiv; Spracherkennung läuft lokal.')
 
     def _listener_finished(self):
-        self.wakebtn.setText('◉  Gesprächsmodus starten')
+        self.wakebtn.setText('Gesprächsmodus starten')
         self.voice_state.setText('Mikrofon aus')
 
     def _voice_interrupted(self, next_command):
