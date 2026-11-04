@@ -168,6 +168,61 @@ class OllamaQtOnboardingTests(unittest.TestCase):
             self.window.worker = None
             self.window.listener = None
 
+    def test_colloquial_pause_does_not_erase_worker_or_chat(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        existing_chat = self.window.chat_id
+        try:
+            with patch.object(self.window, '_conversation_ready'):
+                self.window.received_voice_command('Hör kurz auf zu programmieren')
+            self.assertTrue(running.stop_event.is_set())
+            self.assertIs(self.window.worker, running)
+            self.assertEqual(self.window.chat_id, existing_chat)
+        finally:
+            self.window.worker = None
+
+    def test_spoken_resume_when_worker_stopping_waits_for_checkpoint(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        running.stop_event.set()
+        self.window.worker = running
+        try:
+            with patch.object(self.window, '_conversation_ready'):
+                self.window.received_voice_command('Mach wieder weiter')
+            self.assertTrue(self.window._resume_after_pause)
+            self.assertTrue(running.stop_event.is_set())
+            task_id = self.window.store.create_task(self.window.chat_id, 'Code schreiben', 'until_done')
+            self.window.store.update_task(task_id, 'paused')
+            self.window.worker = None
+            with patch.object(self.window, 'resume_task') as resume:
+                self.window._agent_thread_finished()
+            resume.assert_called_once_with()
+            self.assertFalse(self.window._resume_after_pause)
+        finally:
+            self.window.worker = None
+
+    def test_negated_pause_is_ordinary_side_chat_not_a_control(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        try:
+            with patch.object(self.window, 'ask_parallel') as side:
+                self.window.received_voice_command('Hör nicht auf zu programmieren')
+            side.assert_called_once_with('Hör nicht auf zu programmieren', spoken=True)
+            self.assertFalse(running.stop_event.is_set())
+        finally:
+            self.window.worker = None
+
     def test_only_explicit_stop_cancels_running_job(self):
         import threading
         from unittest.mock import MagicMock
