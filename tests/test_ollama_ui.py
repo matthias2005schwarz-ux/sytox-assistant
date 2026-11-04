@@ -137,6 +137,37 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         finally:
             self.window.worker = None
 
+    def test_silence_command_never_cancels_programming(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        try:
+            with patch.object(self.window, 'stop_speech'), \
+                 patch.object(self.window, '_conversation_ready'):
+                self.window.received_voice_command('Sei still')
+            self.assertFalse(running.stop_event.is_set())
+        finally:
+            self.window.worker = None
+
+    def test_starting_agent_keeps_voice_listener_available(self):
+        from unittest.mock import MagicMock
+        listener = MagicMock()
+        listener.isRunning.return_value = True
+        self.window.listener = listener
+        self.window.voice_muted.set()
+        try:
+            with patch('sytox.ui.Worker') as make_worker:
+                self.window.start_worker()
+                make_worker.return_value.start.assert_called_once()
+            self.assertFalse(self.window.voice_muted.is_set())
+            self.assertTrue(self.window.send_btn.isEnabled())
+        finally:
+            self.window.worker = None
+            self.window.listener = None
+
     def test_only_explicit_stop_cancels_running_job(self):
         import threading
         from unittest.mock import MagicMock
