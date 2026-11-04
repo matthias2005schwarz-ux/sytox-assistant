@@ -49,7 +49,7 @@ def work_intent(utterance: str) -> str | None:
     text = re.sub(r'\s+', ' ', text).strip()
 
     domain = r'(?:programmier(?:en|ung)?|coden|code schreiben|arbeiten|deine arbeit|'
-    domain += r'(?:dem|den|die|das|meinem|meinen) (?:auftrag|projekt|programmieren|arbeit))'
+    domain += r'(?:dem|den|die|das|der|meinem|meinen|meiner) (?:auftrag|projekt|programmieren|arbeit))'
 
     if re.fullmatch(r'(?:sei still|ruhe|hör auf zu reden|hör mit dem reden auf|'
                     r'rede (?:jetzt )?nicht mehr|hör auf zu sprechen|'
@@ -69,7 +69,9 @@ def work_intent(utterance: str) -> str | None:
         rf'\s+(?:eine|ne|n)\s+pause(?:\s+(?:mit\s+{domain}))?',
         rf'(?:warte|wart)(?:\s+(?:jetzt|kurz|erstmal|vorerst))?'
         rf'\s+mit\s+{domain}',
-        r'(?:programmier|programmiere|arbeite)\s+(?:jetzt\s+)?nicht\s+weiter',
+        r'(?:(?:jetzt|kurz|erstmal)\s+)?'
+        r'aufhören\s+zu\s+(?:programmieren|arbeiten|coden)',
+                r'(?:programmier|programmiere|arbeite)\s+(?:jetzt\s+)?nicht\s+weiter',
         r'lass\s+(?:das\s+)?(?:programmieren|arbeiten|projekt)\s+'
         r'(?:erstmal|vorerst|für heute)\s+sein',
     )
