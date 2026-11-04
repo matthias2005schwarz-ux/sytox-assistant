@@ -38,7 +38,7 @@ jobs:
         shell: powershell
         run: |
           .\Build_Installer.ps1 -SkipExeBuild
-          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.0.exe')) { throw 'Installer was not built' }
+          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.1.exe')) { throw 'Installer was not built' }
       - name: Install, launch, uninstall and verify user data on Windows runner
         shell: powershell
         run: .\Installer_Install_Smoke_Test.ps1
@@ -46,19 +46,19 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            'installer/SYTOX_Assistant_Setup_0.3.0.exe',
+            'installer/SYTOX_Assistant_Setup_0.3.1.exe',
             'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
           )
           foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
       - name: Archive Windows standalone app (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-app-0.3.0
+          name: sytox-windows-app-0.3.1
           path: dist/SYTOX_Assistant/
           if-no-files-found: error
       - name: Archive Windows installer (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.0
-          path: installer/SYTOX_Assistant_Setup_0.3.0.exe
+          name: sytox-windows-setup-0.3.1
+          path: installer/SYTOX_Assistant_Setup_0.3.1.exe
           if-no-files-found: error

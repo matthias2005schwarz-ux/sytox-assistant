@@ -1,4 +1,14 @@
-# SYTOX Assistant – Windows 0.3.0 (Sprachmodus)
+# SYTOX Assistant – Windows 0.3.1 (Mikrofon-Diagnose)
+
+## Neu in 0.3.1: Interaktiver Mikrofon- und Sprachunterbrechungstest
+
+Öffne SYTOX und klicke rechts auf **„Mikrofon und Unterbrechung testen“**.
+
+1. **Mikrofon testen:** Sprich 5 Sekunden. SYTOX misst dein tatsächliches Mikrofonsignal in 16-kHz-PCM; wenn kein Gerät, keine Daten oder kaum Lautstärke vorhanden sind, wird das angezeigt.
+2. **Spracherkennung testen:** Sprich „Hey Sytox, Test“ und warte nach dem Satz kurz auf die Erkennung. Vosk wird benötigt (lade das deutsche Sprachmodell über den Button in der App). In dieser Diagnose werden **keine PC-Aktionen** ausgeführt.
+3. **Sprachunterbrechung testen:** SYTOX spricht länger. Sag währenddessen „Stopp“ und werde kurz still. Die Diagnose prüft, dass die laufende Windows-TTS beendet wird und zeigt das Ergebnis.
+
+Die Diagnose speichert keine Sprachaufnahmen und überträgt keine Mikrofondaten. Die Tests benötigen Zugriff auf *dein* Mikrofon und müssen deshalb auf deinem Windows-Rechner ausgeführt werden. Die GitHub-CI überprüft den Start der Anwendung und simulierte Audio-Testwerte, aber keine echte physische Akustik.
 
 ## Neu in 0.3.0
 

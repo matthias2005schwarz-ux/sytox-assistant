@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model
+from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
 
@@ -194,6 +195,8 @@ class WakeListener(QThread):
                     if not recognizer.AcceptWaveform(audio):
                         continue
                     phrase = json.loads(recognizer.Result()).get('text', '').strip()
+                    if phrase:
+                        self.hearing.emit(phrase)  # Diagnostic only: never stored or uploaded.
                     if speaking:
                         interrupt, next_command = interruption_command(
                             phrase, free_listening=not self.router.require_wake)
@@ -210,6 +213,242 @@ class WakeListener(QThread):
                         self.wake_command.emit(command)
         except Exception as e:
             self.error.emit(f'Spracherkennung: {type(e).__name__}: {e}')
+
+
+class MicrophoneProbeWorker(QThread):
+    level = Signal(float)
+    completed = Signal(object)
+    error = Signal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.stop_event = threading.Event()
+
+    def run(self):
+        try:
+            self.completed.emit(microphone_probe(self.level.emit, self.stop_event))
+        except Exception as exc:
+            self.error.emit(f'{type(exc).__name__}: {exc}')
+
+
+class VoiceDiagnosticsDialog(QDialog):
+    """On-device guided hardware test; does not send any commands to the Agent."""
+
+    def __init__(self, model_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('SYTOX · Mikrofon und Unterbrechung prüfen')
+        self.resize(590, 430)
+        self.model_path = str(model_path or '')
+        self.mic_worker = None
+        self.listener = None
+        self.speaker = None
+        self.speaking = threading.Event()
+        self.muted = threading.Event()
+        self.phase = 'idle'
+        self.mic_ok = False
+        self.wake_ok = False
+        self.interrupt_ok = False
+        self.interrupt_pending = False
+        layout = QVBoxLayout(self)
+        heading = QLabel('◈  SPRACHDIAGNOSE AUF DEINEM PC')
+        heading.setStyleSheet('font-weight:800;font-size:18px')
+        layout.addWidget(heading)
+        explain = QLabel('Die Tests nutzen dein echtes Mikrofon. Das Audio wird ausschließlich lokal verarbeitet, nicht gespeichert und nicht hochgeladen. Alle Tests starten nur nach deinem Klick.')
+        explain.setWordWrap(True)
+        layout.addWidget(explain)
+        self.step_label = QLabel('1. Mikrofontest: Sprich fünf Sekunden normal ins Mikrofon.')
+        self.step_label.setWordWrap(True)
+        layout.addWidget(self.step_label)
+        self.meter = QProgressBar()
+        self.meter.setRange(0, 100)
+        self.meter.setValue(0)
+        self.meter.setFormat('Mikrofonsignal %p%')
+        layout.addWidget(self.meter)
+        self.result = QLabel('Noch nicht getestet.')
+        self.result.setWordWrap(True)
+        self.result.setObjectName('muted')
+        layout.addWidget(self.result)
+        self.test_mic = QPushButton('1  Mikrofon testen (5 Sekunden)')
+        self.test_mic.clicked.connect(self.start_mic_test)
+        layout.addWidget(self.test_mic)
+        self.test_wake = QPushButton('2  „Hey Sytox, Test“ erkennen')
+        self.test_wake.clicked.connect(self.start_wake_test)
+        self.test_wake.setEnabled(False)
+        layout.addWidget(self.test_wake)
+        self.test_interrupt = QPushButton('3  Sprachausgabe mit „Stopp“ unterbrechen')
+        self.test_interrupt.clicked.connect(self.start_interrupt_test)
+        self.test_interrupt.setEnabled(False)
+        layout.addWidget(self.test_interrupt)
+        self.close_button = QPushButton('Schließen')
+        self.close_button.clicked.connect(self.close)
+        layout.addWidget(self.close_button)
+
+    def _model_ready(self):
+        if not self.model_path or not (Path(self.model_path) / 'conf').is_dir():
+            self.result.setText('Für die Sprachtests fehlt das deutsche Vosk-Modell. Schließe diesen Dialog und klicke auf „Deutsches Sprachmodell laden“.')
+            return False
+        return True
+
+    def start_mic_test(self):
+        if self.mic_worker and self.mic_worker.isRunning():
+            return
+        if self.listener and self.listener.isRunning():
+            self._stop_listener()
+        self.phase = 'microphone'
+        self.mic_ok = self.wake_ok = self.interrupt_ok = False
+        self.test_mic.setEnabled(False)
+        self.test_wake.setEnabled(False)
+        self.test_interrupt.setEnabled(False)
+        self.result.setText('Mikrofon geöffnet. Sprich jetzt fünf Sekunden laut und deutlich.')
+        self.meter.setValue(0)
+        worker = MicrophoneProbeWorker()
+        self.mic_worker = worker
+        worker.level.connect(lambda level: self.meter.setValue(min(100, int(level * 12))))
+        worker.completed.connect(self._mic_finished)
+        worker.error.connect(self._mic_error)
+        worker.finished.connect(lambda: self.test_mic.setEnabled(True))
+        worker.start()
+
+    def _mic_finished(self, data):
+        self.mic_ok = bool(data['signal_detected'])
+        self.result.setText(f'Mikrofon: {data["device"]}  ·  RMS-Spitze: {data["peak_percent"]:.2f}%  ·  '
+                            + ('Signal erkannt.' if self.mic_ok else 'Signal zu leise. Mikrofon-Lautstärke und Windows-Berechtigung prüfen.'))
+        self.test_wake.setEnabled(self.mic_ok)
+        self.phase = 'idle'
+
+    def _mic_error(self, message):
+        self.result.setText('Mikrofontest fehlgeschlagen: ' + message + '\nWindows → Einstellungen → Datenschutz und Sicherheit → Mikrofon: Desktop-Apps zulassen.')
+        self.phase = 'idle'
+
+    def _ensure_listener(self):
+        if not self._model_ready():
+            return False
+        if self.listener and self.listener.isRunning():
+            return True
+        self.muted.clear()
+        self.speaking.clear()
+        listener = WakeListener(self.model_path, require_wake=True,
+                                mute_event=self.muted, speaking_event=self.speaking,
+                                allow_interruption=True)
+        self.listener = listener
+        listener.hearing.connect(self._heard_phrase)
+        listener.wake_command.connect(self._wake_passed)
+        listener.interrupted.connect(self._interrupted)
+        listener.error.connect(self._listen_error)
+        listener.start()
+        return True
+
+    def start_wake_test(self):
+        if not self.mic_ok or not self._ensure_listener():
+            return
+        self.phase = 'wake'
+        self.wake_ok = False
+        self.test_interrupt.setEnabled(False)
+        self.result.setText('Sag jetzt: „Hey Sytox, Test“ und warte anschließend kurz auf die Erkennung. Es werden keine PC-Befehle ausgeführt.')
+
+    def _heard_phrase(self, phrase):
+        if self.phase == 'wake':
+            self.result.setText('Gehört: ' + phrase[:150] + '\nSag „Hey Sytox, Test“, falls noch nicht erkannt.')
+        elif self.phase == 'interrupt':
+            self.result.setText('Sprachausgabe läuft. Erkannt: ' + phrase[:130])
+
+    def _wake_passed(self, command):
+        # Never forward a diagnostic utterance to chat, PC tools or the Agent.
+        if self.phase == 'wake':
+            self.wake_ok = True
+            self.phase = 'ready'
+            self.test_interrupt.setEnabled(True)
+            self.result.setText('Spracherkennung erfolgreich: „Hey Sytox“ wurde verstanden. Jetzt Schritt 3 starten.')
+
+    def start_interrupt_test(self):
+        if not self.wake_ok or not self._ensure_listener():
+            return
+        if self.speaker and self.speaker.isRunning():
+            return
+        self.phase = 'interrupt'
+        self.interrupt_ok = False
+        self.interrupt_pending = False
+        self.muted.set()  # During playback only explicit stop/wake interrupts.
+        self.speaking.set()
+        self.test_interrupt.setEnabled(False)
+        self.result.setText('SYTOX spricht gleich. Sag während der Stimme deutlich „Stopp“, danach kurz still sein. Die Antwort selbst enthält kein Stoppwort.')
+        long_text = ('Dies ist eine Testansage für die freihändige Sprachbedienung. '
+                     'Du kannst eine Antwort jederzeit unterbrechen. '
+                     'Während ich hier weitere Sätze vorlese, kannst du dich bemerkbar machen. '
+                     'Dieser Test überprüft die Zusammenarbeit von Mikrofon, Spracherkennung und Tonausgabe. ') * 5
+        speaker = Speaker(long_text)
+        self.speaker = speaker
+        speaker.error.connect(self._speaker_error)
+        speaker.finished.connect(self._speaker_finished)
+        speaker.start()
+
+    def _interrupted(self, command):
+        if self.phase != 'interrupt':
+            return
+        self.interrupt_pending = bool(self.speaker and self.speaker.isRunning())
+        if self.speaker:
+            self.speaker.stop_event.set()
+        self.result.setText('„Stopp“ erkannt. Prüfe, ob die Windows-Sprachausgabe tatsächlich beendet wird …')
+        QTimer.singleShot(1800, self._verify_interrupted)
+
+    def _verify_interrupted(self):
+        if self.phase != 'interrupt' or not self.interrupt_pending:
+            return
+        if self.speaker and self.speaker.isRunning():
+            self.result.setText('Unterbrechung erkannt, aber die Sprachausgabe läuft weiter. Audiotreiber/SAPI prüfen.')
+        else:
+            self.interrupt_ok = True
+            self.result.setText('Erfolgreich: Mikrofon hat „Stopp“ erkannt und die Windows-Sprachausgabe wurde gestoppt. Bitte zusätzlich prüfen, ob du sie wirklich verstummen gehört hast.')
+        self.phase = 'ready'
+        self.muted.clear()
+        self.speaking.clear()
+        self.test_interrupt.setEnabled(True)
+
+    def _speaker_finished(self):
+        if self.phase == 'interrupt' and not self.interrupt_pending:
+            self.result.setText('Sprachausgabe endete ohne erkanntes „Stopp“. Versuche Schritt 3 erneut; Kopfhörer verhindern Lautsprecher-Echo.')
+            self.phase = 'ready'
+            self.speaking.clear()
+            self.muted.clear()
+            self.test_interrupt.setEnabled(True)
+
+    def _speaker_error(self, message):
+        self.result.setText('Windows-Stimme fehlgeschlagen: ' + message)
+        self.phase = 'ready'
+        self.speaking.clear()
+        self.muted.clear()
+        self.test_interrupt.setEnabled(True)
+
+    def _listen_error(self, error):
+        self.result.setText('Spracherkennung fehlgeschlagen: ' + error)
+        self.phase = 'idle'
+        self.test_interrupt.setEnabled(False)
+
+    def _stop_listener(self):
+        if self.listener and self.listener.isRunning():
+            self.listener.stop_event.set()
+            self.listener.wait(3000)
+
+    def closeEvent(self, event):
+        if self.mic_worker and self.mic_worker.isRunning():
+            self.mic_worker.stop_event.set()
+            if not self.mic_worker.wait(2500):
+                event.ignore()
+                self.result.setText('Mikrofontest wird beendet. Bitte gleich erneut schließen.')
+                return
+        if self.speaker and self.speaker.isRunning():
+            self.speaker.stop_event.set()
+            if not self.speaker.wait(2500):
+                event.ignore()
+                self.result.setText('Sprachausgabe wird beendet. Bitte gleich erneut schließen.')
+                return
+        self._stop_listener()
+        if self.listener and self.listener.isRunning():
+            event.ignore()
+            return
+        self.speaking.clear()
+        self.muted.clear()
+        event.accept()
 
 
 class VoiceModelDownload(QThread):
@@ -561,6 +800,7 @@ class MainWindow(QMainWindow):
         self.voice_jobs=[]
         self.voice_download=None
         self.voice_download_dialog=None
+        self.voice_diagnostic_dialog=None
         self.active_speaker=None
         self._voice_generation=0
         self._audio_path=None
@@ -690,6 +930,9 @@ class MainWindow(QMainWindow):
         self.stopvoicebtn=QPushButton('🔇  Sprachausgabe stoppen')
         self.stopvoicebtn.clicked.connect(self.stop_speech)
         self.stopvoicebtn.setEnabled(False);r.addWidget(self.stopvoicebtn)
+        diagnostics_button=QPushButton('🎙  Mikrofon und Unterbrechung testen')
+        diagnostics_button.clicked.connect(self.open_voice_diagnostics)
+        r.addWidget(diagnostics_button)
         logs_title=QLabel('AKTIVITÄTEN');logs_title.setObjectName('sectionTitle');r.addWidget(logs_title)
         self.logs=QPlainTextEdit();self.logs.setReadOnly(True)
         self.logs.setMaximumBlockCount(250);r.addWidget(self.logs,1)
@@ -1116,6 +1359,22 @@ class MainWindow(QMainWindow):
         worker.finished.connect(dialog.deleteLater)
         dialog.show()
         worker.start()
+
+    def open_voice_diagnostics(self):
+        if self.listener and self.listener.isRunning():
+            QMessageBox.information(self,'Mikrofon belegt',
+                'Bitte zuerst den Gesprächsmodus stoppen. Der Test benötigt das Mikrofon allein.')
+            return
+        if self.recorder and self.recorder.isRunning():
+            QMessageBox.information(self,'Mikrofon belegt',
+                'Bitte zuerst die laufende Sprachmemo beenden.')
+            return
+        dialog = VoiceDiagnosticsDialog(self.config.get('vosk_model',''), self)
+        self.voice_diagnostic_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self.voice_diagnostic_dialog = None
 
     def toggle_listener(self, auto=False):
         if self.listener and self.listener.isRunning():
