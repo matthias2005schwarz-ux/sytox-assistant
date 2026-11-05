@@ -35,6 +35,8 @@ from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama,
 from .screen_vision import (DEFAULT_VISION_MODEL, screen_intent, screen_followup_intent,
                             analyze_screenshot, MAX_SCREENSHOT_BYTES)
 from .performance_monitor import measure_performance, format_performance
+from .model_autotune import (probe_hardware, describe_recommendation,
+                             read_local_model_size_gb)
 
 class BrandMark(QWidget):
     """Vector-drawn SYTOX monogram; no external image or web UI required."""
@@ -569,13 +571,18 @@ class PerformanceWorker(QThread):
     """Nonblocking local metrics; never uses the main GUI thread for network I/O."""
     measured = Signal(object)
 
-    def __init__(self, base_url, parent=None):
+    def __init__(self, base_url, model, parent=None):
         super().__init__(parent)
         self.base_url = base_url
+        self.model = model
 
     def run(self):
         try:
-            self.measured.emit(measure_performance(self.base_url))
+            measured = measure_performance(self.base_url)
+            # Read-only local Ollama tag inspection; unavailable means unknown.
+            measured['model_size_gb'] = read_local_model_size_gb(
+                self.model, self.base_url)
+            self.measured.emit(measured)
         except Exception:
             self.measured.emit({})
 
@@ -769,13 +776,22 @@ class SettingsDialog(QDialog):
         self.vision_model=QLineEdit(settings.get('vision_model', DEFAULT_VISION_MODEL))
         self.vision_model.setToolTip('Bildmodell für Screenshots; separat über Ollama laden, z. B. ollama pull qwen3-vl:4b')
         self.model_context=QComboBox()
-        for label, tokens in [('Automatisch (30B: 16K / andere: 8K)', 0),
+        for label, tokens in [('Automatisch (RAM-bewusst, 4K bis 32K)', 0),
+                              ('4.096 Tokens (minimaler RAM-Bedarf)', 4096),
                               ('8.192 Tokens (weniger RAM)', 8192),
                               ('16.384 Tokens (mehr Projektkontext)', 16384),
                               ('32.768 Tokens (hoher RAM-Bedarf)', 32768)]:
             self.model_context.addItem(label, tokens)
         index=self.model_context.findData(settings.get('model_context_tokens', 0))
         self.model_context.setCurrentIndex(max(0,index))
+        self.hardware_preview = QLabel('Automatische Hardware-Empfehlung wird ermittelt …')
+        self.hardware_preview.setWordWrap(True)
+        self.hardware_preview.setObjectName('panelDescription')
+        # Only synchronous RAM inspection (no process spawn or network in GUI thread).
+        self._hardware_snapshot = probe_hardware(which=lambda _name: None)
+        self.model.textChanged.connect(self._update_hardware_preview)
+        self.model_context.currentIndexChanged.connect(self._update_hardware_preview)
+        self._update_hardware_preview()
         self.url=QLineEdit(settings['ollama_url'])
         self.folder=QLineEdit(settings['workspace'])
         choose=QPushButton('…');choose.setMaximumWidth(38)
@@ -816,6 +832,7 @@ class SettingsDialog(QDialog):
         form.addRow('Ollama-Modell',self.model)
         form.addRow('Bildmodell (separat)',self.vision_model)
         form.addRow('Kontextgröße',self.model_context)
+        form.addRow('RAM-/Modell-Empfehlung',self.hardware_preview)
         form.addRow('Ollama-Adresse',self.url)
         form.addRow('Projektordner',row)
         form.addRow('Vosk-Modellordner (Deutsch)',self.vosk)
@@ -835,6 +852,11 @@ class SettingsDialog(QDialog):
         check.clicked.connect(self.check_ollama);form.addRow('',check)
         save=QPushButton('Speichern');save.setObjectName('primary')
         save.clicked.connect(self.validate_and_save);form.addRow('',save)
+
+    def _update_hardware_preview(self, *_args):
+        self.hardware_preview.setText(describe_recommendation(
+            self.model.text().strip(), self._hardware_snapshot,
+            manual_context=self.model_context.currentData()))
 
     def validate_and_save(self):
         if self.speech_engine.currentData()=='edge' and not self.edge_consent.isChecked():
@@ -2053,14 +2075,18 @@ class MainWindow(QMainWindow):
             return
         if self.performance_worker and self.performance_worker.isRunning():
             return
-        worker = PerformanceWorker(self.config.get('ollama_url', 'http://localhost:11434'), self)
+        worker = PerformanceWorker(self.config.get('ollama_url', 'http://localhost:11434'),
+                                   self.config.get('model', 'qwen3-coder:30b'), self)
         self.performance_worker = worker
         worker.measured.connect(self._performance_measured)
         worker.finished.connect(lambda w=worker: self._performance_finished(w))
         worker.start()
 
     def _performance_measured(self, result):
-        self.performance_info.setText(format_performance(result))
+        recommendation = describe_recommendation(
+            self.config.get('model', 'qwen3-coder:30b'), result,
+            manual_context=self.config.get('model_context_tokens', 0))
+        self.performance_info.setText(format_performance(result) + '\n\n' + recommendation)
 
     def _performance_finished(self, worker):
         if self.performance_worker is worker:
