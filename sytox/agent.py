@@ -90,21 +90,44 @@ class OllamaClient:
                             'In SYTOX auf „Einrichten“ klicken und den Modellbefehl kopieren.')
                     raise OllamaError(f'Ollama HTTP {response.status_code}: {response.text[:500]}')
                 reply = {'role': 'assistant', 'content': '', 'tool_calls': []}
+                completed = False
                 for line in response.iter_lines():
                     if stop and stop.is_set():
                         response.close()
                         raise Cancelled('Benutzer hat den Auftrag gestoppt')
                     if not line:
                         continue
-                    chunk = json.loads(line)
-                    if 'error' in chunk:
-                        raise OllamaError(str(chunk['error']))
+                    try:
+                        chunk = json.loads(line)
+                    except (ValueError, UnicodeError) as exc:
+                        raise OllamaError('Ollama lieferte ungültige Streaming-Daten.') from exc
+                    if not isinstance(chunk, dict):
+                        raise OllamaError('Ungültiges Ollama-Datenformat.')
+                    if chunk.get('error'):
+                        raise OllamaError('Ollama meldete einen Modellfehler.')
                     msg = chunk.get('message') or {}
-                    reply['content'] += msg.get('content') or ''
-                    if msg.get('tool_calls'):
-                        reply['tool_calls'].extend(msg['tool_calls'])
+                    if not isinstance(msg, dict):
+                        raise OllamaError('Ollama lieferte eine ungültige Nachricht.')
+                    content = msg.get('content') or ''
+                    if not isinstance(content, str):
+                        raise OllamaError('Ollama lieferte ungültigen Antworttext.')
+                    reply['content'] += content
+                    new_calls = msg.get('tool_calls')
+                    if new_calls is not None:
+                        if not isinstance(new_calls, list):
+                            raise OllamaError('Ungültiger Ollama-Werkzeugdatenstrom.')
+                        reply['tool_calls'].extend(new_calls)
                     if chunk.get('done'):
+                        if chunk.get('done_reason') == 'length':
+                            raise OllamaError(
+                                'Ollama hat die Antwort am Tokenlimit abgeschnitten; '
+                                'kein unvollständiger Werkzeugaufruf wird ausgeführt.')
+                        completed = True
                         break
+                if not completed:
+                    raise OllamaError(
+                        'Ollama-Stream endete ohne Abschluss; '
+                        'unvollständige Werkzeugaufrufe wurden verworfen.')
                 if not reply['tool_calls']:
                     reply.pop('tool_calls')
                 return reply
