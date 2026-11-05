@@ -17,6 +17,9 @@ class ScreenPanel:
         self.screen_toggle = QPushButton('Bildschirmhilfe einschalten')
         self.screen_toggle.clicked.connect(self.toggle_screen)
         box.addWidget(self.screen_toggle)
+        model_button = QPushButton('Bildmodell einrichten')
+        model_button.clicked.connect(self.install_screen_model)
+        box.addWidget(model_button)
         self.screen_ask = QPushButton('Bildschirm jetzt erklären')
         self.screen_ask.setEnabled(False)
         self.screen_ask.clicked.connect(
