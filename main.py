@@ -17,7 +17,10 @@ def main():
 
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon
-    from sytox.screen_ui import ScreenMainWindow as MainWindow
+    from sytox.ui import MainWindow
+    # Keep lightweight mocked-startup contracts independent of Qt widget imports.
+    if isinstance(MainWindow, type):
+        from sytox.screen_ui import ScreenMainWindow as MainWindow
 
     app = QApplication([sys.argv[0]])
     app.setApplicationName('SYTOX Assistant')
