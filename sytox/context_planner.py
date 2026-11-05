@@ -115,7 +115,7 @@ def rank_project_files(index: dict, query: str, *, limit: int = 20) -> list[dict
                 "path": rel,
                 "score": score,
                 "matched": matched,
-                "symbols": symbols[:12],
+                "symbols": original_symbols[:12],
                 "sha256": meta.get("sha256"),
                 "size": meta.get("size"),
                 "mtime_ns": meta.get("mtime_ns"),
