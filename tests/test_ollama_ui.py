@@ -69,7 +69,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
     def test_dark_red_workspace_controls_and_suggestion(self):
         from PySide6.QtWidgets import QFrame
         cards = self.window.findChildren(QFrame, 'utilityCard')
-        self.assertEqual(len(cards), 6)  # Street View + screen help + existing utility cards
+        self.assertEqual(len(cards), 7)  # Street View + screen help + existing utility cards
         self.assertIsNotNone(self.window.empty_widget)
         self.window._use_suggestion('Erstelle eine Funktion')
         self.assertEqual(self.window.input.toPlainText(), 'Erstelle eine Funktion')
@@ -79,7 +79,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         from PySide6.QtWidgets import QFrame
         panel = self.window.utility_panel
         cards_before = self.window.findChildren(QFrame, 'utilityCard')
-        self.assertEqual(len(cards_before), 6)
+        self.assertEqual(len(cards_before), 7)
         self.assertFalse(panel.isHidden())
 
         self.window.toggle_focus_mode()
@@ -91,7 +91,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.assertFalse(panel.isHidden())
         self.assertFalse(self.window.focus_btn.isChecked())
         self.assertEqual(self.window.focus_btn.text(), '☰')
-        self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 6)
+        self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 7)
 
     def test_spoken_desktop_command_opens_panel_without_issuing_agent_task(self):
         with patch.object(self.window, 'show_desktop_tools') as show_tools, \
