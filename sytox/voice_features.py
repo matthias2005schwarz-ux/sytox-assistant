@@ -84,7 +84,16 @@ def interruption_command(phrase, free_listening=False):
         return True, ''
     wake = _WAKE_RE.search(text)
     if wake:
-        return True, text[wake.end():].strip(' ,.!?')
+        next_command = text[wake.end():].strip(' ,.!?')
+        # Bare 'Sytox' must be followed by an unmistakable command or question
+        # during playback. Do not interrupt for titles like 'SYTOX Webseite'.
+        if not re.search(r'\b(?:hey|hei|he)\s+', wake.group(0), re.I):
+            if not re.match(
+                r'(?i)^(?:guck|schau|sieh|verlass|beende|stoppe|stopp|stop|'
+                r'öffne|starte|hilf|zeig|zeige|erkläre|was|wie|warum|wieso|wo)\b',
+                next_command):
+                return False, ''
+        return True, next_command
     if free_listening and len(text.split()) >= 3:
         return True, text
     return False, ''
