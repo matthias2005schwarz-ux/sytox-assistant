@@ -1686,22 +1686,77 @@ class MainWindow(QMainWindow):
         self.start_worker(task['mode'],task_id=task['id'])
 
     def show_memories(self):
-        memories=self.store.list_memories()
-        dialog=QDialog(self);dialog.setWindowTitle('Lokale Erinnerungen');dialog.resize(650,450)
+        """Review, correct, disable or delete local user memories."""
+        dialog=QDialog(self)
+        dialog.setWindowTitle('SYTOX · Langzeitgedächtnis')
+        dialog.resize(760,520)
         lay=QVBoxLayout(dialog)
+
+        enabled=QCheckBox('Wichtige Nutzerangaben automatisch lokal merken')
+        enabled.setChecked(self.store.auto_memory_enabled())
+        enabled.toggled.connect(self.store.set_auto_memory_enabled)
+        lay.addWidget(enabled)
+
+        note=QLabel(
+            'Nur geeignete Aussagen aus deinen Nachrichten werden gespeichert. '
+            'Keine Passwörter, Tokens oder erkannten sensiblen Angaben. '
+            'Du kannst Erinnerungen hier bearbeiten oder löschen. '
+            'Chatverläufe und Projektaufträge bleiben unabhängig davon gespeichert.'
+        )
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
         items=QListWidget()
-        for m in memories:
-            item=QListWidgetItem(str(m['id'])+'  '+m['content'])
-            item.setData(Qt.UserRole,m['id']);items.addItem(item)
-        lay.addWidget(items)
+        for m in self.store.list_memories():
+            item=QListWidgetItem('[Manuell]  '+m['content'])
+            item.setData(Qt.UserRole,('manual',m['id']))
+            items.addItem(item)
+        for m in self.store.list_memory_facts():
+            label='[Automatisch · '+m['scope']+']  '+m['content']
+            item=QListWidgetItem(label)
+            item.setData(Qt.UserRole,('auto',m['id']))
+            items.addItem(item)
+        lay.addWidget(items,1)
+
+        row=QHBoxLayout()
+        editbtn=QPushButton('Automatische Erinnerung bearbeiten')
+        editbtn.setObjectName('ghost')
+        def edit_memory():
+            item=items.currentItem()
+            if not item:return
+            origin,mid=item.data(Qt.UserRole)
+            if origin!='auto':
+                QMessageBox.information(dialog,'Manuelle Erinnerung',
+                    'Manuelle Erinnerungen lassen sich über den Chat erneut speichern.')
+                return
+            old=item.text().split(']  ',1)[-1]
+            new,accepted=QInputDialog.getMultiLineText(
+                dialog,'Erinnerung korrigieren','Neuer Inhalt:',old)
+            if not accepted or not new.strip():return
+            self.store.update_memory_fact(mid,new)
+            scope=item.text().split(']  ',1)[0]+']  '
+            item.setText(scope+new.strip()[:350])
+        editbtn.clicked.connect(edit_memory)
+        row.addWidget(editbtn)
+
         delbtn=QPushButton('Ausgewählte Erinnerung löschen')
         def delete_memory():
             item=items.currentItem()
             if not item:return
-            if QMessageBox.question(dialog,'Löschen','Diese Erinnerung löschen?')==QMessageBox.Yes:
-                self.store.delete_memory(item.data(Qt.UserRole))
-                items.takeItem(items.row(item))
-        delbtn.clicked.connect(delete_memory);lay.addWidget(delbtn)
+            if QMessageBox.question(dialog,'Löschen',
+                    'Diese Erinnerung aus dem Gedächtnis löschen? '
+                    'Der ursprüngliche Chatverlauf wird dabei nicht gelöscht.'
+                    )!=QMessageBox.Yes:
+                return
+            origin,mid=item.data(Qt.UserRole)
+            if origin=='auto':
+                self.store.delete_memory_fact(mid)
+            else:
+                self.store.delete_memory(mid)
+            items.takeItem(items.row(item))
+        delbtn.clicked.connect(delete_memory)
+        row.addWidget(delbtn)
+        lay.addLayout(row)
         dialog.exec()
 
     def check_model_status(self):
