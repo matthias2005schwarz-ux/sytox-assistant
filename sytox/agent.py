@@ -16,6 +16,7 @@ from .coding_research import (coding_research_allowed, coding_uncertain,
                               failed_coding_tool, public_coding_query)
 from .program_build import needs_compiled_artifact
 from .project_memory import lookup_project_memory
+from .specialists import specialist_messages, specialist_summary
 from .model_runtime import ollama_generation_options, compact_agent_history
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
@@ -35,7 +36,7 @@ Eigene Weiterentwicklung immer in einer Arbeitskopie mit Tests, Review und expli
 Sobald du durch konkrete Arbeitsergebnisse verifiziert fertig bist: rufe complete_task mit einer knappen Zusammenfassung auf.
 Wenn du nicht weiterkommst: rufe report_blocker mit dem konkreten Grund auf.
 Niemals eine Aufgabe nur mit dem Wort „Fertig“ abschließen: der Agent kontrolliert den Abschluss.
-Bei längeren Aufgaben: Plan -> Aktion -> Test -> Verbesserung. Keine beschäftigungstherapeutischen Endlosschleifen.
+Bei längeren Aufgaben: Plan -> Aktion -> Test -> Verbesserung. Bei komplexen Projekten consult_specialist mit Rolle architect für unabhängige Architekturhinweise nutzen; bei schwierigen Testfehlern Rolle debugger konsultieren. Diese spezialisierten Rollen haben absichtlich keine Werkzeuge, treffen keine endgültigen Entscheidungen und laufen nacheinander; Hauptagent setzt die Änderungen selbst um. Keine beschäftigungstherapeutischen Endlosschleifen.
 Nach bestandenen Tests bei größeren Programmieraufträgen review_coding_changes als zusätzliche getrennte Prüferrolle verwenden; ihre Hinweise kritisch bewerten, bei validen Problemen nachbessern und erneut testen. Der Review ist kein Erfolgsnachweis.
 Bei größeren Programmieraufträgen im längeren Arbeitsmodus zuerst set_coding_plan mit 2–10 konkreten Schritten und Teststrategie ausführen; den Plan in späteren Checkpoints wiederverwenden. Der Plan ist kein Erfolgsnachweis.
 Bei größeren Programmieraufträgen: zuerst project_memory_lookup für bereits bekannte Dateien/Symbole versuchen, bei fehlendem/veraltetem Index project_memory_update ausführen; dann project_overview, search_project und read_file_lines für echte Dateien nutzen. Der Index ist nur ein Hinweis, kein Ersatz für das Lesen des aktuellen Codes. Unbekannte Dateiabschnitte nicht erraten.
@@ -128,6 +129,12 @@ CONTROL_TOOLS = [
             'test_strategy': {'type': 'string', 'description': 'How to check the changed code'},
             'risks': {'type': 'string', 'description': 'Compatibility or privacy/security risks'}},
             'required': ['steps', 'test_strategy', 'risks'], 'additionalProperties': False}}},
+    {'type': 'function', 'function': {'name': 'consult_specialist',
+        'description': 'Ask an isolated local architecture or debugging persona for an advisory plan. The specialist cannot use tools or edit files.',
+        'parameters': {'type': 'object', 'properties': {
+            'role': {'type': 'string', 'enum': ['architect', 'debugger']},
+            'details': {'type': 'string', 'description': 'Short concrete question, symptom or error category'}},
+            'required': ['role', 'details'], 'additionalProperties': False}}},
     {'type': 'function', 'function': {'name': 'review_coding_changes',
         'description': 'After code tests pass, ask an independent read-only reviewer persona of the configured local Ollama model to inspect changed source files. It is advisory, not verification. No files or tools may be changed by the reviewer.',
         'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False}}},
@@ -337,7 +344,7 @@ class Agent:
                         # A small local model can get stuck making the same call forever.
                         # Stop after three identical consecutive requests rather than wasting hours
                         # or repeating a side effect (e.g. sending the same email).
-                        if name not in ('report_blocker', 'complete_task', 'record_progress', 'set_coding_plan', 'review_coding_changes'):
+                        if name not in ('report_blocker', 'complete_task', 'record_progress', 'set_coding_plan', 'review_coding_changes', 'consult_specialist'):
                             signature = json.dumps([name, args], sort_keys=True, ensure_ascii=False, default=str)
                             last_calls = (last_calls + [signature])[-3:]
                             if len(last_calls) == 3 and len(set(last_calls)) == 1:
@@ -360,6 +367,20 @@ class Agent:
                                 coding_plan = {'steps': [x.strip() for x in plan_steps],
                                                'test_strategy': strategy.strip(), 'risks': risks.strip()}
                                 res = 'Programmierplan gespeichert (noch nicht umgesetzt): ' + json.dumps(coding_plan, ensure_ascii=False)[:2100]
+                        elif name == 'consult_specialist' and mode != 'once':
+                            host = urlparse(self.client.url).hostname
+                            role = args.get('role')
+                            if host not in ('localhost', '127.0.0.1', '::1'):
+                                res = 'FEHLER PermissionError: Agentenrollen dürfen nur ein lokales Ollama-Modell nutzen.'
+                            else:
+                                try:
+                                    hint = lookup_project_memory(self.workspace, str(args.get('details', '')))
+                                    advisory = self.client.chat(
+                                        specialist_messages(role, goal, args.get('details', ''), hint),
+                                        tools=None, stop=self.stop)
+                                    res = specialist_summary(role, advisory)
+                                except (OllamaError, ValueError) as exc:
+                                    res = 'FEHLER ' + type(exc).__name__ + ': ' + str(exc)[:300]
                         elif name == 'review_coding_changes' and mode != 'once':
                             host = urlparse(self.client.url).hostname
                             if host not in ('localhost', '127.0.0.1', '::1'):
@@ -433,7 +454,7 @@ class Agent:
                                    'per project_build verifizierte Windows-Datei erforderlich. '
                                    'Ein Installer ist damit noch NICHT abgedeckt. '
                                    'Andernfalls Blockade melden oder weitermachen.')
-                        elif name not in ('record_progress', 'report_blocker', 'set_coding_plan', 'review_coding_changes'):
+                        elif name not in ('record_progress', 'report_blocker', 'set_coding_plan', 'review_coding_changes', 'consult_specialist'):
                             before_checks = toolkit.passed_checks
                             res = toolkit.call(name, args)
                         # Verification must come after the LAST file edit, not before.
