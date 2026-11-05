@@ -1,3 +1,18 @@
+# SYTOX Assistant 0.3.8 – lokales Langzeitgedächtnis
+
+Das Gedächtnis speichert nachvollziehbare, ausgewählte Fakten aus **Nutzernachrichten** lokal in der vorhandenen SQLite-Datei. Es ist ein regelbasierter Anfang, kein perfektes semantisches Verständnis und kein selbständiges Training des KI-Modells.
+
+- **Automatische Erinnerungen:** Erkennt ausdrückliche „Merke dir“-Sätze, stabile Präferenzen, Projektentscheidungen und Korrekturen. Aussagen der KI, von Webseiten oder aus Werkzeugausgaben werden nicht automatisch als Fakten gespeichert.
+- **Aktualisierung:** Wiederholte Fakten für ein bestimmtes Projektthema (z. B. Designfarbe) ersetzen den vorherigen Stand statt widersprüchliche Kopien zu erzeugen. Nicht eindeutig einem Thema zuordenbare Notizen werden getrennt gehalten.
+- **Kontext bei Folgefragen:** Neueres Wissen erhält Vorrang vor älteren Chatauszügen; die vorhandene FTS5-Suche ergänzt die lokalen Fakten. Die KI wird ausdrücklich angewiesen, alte Notizen als unbestätigten Kontext und nicht als Arbeitsanweisungen zu behandeln.
+- **Projektfortsetzung:** Bei „Mach mit meinem letzten Projekt weiter“ werden frühere gespeicherte Auftragsziele, Status und Fortschrittsnotizen gesucht. Diese sind nicht automatisch verifizierte Ergebnisse: vor der Fortsetzung sind die echten Dateien und der aktuelle Projektordner zu prüfen.
+- **Kontrolle:** „Gespeicherte Erinnerungen“ zeigt manuelle und automatische Notizen, ermöglicht Korrektur und Löschung der automatischen Fakten und bietet einen Schalter zum Abschalten der automatischen Erfassung. Der Schalter und alle Erinnerungen bleiben über Programmneustarts erhalten.
+- **Privatsphäre:** Lokale Speicherung; keine automatische Weitergabe an Internetdienste. Einfache Filter vermeiden z. B. Passwörter, Tokens, E-Mail-Adressen und erkannte sensible Gesundheitsinformationen. Diese Filter sind ausdrücklich kein perfekter Geheimnis-Scanner. Ursprüngliche Chat-Nachrichten werden unabhängig vom Gedächtnis gespeichert und beim Löschen eines Chats entfernt; die automatische Erinnerung aus dem gelöschten Chat wird ebenfalls entfernt, wenn sie nicht inzwischen aus einem anderen Chat aktualisiert wurde.
+- **Grenzen:** Regelbasierte Erkennung kann Wichtiges übersehen oder eine neue Aussage falsch einordnen. Projektkontexte werden anhand gespeicherter Aufgaben/Notizen ermittelt, nicht durch selbstständiges Durchsuchen beliebiger Laufwerke. Keine eigenständige Rekonstruktion von verlorenem Quellcode.
+
+
+---
+
 # SYTOX: automatisierte Projekt-Builds in zwölf Programmiersprachen (Entwicklungszweig)
 
 **Neue Build-Formate, bevor eine Release-Version veröffentlicht wird:** Für eindeutige Projekte sind Python, C#, Go, Rust, C, C++, Java, Kotlin, JavaScript, TypeScript, PHP und Lua integriert. Build-Plan und tatsächliche Ausführung sind getrennt. Jeder Build benötigt vor der Ausführung eine Freigabe; ein Fehler oder fehlender Compiler wird als Fehler gemeldet.
