@@ -39,6 +39,10 @@ class OllamaInstallTests(unittest.TestCase):
             with self.assertRaises(SetupFailure):
                 validate_model(value)
 
+    def test_new_default_large_coder_is_explicit_choice(self):
+        self.assertEqual(MODEL_CHOICES[0][1], 'qwen3-coder:30b')
+        self.assertIn('19 GB', MODEL_CHOICES[0][0])
+
     def test_small_model_available_for_low_ram(self):
         self.assertIn('qwen2.5-coder:3b', [value for _, value in MODEL_CHOICES])
 
