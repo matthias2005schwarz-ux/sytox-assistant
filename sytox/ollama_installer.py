@@ -29,9 +29,10 @@ class SetupCancelled(SetupFailure):
 
 
 MODEL_CHOICES = (
-    ('Schnell / weniger RAM · Qwen Coder 3B (ca. 2 GB)', 'qwen2.5-coder:3b'),
-    ('Mehr Qualität / langsamer · Qwen Coder 7B (ca. 4,7 GB)', 'qwen2.5-coder:7b'),
-    ('Sehr sparsam · Qwen Coder 1.5B (ca. 1 GB)', 'qwen2.5-coder:1.5b'),
+    ('Empfohlen für anspruchsvolles Programmieren · Qwen3-Coder 30B (19 GB)', 'qwen3-coder:30b'),
+    ('Weniger RAM · Qwen2.5-Coder 7B (ca. 4,7 GB)', 'qwen2.5-coder:7b'),
+    ('Sparsam · Qwen2.5-Coder 3B (ca. 2 GB)', 'qwen2.5-coder:3b'),
+    ('Sehr sparsam · Qwen2.5-Coder 1.5B (ca. 1 GB)', 'qwen2.5-coder:1.5b'),
 )
 
 
