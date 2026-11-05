@@ -151,6 +151,7 @@ class Toolkit:
         self.passed_checks=0
         self.built_artifacts=[]  # Build receipts are invalidated after every subsequent source edit.
         self.unvalidated_paths=set()  # Relative paths changed since the last successful code check.
+        self.modified_paths=set()  # All source paths touched in this task, including validated files.
 
     def _check(self):
         if self.stop_event is not None and self.stop_event.is_set(): raise Cancelled('Gestoppt')
@@ -218,7 +219,7 @@ class Toolkit:
                 'gmail_send',
             }
             ok_command = name == 'run_command' and outcome.startswith('Exit code: 0\n')
-            has_result = outcome not in ('', '(leer)', 'Kein Verzeichnis.')
+            has_result = outcome not in ('', '(leer)', 'Kein Verzeichnis.') and not outcome.startswith('FEHLER ')
             if name == 'web_search' and outcome.startswith('Keine Live-Suchergebnisse'):
                 has_result = False
             if ((name in evidence_tools and name != 'run_command' and has_result)
@@ -233,6 +234,7 @@ class Toolkit:
                     paths = [self._path(args['path'])]
                 self.writes += len(paths)
                 self.unvalidated_paths.update(p.relative_to(self.workspace).as_posix() for p in paths)
+                self.modified_paths.update(p.relative_to(self.workspace).as_posix() for p in paths)
             if ok_command and self._validates_pending_edits(str(args.get('command', '')), outcome):
                 self.passed_checks += 1
                 self.unvalidated_paths.clear()
