@@ -36,6 +36,21 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.environ.stop()
         self.home.cleanup()
 
+    def test_screen_sharing_requires_consent_and_can_be_revoked_by_voice(self):
+        from PySide6.QtWidgets import QMessageBox
+        with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.No):
+            self.window.enable_screen()
+        self.assertFalse(self.window.screen_enabled)
+        self.assertFalse(self.window.screen_analyze_btn.isEnabled())
+        with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.Yes):
+            self.window.enable_screen()
+        self.assertTrue(self.window.screen_enabled)
+        self.assertTrue(self.window.screen_stop_btn.isEnabled())
+        self.window.received_voice_command('Okay, kannst wieder aus meinem Bildschirm rausgehen')
+        self.assertFalse(self.window.screen_enabled)
+        self.assertFalse(self.window.screen_stop_btn.isEnabled())
+        self.assertIn('kein Bildschirmzugriff', self.window.screen_state.text())
+
     def test_offline_does_not_claim_ki_ready(self):
         self.window._model_status_checked(OllamaStatus('offline', 'Ollama nicht erreichbar',
                                                       'Bitte Ollama starten'))
@@ -54,7 +69,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
     def test_dark_red_workspace_controls_and_suggestion(self):
         from PySide6.QtWidgets import QFrame
         cards = self.window.findChildren(QFrame, 'utilityCard')
-        self.assertEqual(len(cards), 5)  # Street View adds one utility card
+        self.assertEqual(len(cards), 6)  # Street View + screen help + existing utility cards
         self.assertIsNotNone(self.window.empty_widget)
         self.window._use_suggestion('Erstelle eine Funktion')
         self.assertEqual(self.window.input.toPlainText(), 'Erstelle eine Funktion')
@@ -64,7 +79,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         from PySide6.QtWidgets import QFrame
         panel = self.window.utility_panel
         cards_before = self.window.findChildren(QFrame, 'utilityCard')
-        self.assertEqual(len(cards_before), 5)
+        self.assertEqual(len(cards_before), 6)
         self.assertFalse(panel.isHidden())
 
         self.window.toggle_focus_mode()
@@ -76,7 +91,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.assertFalse(panel.isHidden())
         self.assertFalse(self.window.focus_btn.isChecked())
         self.assertEqual(self.window.focus_btn.text(), '☰')
-        self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 5)
+        self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 6)
 
     def test_spoken_desktop_command_opens_panel_without_issuing_agent_task(self):
         with patch.object(self.window, 'show_desktop_tools') as show_tools, \
