@@ -4,12 +4,14 @@ from __future__ import annotations
 import json
 import re
 import threading
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import requests
 
 from .actions import Toolkit, tool_schema, Cancelled
 from .web_search import should_search, search_web, format_results
+from .program_build import needs_compiled_artifact
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
 Stil: freundlich, klar und direkt. Sprich Hochdeutsch ohne Dialekt.
@@ -34,7 +36,9 @@ bestehende Projektdateien berücksichtigen, dann die Sprache und vorhandenen Com
 Fehlende Werkzeuge ausschließlich über toolchain_install mit gesonderter Nutzerfreigabe einrichten.
 Bei verweigerter Installation keine Umgehung versuchen, sondern blockieren oder ohne Installation weiterarbeiten.
 Nach Installationen erneut toolchain_inspect aufrufen, da PATH/Neustart nötig sein können.
-Code schreiben, dann mit run_command nach separater Freigabe bauen bzw. testen. Ein grüner Exitcode allein beweist nicht, dass eine funktionsfähige EXE vorliegt.
+Code schreiben, dann mit run_command nach separater Freigabe bauen bzw. testen. Bei Windows-EXE-Aufträgen project_build_plan und project_build verwenden: diese prüfen die echte PE-Datei und den SHA-256-Wert, starten sie aber nicht.
+Für Installer gibt es noch keinen automatisierten Generator in project_build. In diesem Fall keinen fertigen Installer behaupten.
+Ein grüner Exitcode oder gültiger PE-Header allein beweist nicht, dass die Anwendung funktioniert.
 Nur geprüfte Artefakte als fertig bezeichnen; kein beliebiges Installationspaket aus dem Web ausführen.
 '''
 
@@ -162,7 +166,8 @@ class Agent:
             progress_notes = []
         progress_notes = [p for p in progress_notes if isinstance(p, dict)][-8:]
         validated_writes = int(checkpoint.get('validated_writes', 0))
-        coding_task = bool(re.search(r'(?i)\b(programmier\w*|code|plugin|skript|script|kompilier\w*|client|software|develop\w*)\b', goal))
+        artifact_need = needs_compiled_artifact(goal)
+        coding_task = bool(re.search(r'(?i)\b(programmier\w*|code|plugin|skript|script|kompilier\w*|client|software|develop\w*|erstell\w*|bau\w*)\b', goal)) or bool(artifact_need)
         # Do not claim past unverified accomplishments; previous checkpoint is only context.
         context = self.store.related_context(goal, exclude_chat=chat_id)
         memory_text = '\n'.join('- ' + item['source'] + ': ' + item['content'] for item in context)
@@ -277,20 +282,29 @@ class Agent:
                             count = toolkit.action_count + previous_actions
                             writes = toolkit.writes + previous_writes
                             checks = toolkit.passed_checks + previous_checks
-                            if count and (not coding_task or (writes and checks and validated_writes >= writes and not toolkit.unvalidated_paths)):
+                            artifact_ok = (not artifact_need or (artifact_need == 'exe' and bool(toolkit.verified_builds())))
+                            if count and artifact_ok and (not coding_task or (writes and checks and validated_writes >= writes and not toolkit.unvalidated_paths)):
                                 status, result = 'done', str(args.get('summary', 'Auftrag erledigt'))[:3000]
                                 result += '\nNachweis (Modellbericht, bitte prüfen): ' + str(args.get('evidence', '(keiner)'))[:1300]
+                                if artifact_need == 'exe':
+                                    artifact = toolkit.verified_builds()[0]
+                                    result += ('\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
+                                               + '\nSHA-256: ' + artifact['sha256']
+                                               + '\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
                                 finished = True
                                 break
                             res = ('Abschluss abgelehnt: kein ausreichender Nachweis. '
                                    'Für Programmieraufgaben ist mindestens eine gespeicherte Datei und '
                                    'eine erfolgreiche Test-/Syntaxprüfung NACH der letzten Änderung nötig. '
+                                   'Bei gewünschter EXE ist zusätzlich eine tatsächlich gebaute und '
+                                   'per project_build verifizierte Windows-Datei erforderlich. '
+                                   'Ein Installer ist damit noch NICHT abgedeckt. '
                                    'Andernfalls Blockade melden oder weitermachen.')
                         elif name != 'record_progress':
                             before_checks = toolkit.passed_checks
                             res = toolkit.call(name, args)
                         # Verification must come after the LAST file edit, not before.
-                        if name in ('run_command', 'selfdev_validate') and toolkit.passed_checks > before_checks:
+                        if name in ('run_command', 'selfdev_validate', 'project_build') and toolkit.passed_checks > before_checks:
                             validated_writes = previous_writes + toolkit.writes
                         private_pc = name in ('pc_find_apps', 'pc_list_windows', 'pc_select_window', 'pc_inspect_window')
                         safe_res = (f'{len(res)} Zeichen; Fensterinhalte nicht protokolliert'
@@ -335,7 +349,17 @@ class Agent:
                             item['url'] for item in sourced_results[:2])
                     elif auto_search and not sourced_results:
                         text += '\n(Hinweis: Keine aktuelle Internetrecherche verfügbar.)'
-                    status, result = 'done', text or 'Das Modell hat keine Antwort geliefert.'
+                    if artifact_need and not (artifact_need == 'exe' and toolkit.verified_builds()):
+                        status, result = ('paused', (text or 'Kein Build-Ergebnis.')
+                             + '\nAbschluss nicht bestätigt: Die angeforderte EXE bzw. '
+                               'der Installer wurde nicht durch einen erfolgreichen Build nachgewiesen.')
+                    else:
+                        status, result = 'done', text or 'Das Modell hat keine Antwort geliefert.'
+                        if artifact_need == 'exe':
+                            artifact = toolkit.verified_builds()[0]
+                            result += ('\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
+                                       + '\nSHA-256: ' + artifact['sha256']
+                                       + '\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
                     break
                 idle += 1
                 if idle >= 3:
