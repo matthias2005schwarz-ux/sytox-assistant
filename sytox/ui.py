@@ -1059,6 +1059,10 @@ class MainWindow(QMainWindow):
         titles.addWidget(self.chat_heading)
         th.addLayout(titles)
         th.addStretch(1)
+        self.screen_active_chip = QLabel('Bildschirm aus')
+        self.screen_active_chip.setObjectName('statusChip')
+        self.screen_active_chip.setToolTip('Bei freigegebener Bildschirmhilfe erscheint hier ein deutlicher Hinweis.')
+        th.addWidget(self.screen_active_chip, 0, Qt.AlignVCenter)
         self.focus_btn = QPushButton('☰')
         self.focus_btn.setObjectName('panelToggle')
         self.focus_btn.setAccessibleName('Rechte Leiste mit Steuerzentrale und Street View öffnen oder schließen')
@@ -1434,6 +1438,9 @@ class MainWindow(QMainWindow):
         # Closing the window should NOT shut down the assistant. Exit through
         # the tray menu (or Windows session shutdown) to quit the background app.
         if self.tray and not self._is_exiting:
+            # Closing into the tray ends visual access; no hidden screenshot session.
+            if self.screen_enabled:
+                self.disable_screen()
             self.hide()
             event.ignore()
             return
@@ -1598,8 +1605,14 @@ class MainWindow(QMainWindow):
     def _screen_state_changed(self):
         if not self.screen_enabled:
             self.screen_state.setText('Aus · kein Bildschirmzugriff')
+            self.screen_active_chip.setText('Bildschirm aus')
+            self.screen_active_chip.setStyleSheet('color:#A5ABB4;background:transparent;')
         else:
             self.screen_state.setText('AKTIV · Hauptbildschirm wird nur auf Nachfrage erfasst')
+            self.screen_active_chip.setText('● Bildschirmfreigabe aktiv')
+            self.screen_active_chip.setStyleSheet('color:#FFE7E7;background:#6B1823;'
+                                                 'border:1px solid #E44B56;'
+                                                 'border-radius:9px;padding:5px 8px;')
         self.screen_enable_btn.setEnabled(not self.screen_enabled)
         self.screen_analyze_btn.setEnabled(self.screen_enabled)
         self.screen_stop_btn.setEnabled(self.screen_enabled)
