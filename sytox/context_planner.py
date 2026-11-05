@@ -79,9 +79,11 @@ def rank_project_files(index: dict, query: str, *, limit: int = 20) -> list[dict
             continue
         name = Path(rel).stem.casefold()
         path = rel.casefold()
-        symbols = [str(s).casefold() for s in meta.get("symbols", [])[:40]
-                   if isinstance(s, str)]
-        expanded_symbols = {_term for symbol in symbols for _term in _terms(symbol)}
+        original_symbols = [str(s) for s in meta.get("symbols", [])[:40]
+                            if isinstance(s, str)]
+        symbols = [symbol.casefold() for symbol in original_symbols]
+        expanded_symbols = {_term for symbol in original_symbols
+                            for _term in _terms(symbol)}
         score = 0
         matched = []
         for term in terms:
