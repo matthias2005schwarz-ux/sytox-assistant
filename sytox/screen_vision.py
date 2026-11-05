@@ -7,6 +7,7 @@ No screenshots are persisted, logged, or sent to cloud endpoints.
 from __future__ import annotations
 
 import base64
+import json
 import re
 from urllib.parse import urlparse
 
@@ -43,6 +44,17 @@ def screen_intent(text: str) -> str | None:
     if _START.search(phrase):
         return "enable"
     return None
+
+
+_FOLLOWUP = re.compile(
+    r"(?:was\s+(?:ist|siehst|bedeutet)|wieso|warum|wie\s+(?:behebe|mache|kann)\b)"
+    r".{0,100}(?:fehler|hier|das|diesen|auf\s+dem\s+bildschirm|problem)|"
+    r"(?:kannst\s+du\s+mir\s+(?:dabei|damit)\s+helfen)", re.I)
+
+
+def screen_followup_intent(text: str) -> bool:
+    """Only obviously screen-related follow-ups trigger another capture."""
+    return bool(_FOLLOWUP.search(str(text or '')))
 
 
 def local_ollama_url(url: str) -> str:
@@ -88,20 +100,41 @@ def vision_request(png: bytes, question: str, model: str = DEFAULT_VISION_MODEL)
 
 
 def analyze_screenshot(png: bytes, question: str, url: str, model: str,
-                       *, post=None) -> str:
+                       *, post=None, cancel=None) -> str:
     """Analyze one capture via Ollama; caller controls user consent and lifecycle."""
     endpoint = local_ollama_url(url)
     payload = vision_request(png, question, model)
     request = post or requests.post
     try:
-        response = request(endpoint + "/api/chat", json=payload, timeout=(8, 180))
-        response.raise_for_status()
-        result = response.json()
-        message = result.get("message") if isinstance(result, dict) else None
-        answer = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(answer, str) or not answer.strip():
-            raise RuntimeError("Bildmodell lieferte keine lesbare Antwort.")
-        return answer.strip()[:12000]
+        if cancel is not None and cancel.is_set():
+            raise InterruptedError('Bildschirmfreigabe beendet.')
+        payload['stream'] = True
+        with request(endpoint + '/api/chat', json=payload,
+                     stream=True, timeout=(8, 40)) as response:
+            response.raise_for_status()
+            answer = []
+            completed = False
+            for raw in response.iter_lines():
+                if cancel is not None and cancel.is_set():
+                    response.close()
+                    raise InterruptedError('Bildschirmfreigabe beendet.')
+                if not raw:
+                    continue
+                chunk = json.loads(raw)
+                if isinstance(chunk, dict) and chunk.get('error'):
+                    raise RuntimeError('Bildmodell meldete einen Fehler.')
+                msg = chunk.get('message') if isinstance(chunk, dict) else None
+                if isinstance(msg, dict) and isinstance(msg.get('content'), str):
+                    answer.append(msg['content'])
+                if isinstance(chunk, dict) and chunk.get('done'):
+                    completed = True
+                    break
+            if cancel is not None and cancel.is_set():
+                raise InterruptedError('Bildschirmfreigabe beendet.')
+            result = ''.join(answer).strip()
+            if not completed or not result:
+                raise RuntimeError('Bildmodell lieferte keine vollständige Antwort.')
+            return result[:12000]
     except requests.RequestException as exc:
         # Do not include HTTP response bodies that might contain screenshot context.
         raise RuntimeError("Lokales Bildmodell nicht erreichbar. Bitte Ollama und das "
