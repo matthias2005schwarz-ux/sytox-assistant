@@ -45,7 +45,8 @@ class TestStore(unittest.TestCase):
         self.assertIn('https://example.org/jenna', result['content'])
         search.assert_called_once()
         call_messages = agent.client.chat.call_args.args[0]
-        self.assertTrue(any('https://example.org/jenna' in message.get('content', '')\n                            for message in call_messages if message.get('role') == 'user'))
+        self.assertTrue(any('https://example.org/jenna' in message.get('content', '')
+                            for message in call_messages if message.get('role') == 'user'))
 
     def test_coding_task_does_not_auto_search_or_expose_project(self):
         from unittest.mock import patch
