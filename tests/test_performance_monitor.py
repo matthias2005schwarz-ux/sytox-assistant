@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sytox.performance_monitor import measure_performance, format_performance
+from sytox.performance_monitor import measure_performance, format_performance, read_windows_gpu
 
 
 class PerformanceTests(unittest.TestCase):
@@ -45,6 +45,36 @@ class PerformanceTests(unittest.TestCase):
             )
         self.assertIsNone(result["gpu_name"])
         self.assertIn("nicht verfügbar", format_performance(result))
+
+
+    def test_windows_amd_gpu_via_cim_without_shell_commands(self):
+        recorded = []
+        def runner(argv, **kwargs):
+            recorded.append((argv, kwargs))
+            return SimpleNamespace(returncode=0, stdout='{"name":"Radeon RX 570","utilization":42.5}')
+        with patch("sytox.performance_monitor.platform.system", return_value="Windows"):
+            gpu = read_windows_gpu(
+                which=lambda key: "powershell.exe" if key == "powershell.exe" else None,
+                command=runner,
+            )
+        self.assertEqual(gpu["gpu_name"], "Radeon RX 570")
+        self.assertEqual(gpu["gpu_percent"], 42.5)
+        self.assertEqual(gpu["gpu_load_kind"], "Windows 3D-Engine (Näherung)")
+        self.assertIn("-NoProfile", recorded[0][0])
+        self.assertNotIn("shell", recorded[0][1])
+        self.assertIn("Radeon RX 570", format_performance(gpu))
+        self.assertIn("Näherung", format_performance(gpu))
+
+    def test_windows_gpu_counters_missing_does_not_invent_usage(self):
+        with patch("sytox.performance_monitor.platform.system", return_value="Windows"):
+            gpu = read_windows_gpu(
+                which=lambda key: "powershell.exe",
+                command=lambda *_args, **_kw:
+                    SimpleNamespace(returncode=0, stdout='{"name":"AMD Radeon","utilization":null}'),
+            )
+        self.assertEqual(gpu["gpu_name"], "AMD Radeon")
+        self.assertIsNone(gpu["gpu_percent"])
+        self.assertNotIn("0 %", format_performance(gpu))
 
 
 if __name__ == "__main__":
