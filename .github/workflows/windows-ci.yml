@@ -12,7 +12,7 @@ concurrency:
 jobs:
   windows-smoke:
     runs-on: windows-latest
-    timeout-minutes: 55
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -58,6 +58,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller setup for real project builds failed' }
           & .\.venv\Scripts\python.exe tools/windows_project_build_smoke.py
           if ($LASTEXITCODE -ne 0) { throw 'Real project EXE build or launch test failed' }
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build and run 8 extra language examples
+        shell: pwsh
+        run: |
+          choco install mingw php lua kotlinc --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Extra language compiler installation failed' }
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+          refreshenv
+          $env:PATH = 'C:\ProgramData\mingw64\mingw64\bin;' + (Join-Path $PWD '.venv\Scripts') + ';' + $env:PATH
+          npm install --global typescript
+          if ($LASTEXITCODE -ne 0) { throw 'TypeScript setup failed' }
+          & .\.venv\Scripts\python.exe tools/windows_multilang_smoke.py
+          if ($LASTEXITCODE -ne 0) { throw 'One of the 8 extra language build/run checks failed' }
       - name: Make sure Inno Setup 6 is installed
         shell: pwsh
         run: |
