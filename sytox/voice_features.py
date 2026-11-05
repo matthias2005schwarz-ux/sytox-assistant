@@ -18,7 +18,9 @@ from pathlib import Path
 
 from .storage import default_data_dir
 
-_WAKE_RE = re.compile(r"\b(?:hey|hei|he)\s+(?:sytox|saitox|seitox|sytoks|seitoks)\b", re.I)
+_WAKE_RE = re.compile(
+    r"(?:\b(?:hey|hei|he)\s+(?:sytox|saitox|seitox|sytoks|seitoks)\b|"
+    r"^\s*(?:sytox|saitox|seitox|sytoks|seitoks)\b)", re.I)
 
 
 class VoiceTurnRouter:
