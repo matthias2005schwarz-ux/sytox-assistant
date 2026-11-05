@@ -163,5 +163,51 @@ class AgentToolProtocolTests(unittest.TestCase):
                          ["write_file", "write_file"])
 
 
+
+class OllamaStreamTests(unittest.TestCase):
+    def test_stream_collects_tool_calls_from_separate_chunks(self):
+        from unittest.mock import patch
+        from sytox.agent import OllamaClient
+        frames = [
+            {"message": {"content": "Checking...", "tool_calls": [
+                proposed("project_overview", {"path": "."})]}, "done": False},
+            {"message": {"content": "", "tool_calls": [
+                proposed("project_memory_lookup", {"query": "main"})]}, "done": False},
+            {"message": {}, "done": True, "done_reason": "stop"},
+        ]
+        class Response:
+            ok = True
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def iter_lines(self):
+                return iter(json.dumps(x).encode() for x in frames)
+        client = OllamaClient(model="qwen3-coder:30b")
+        with patch("sytox.agent.requests.post", return_value=Response()):
+            result = client.chat([{"role": "user", "content": "Arbeite"}],
+                                 tools=tool_schema())
+        self.assertEqual(len(result["tool_calls"]), 2)
+        self.assertEqual(result["content"], "Checking...")
+        self.assertEqual(result["tool_calls"][1]["function"]["name"], "project_memory_lookup")
+
+    def test_stream_without_done_or_truncated_token_response_fails(self):
+        from unittest.mock import patch
+        from sytox.agent import OllamaClient, OllamaError
+        class Response:
+            ok = True
+            def __init__(self, frames): self.frames = frames
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+            def iter_lines(self):
+                return iter(json.dumps(x).encode() for x in self.frames)
+        for frames in (
+            [{"message": {"tool_calls": [proposed("write_file", {
+                "path": "danger.py", "content": "do stuff"})]}, "done": False}],
+            [{"message": {"content": "partial"}, "done": True, "done_reason": "length"}],
+        ):
+            with self.subTest(frames=frames), patch(
+                    "sytox.agent.requests.post", return_value=Response(frames)):
+                with self.assertRaises(OllamaError):
+                    OllamaClient().chat([{"role": "user", "content": "Test"}])
+
 if __name__ == "__main__":
     unittest.main()
