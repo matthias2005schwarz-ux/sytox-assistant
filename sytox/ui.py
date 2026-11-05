@@ -9,7 +9,7 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QBuffer, QIODevice
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QTextCursor, QDesktopServices, QLinearGradient, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -32,6 +32,8 @@ from .work_intents import work_intent
 from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
+from .screen_vision import (DEFAULT_VISION_MODEL, screen_intent, screen_followup_intent,
+                            analyze_screenshot, MAX_SCREENSHOT_BYTES)
 
 class BrandMark(QWidget):
     """Vector-drawn SYTOX monogram; no external image or web UI required."""
@@ -534,6 +536,34 @@ class SpeechSynthesizer(QThread):
             self.error.emit(f'Sprachausgabe: {type(e).__name__}: {e}')
 
 
+class ScreenAnalysisWorker(QThread):
+    """One screen question, local inference only; keep raw PNG out of logs and disk."""
+    completed = Signal(int, bool, str)
+
+    def __init__(self, png, question, url, model, generation, parent=None):
+        super().__init__(parent)
+        self.png = png
+        self.question = question
+        self.url = url
+        self.model = model
+        self.generation = generation
+        self.cancel_event = threading.Event()
+
+    def run(self):
+        try:
+            answer = analyze_screenshot(self.png, self.question, self.url, self.model,
+                                        cancel=self.cancel_event)
+            if not self.cancel_event.is_set():
+                self.completed.emit(self.generation, True, answer)
+        except Exception as exc:
+            if not self.cancel_event.is_set():
+                self.completed.emit(self.generation, False,
+                                    f'{type(exc).__name__}: {exc}')
+        finally:
+            self.png = b''
+            self.question = ''
+
+
 class OllamaProbe(QThread):
     """Avoid freezing the Qt event loop while checking a local model server."""
     checked = Signal(object)
@@ -866,6 +896,9 @@ class MainWindow(QMainWindow):
         self.ollama_status=None
         self.ollama_probe=None
         self._probe_again=False
+        self.screen_enabled=False
+        self.screen_generation=0
+        self.screen_worker=None
         self.setWindowTitle('SYTOX Assistant · Dein KI-Workspace')
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
@@ -1184,6 +1217,27 @@ class MainWindow(QMainWindow):
         voice.addWidget(diagnostics_button)
         r.addWidget(voice_card)
 
+        screen_card, screen = new_card()
+        label = QLabel('BILDSCHIRMHILFE')
+        label.setObjectName('sectionTitle')
+        screen.addWidget(label)
+        self.screen_state = QLabel('Aus · kein Bildschirmzugriff')
+        self.screen_state.setObjectName('panelDescription')
+        self.screen_state.setWordWrap(True)
+        screen.addWidget(self.screen_state)
+        self.screen_enable_btn = QPushButton('Bildschirmfreigabe starten')
+        self.screen_enable_btn.clicked.connect(lambda: self.enable_screen())
+        screen.addWidget(self.screen_enable_btn)
+        self.screen_analyze_btn = QPushButton('Jetzt Screenshot analysieren')
+        self.screen_analyze_btn.setEnabled(False)
+        self.screen_analyze_btn.clicked.connect(lambda: self.analyze_screen('Was ist hier zu sehen, und welche Fehlermeldungen oder nächsten Schritte erkennst du?'))
+        screen.addWidget(self.screen_analyze_btn)
+        self.screen_stop_btn = QPushButton('Bildschirmfreigabe beenden')
+        self.screen_stop_btn.setEnabled(False)
+        self.screen_stop_btn.clicked.connect(self.disable_screen)
+        screen.addWidget(self.screen_stop_btn)
+        r.addWidget(screen_card)
+
         activity_card, activity = new_card()
         logs_title = QLabel('AKTIVITÄTEN')
         logs_title.setObjectName('sectionTitle')
@@ -1492,6 +1546,19 @@ class MainWindow(QMainWindow):
     def send(self):
         txt=self.input.toPlainText().strip()
         if not txt:return
+        screen_action = screen_intent(txt)
+        if screen_action == 'disable':
+            self.input.clear()
+            self.disable_screen()
+            return
+        if screen_action == 'enable':
+            self.input.clear()
+            self.enable_screen(txt)
+            return
+        if self.screen_enabled and screen_followup_intent(txt):
+            self.input.clear()
+            self.analyze_screen(txt)
+            return
         intent = work_intent(txt)
         self.offer_place_if_relevant(txt)
         if intent:
@@ -2115,6 +2182,16 @@ class MainWindow(QMainWindow):
 
     def received_voice_command(self,text):
         self.log('Stimme','Befehl gehört: '+text[:120])
+        screen_action = screen_intent(text)
+        if screen_action == 'disable':
+            self.disable_screen(spoken=True)
+            return
+        if screen_action == 'enable':
+            self.enable_screen(text, spoken=True)
+            return
+        if self.screen_enabled and screen_followup_intent(text):
+            self.analyze_screen(text, spoken=True)
+            return
         intent = work_intent(text)
         if intent:
             self.handle_work_control(intent, text, spoken=True)
