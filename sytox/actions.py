@@ -356,6 +356,11 @@ class Toolkit:
                 continue
         return verified
 
+    def verified_exe_builds(self):
+        """Non-native artifacts cannot satisfy an explicit .exe request."""
+        return [item for item in self.verified_builds()
+                if item.get('format') == 'Windows PE x64']
+
     def action_project_build(self):
         """Build or validate a supported project with per-build approval."""
         if platform.system() != 'Windows':
@@ -367,11 +372,11 @@ class Toolkit:
         self._request(
             'Windows-Projekt erstellen: ' + plan['language'],
             'Ein Build kann Projektcode ausführen und Dateien erzeugen. '
-            'Abhängigkeiten können heruntergeladen werden.\\n\\n'
+            'Abhängigkeiten können heruntergeladen werden.\n\n'
             + 'Befehl (ohne Shell): ' + subprocess.list2cmdline(argv)
-            + '\\nErwartetes Artefakt: ' + expected_name
-            + '\\nFormat: ' + kind
-            + '\\nNur nach Zustimmung wird der Build ausgeführt. '
+            + '\nErwartetes Artefakt: ' + expected_name
+            + '\nFormat: ' + kind
+            + '\nNur nach Zustimmung wird der Build ausgeführt. '
               'Die erzeugte Datei wird verifiziert, aber NICHT gestartet.'
         )
         self._check()
@@ -398,7 +403,7 @@ class Toolkit:
                     continue
             if proc.returncode != 0:
                 raise RuntimeError('Compiler-Fehler (Exitcode ' + str(proc.returncode)
-                                   + '):\\n' + output[-2500:])
+                                   + '):\n' + output[-2500:])
             if plan.get('copy_after_validation'):
                 source = self._path(plan['copy_after_validation'])
                 if source.is_symlink() or not source.is_file():
