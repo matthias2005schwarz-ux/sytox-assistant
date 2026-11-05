@@ -120,12 +120,11 @@ class FocusedCodeContextTests(unittest.TestCase):
         self.assertEqual(tool["required"], ["query"])
 
     def test_tool_uses_existing_workspace_without_saving_code(self):
-        toolkit = Toolkit(None, self.workspace, lambda *_: True, threading.Event())
+        store = Store(self.data / "assistant.sqlite")
+        toolkit = Toolkit(store, self.workspace, lambda *_: True, threading.Event())
         try:
-            result = toolkit.call("project_context_bundle", {
-                "query": "PaymentProcessor", "max_chars": 2600,
-                "max_files": 2})
-            # The production tool uses default_data_dir; test it independently.
+            # The production tool uses default_data_dir; override only the
+            # index location with an isolated temporary directory.
             with patch("sytox.project_memory.default_data_dir",
                        return_value=self.data):
                 result = toolkit.call("project_context_bundle", {
