@@ -46,10 +46,23 @@ class OllamaQtOnboardingTests(unittest.TestCase):
             self.window.enable_screen()
         self.assertTrue(self.window.screen_enabled)
         self.assertTrue(self.window.screen_stop_btn.isEnabled())
+        self.assertIn('Bildschirmfreigabe aktiv', self.window.screen_active_chip.text())
         self.window.received_voice_command('Okay, kannst wieder aus meinem Bildschirm rausgehen')
         self.assertFalse(self.window.screen_enabled)
         self.assertFalse(self.window.screen_stop_btn.isEnabled())
         self.assertIn('kein Bildschirmzugriff', self.window.screen_state.text())
+        self.assertIn('Bildschirm aus', self.window.screen_active_chip.text())
+
+    def test_revoked_share_discards_late_screen_answer(self):
+        from PySide6.QtWidgets import QMessageBox, QFrame
+        with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.Yes):
+            self.window.enable_screen()
+        generation = self.window.screen_generation
+        self.window.disable_screen()
+        before = len(self.window.findChildren(QFrame, 'bubbleAssistant'))
+        self.window._screen_analysis_completed(generation, True, 'PRIVATE SCREEN TEXT')
+        after = len(self.window.findChildren(QFrame, 'bubbleAssistant'))
+        self.assertEqual(before, after)
 
     def test_offline_does_not_claim_ki_ready(self):
         self.window._model_status_checked(OllamaStatus('offline', 'Ollama nicht erreichbar',
