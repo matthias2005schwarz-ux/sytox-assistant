@@ -15,6 +15,7 @@ from .web_search import should_search, search_web, format_results
 from .coding_research import (coding_research_allowed, coding_uncertain,
                               failed_coding_tool, public_coding_query)
 from .program_build import needs_compiled_artifact
+from .model_runtime import ollama_generation_options, compact_agent_history
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
 Stil: freundlich, klar und direkt. Sprich Hochdeutsch ohne Dialekt.
@@ -61,9 +62,10 @@ class OllamaError(RuntimeError):
 
 
 class OllamaClient:
-    def __init__(self, url='http://localhost:11434', model='qwen3-coder:30b'):
+    def __init__(self, url='http://localhost:11434', model='qwen3-coder:30b', context_tokens=None):
         self.url = url.rstrip('/')
         self.model = model
+        self.context_tokens = context_tokens
 
     def installed(self):
         resp = requests.get(self.url + '/api/tags', timeout=6)
@@ -72,7 +74,7 @@ class OllamaClient:
 
     def chat(self, messages, tools=None, stop=None):
         payload = {'model': self.model, 'messages': messages, 'stream': True,
-                   'options': {'temperature': 0.3, 'num_ctx': 8192, 'num_predict': 1600}}
+                   'options': ollama_generation_options(self.model, self.context_tokens)}
         if tools:
             payload['tools'] = tools
         try:
@@ -146,9 +148,9 @@ CONTROL_TOOLS = [
 class Agent:
     RETRY_DELAYS = (1, 2, 4)  # Seconds; configurable in unit tests.
     MAX_STEPS = 10000  # Additional guard for unattended runs.
-    def __init__(self, store, model, base_url, workspace, approve, logger, stop_event=None, gmail_client_secrets=''):
+    def __init__(self, store, model, base_url, workspace, approve, logger, stop_event=None, gmail_client_secrets='', context_tokens=None):
         self.store = store
-        self.client = OllamaClient(base_url, model)
+        self.client = OllamaClient(base_url, model, context_tokens)
         self.workspace = workspace
         self.approve = approve
         self.logger = logger
@@ -462,9 +464,7 @@ class Agent:
                     if finished:
                         break
                     if len(messages) > 42:
-                        messages = [messages[0], {'role': 'user', 'content':
-                            'Ursprünglicher Auftrag: ' + goal + '\nLetzte protokollierte Aktion: '
-                            + checkpoint.get('last_result', '')[:1500]}] + messages[-26:]
+                        messages = compact_agent_history(messages, goal, checkpoint)
                     continue
                 text = (reply.get('content') or '').strip()
                 if coding_uncertain(text):
