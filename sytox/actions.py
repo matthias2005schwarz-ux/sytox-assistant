@@ -22,10 +22,17 @@ from .extensions import Registry
 from .gmail import GmailClient
 from .pc_control import WindowsDesktop
 from .web_search import search_web, format_results
+from .project_inspect import project_overview, search_project, read_project_lines
 
 
 TOOLS = [
     ('list_files','List files relative to the chosen project workspace.',{'path':('string','Relative directory, e.g. .')},['path']),
+    ('project_overview','Read-only: map source files, languages, likely entry points and tests in a large project. Dependency/build folders are skipped.',
+     {'path':('string','Relative project subdirectory; use . for the full workspace')},[]),
+    ('search_project','Read-only: search for a literal term across source files in the workspace, with path and line-number matches.',
+     {'query':('string','Exact phrase/function/symbol to find (case insensitive)'),'path':('string','Relative subdirectory to narrow search')},['query']),
+    ('read_file_lines','Read a specific 1-180-line window of a UTF-8 source file by line numbers.',
+     {'path':('string','Relative file path'),'start_line':('integer','First line, starting at 1'),'end_line':('integer','Last inclusive line, at most 180 lines total')},['path','start_line','end_line']),
     ('read_file','Read a UTF-8 file in the project workspace.',{'path':('string','Relative file path')},['path']),
     ('write_file','Create/replace a UTF-8 file inside the project workspace. Backups of edited files are made.',
      {'path':('string','Relative file path'),'content':('string','Complete file contents')},['path','content']),
@@ -185,7 +192,7 @@ class Toolkit:
             # Side effects (e.g. saved files or drafts) and actual reads count toward
             # a non-coding task; coding tasks additionally need post-write validation.
             evidence_tools = {
-                'read_file', 'write_file', 'run_command', 'remember', 'browser_visit', 'web_search',
+                'read_file', 'read_file_lines', 'write_file', 'run_command', 'remember', 'browser_visit', 'web_search',
                 'browser_read', 'browser_click', 'browser_type', 'pc_open_app',
                 'pc_inspect_window', 'pc_click_control',
                 'pc_type_text', 'pc_hotkey', 'pc_click', 'selfdev_prepare',
@@ -230,6 +237,15 @@ class Toolkit:
         for child in sorted(directory.iterdir())[:160]:
             entries.append(('DIR ' if child.is_dir() else 'FILE ')+child.name)
         return '\n'.join(entries) or '(leer)'
+
+    def action_project_overview(self,path='.'):
+        return project_overview(self.workspace, path)
+
+    def action_search_project(self,query,path='.'):
+        return search_project(self.workspace, query, path)
+
+    def action_read_file_lines(self,path,start_line=1,end_line=100):
+        return read_project_lines(self.workspace, path, start_line, end_line)
 
     def action_read_file(self,path):
         p=self._path(path)
