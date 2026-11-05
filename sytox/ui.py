@@ -23,6 +23,8 @@ from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
+from .place_queries import place_from_message
+from .place_view import InstantStreetViewPanel
 from .parallel_chat import ParallelChatDialog
 from .updater import (check_for_update, download_verified_installer, is_installed_app,
                       schedule_installer, RELEASES_PAGE)
@@ -984,9 +986,9 @@ class MainWindow(QMainWindow):
         titles.addWidget(self.chat_heading)
         th.addLayout(titles)
         th.addStretch(1)
-        self.focus_btn = QPushButton('Fokusmodus')
+        self.focus_btn = QPushButton('☰')
         self.focus_btn.setObjectName('panelToggle')
-        self.focus_btn.setAccessibleName('Steuerzentrale ein- oder ausblenden')
+        self.focus_btn.setAccessibleName('Rechte Leiste mit Steuerzentrale und Street View öffnen oder schließen')
         self.focus_btn.setCheckable(True)
         self.focus_btn.setToolTip('Steuerzentrale ausblenden (Strg+Umschalt+F)')
         self.focus_btn.clicked.connect(self.toggle_focus_mode)
@@ -1076,10 +1078,13 @@ class MainWindow(QMainWindow):
         right_column = QVBoxLayout(right)
         right_column.setContentsMargins(12, 13, 12, 13)
         right_column.setSpacing(0)
-        tools_heading = QLabel('STEUERZENTRALE')
+        tools_heading = QLabel('RECHTE LEISTE  /  STEUERZENTRALE')
         tools_heading.setObjectName('sectionTitle')
         right_column.addWidget(tools_heading)
         right_column.addSpacing(14)
+        self.place_panel = InstantStreetViewPanel(right)
+        self.place_panel.dismissed.connect(self.hide_place_panel)
+        right_column.addWidget(self.place_panel)
         side_scroll = QScrollArea()
         side_scroll.setWidgetResizable(True)
         side_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1204,7 +1209,7 @@ class MainWindow(QMainWindow):
             self._utility_last_width = max(268, self.utility_panel.width())
         self.focus_btn.setChecked(checked)
         self.utility_panel.setVisible(not checked)
-        self.focus_btn.setText('Steuerzentrale' if checked else 'Fokusmodus')
+        self.focus_btn.setText('☰')
         self.focus_btn.setToolTip(
             'Steuerzentrale einblenden (Strg+Umschalt+F)' if checked
             else 'Steuerzentrale ausblenden (Strg+Umschalt+F)'
@@ -1215,6 +1220,34 @@ class MainWindow(QMainWindow):
             center_width = max(450, self.splitter.width() - sidebar_width - panel_width - 2)
             self.splitter.setSizes([sidebar_width, center_width, panel_width])
         self.input.setFocus()
+
+
+    def hide_place_panel(self):
+        """Hide the place preview without changing the conversation."""
+        self.place_panel.hide()
+        sidebar_width = max(218, self.navigation_panel.width())
+        panel_width = 296
+        self.splitter.setSizes([
+            sidebar_width,
+            max(450, self.splitter.width() - sidebar_width - panel_width),
+            panel_width
+        ])
+
+    def offer_place_if_relevant(self, message):
+        """Recognize locations locally, without contacting a third-party."""
+        place = place_from_message(message)
+        if not place:
+            return
+        if not self.utility_panel.isVisible():
+            self.toggle_focus_mode(False)
+        self.place_panel.offer_location(place)
+        sidebar_width = max(218, self.navigation_panel.width())
+        panel_width = max(268, min(465, self.splitter.width() - sidebar_width - 420))
+        self.splitter.setSizes([
+            sidebar_width,
+            max(350, self.splitter.width() - sidebar_width - panel_width),
+            panel_width
+        ])
 
     def _animate_appearance(self, widget, duration=260):
         """A short non-blocking fade; never animate ongoing voice/agent tasks."""
@@ -1447,6 +1480,7 @@ class MainWindow(QMainWindow):
         txt=self.input.toPlainText().strip()
         if not txt:return
         intent = work_intent(txt)
+        self.offer_place_if_relevant(txt)
         if intent:
             self.input.clear()
             self.handle_work_control(intent, txt, spoken=False)

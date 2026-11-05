@@ -1,3 +1,11 @@
+# Entwicklungszweig: Instant Street View in der rechten Leiste
+
+SYTOX bietet eine ausklappbare rechte Leiste mit **Instant Street View**. Das Hamburger-Symbol ☰ rechts oben blendet die Leiste ein oder aus. Klare Ortsfragen wie „Wofür ist Wien bekannt?“ übernehmen den Ort in das Suchfeld. Mit „Ansicht laden“ kann die Website direkt im Windows-Programm geöffnet werden. „Im Browser“ öffnet denselben Ort im Standardbrowser.
+
+**Datenschutz:** Die Erkennung des Orts erfolgt lokal und löst keinen Netzaufruf aus. Erst beim Klick auf „Ansicht laden“ oder „Im Browser“ wird der eingegebene Ort an instantstreetview.com gesendet. Die Website nutzt Google-Street-View-Bilder und begrenzt die kostenlose präzise Autovervollständigung laut Anbieter auf 20 Anfragen pro Tag. Internet und Qt WebEngine sind für die Einbettung erforderlich. Wenn die Website im eingebetteten Browser nicht funktioniert, bleibt der externe Browser als Ausweichlösung. Ein eigener Google-Maps-API-Schlüssel ist nicht erforderlich. Die Funktion muss noch auf einem echten Windows-PC getestet werden und ist noch **kein veröffentlichtes Update**.
+
+---
+
 # SYTOX Assistant 0.3.8 – lokales Langzeitgedächtnis
 
 Das Gedächtnis speichert nachvollziehbare, ausgewählte Fakten aus **Nutzernachrichten** lokal in der vorhandenen SQLite-Datei. Es ist ein regelbasierter Anfang, kein perfektes semantisches Verständnis und kein selbständiges Training des KI-Modells.
