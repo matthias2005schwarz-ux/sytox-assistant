@@ -53,6 +53,16 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.assertIn('kein Bildschirmzugriff', self.window.screen_state.text())
         self.assertIn('Bildschirm aus', self.window.screen_active_chip.text())
 
+    def test_switching_chat_automatically_ends_screen_session(self):
+        from PySide6.QtWidgets import QMessageBox
+        with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.Yes):
+            self.window.enable_screen()
+        self.assertTrue(self.window.screen_enabled)
+        next_chat = self.window.store.create_chat()
+        self.window.select_chat(next_chat)
+        self.assertFalse(self.window.screen_enabled)
+        self.assertIn('Bildschirm aus', self.window.screen_active_chip.text())
+
     def test_revoked_share_discards_late_screen_answer(self):
         from PySide6.QtWidgets import QMessageBox, QFrame
         with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.Yes):
