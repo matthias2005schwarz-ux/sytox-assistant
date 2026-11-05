@@ -1,3 +1,16 @@
+# Automatische Modelloptimierung für Qwen3-Coder 30B (Entwicklungszweig)
+
+SYTOX passt die Ollama-Kontextgröße im **automatischen Modus** an die gemessene Hardware an. Das geschieht beim Start eines Modellauftrags, ohne tägliche/monatliche Nachrichtenlimits und ohne Herunterladen oder Austauschen des ausgewählten Modells.
+
+- **Erkennung:** Über `psutil` werden Gesamt-RAM und verfügbarer RAM geprüft. Auf NVIDIA-Systemen wird, falls installiert, die Gesamtgröße des GPU-Speichers über `nvidia-smi` mit festen, begrenzten Argumenten ausgelesen; unbekannte GPU- oder RAM-Werte werden als unbekannt dargestellt. AMD-GPUs können in der Leistungszentrale anhand der Windows-Geräteerkennung angezeigt werden, ihr freier VRAM ist derzeit nicht zuverlässig messbar.
+- **Kontextwahl:** Für Qwen3-Coder 30B empfiehlt die Automatik konservativ 4.096, 8.192, 16.384 oder unter günstigen Bedingungen 32.768 Tokens. Die Ausgabegrenze skaliert wie bisher mit dem Kontext. Bei ungefähr 16 GB RAM erscheint eine ausdrückliche Warnung: Das ca. 19 GB große Modell plus zusätzlicher Laufzeitspeicher kann damit möglicherweise gar nicht laufen. **Eine kleinere Kontextgröße allein löst zu wenig Speicher nicht.**
+- **Modellgröße:** Die Leistungszentrale liest die tatsächliche Dateigröße eines schon installierten Modells nur über die lokale Ollama-API `/api/tags`. Wenn sie nicht verfügbar ist, wird eine Schätzung angezeigt. Es erfolgt kein Netzwerkzugriff auf fremde Server für diese Prüfung.
+- **Manuelle Kontrolle:** In den Einstellungen bleibt jede ausgewählte feste Größe (4K, 8K, 16K, 32K) verbindlich. Wer `Automatisch` wählt, sieht die RAM-basierte Empfehlung und kann jederzeit umstellen. Bestehende Einstellungen bleiben erhalten.
+- **Stabilität:** Die automatische Hardware-Empfehlung wird pro OllamaClient-Auftrag einmal ermittelt und für die Anfrage-/Verlaufsbudgetierung wiederverwendet. Das verhindert sprunghafte Kontextwechsel innerhalb eines einzigen lang laufenden Programmierauftrags.
+- **Grenzen:** Heuristik und grobe RAM-Werte können die echte Geschwindigkeit, GPU-Offloading, AMD-VRAM, Windows-Auslagerungsdatei, Ollama-KV-Cache und gleichzeitige andere Programme nicht exakt vorhersagen. Qwen3-Coder 30B wurde weiterhin nicht auf dem Nutzer-PC ausgeführt; praktische Messungen sind nach dem Modell-Download erforderlich. Es wird noch **kein Installer** veröffentlicht.
+
+---
+
 # Kontextverwaltung 2.0 (große Programmierprojekte, Entwicklungszweig)
 
 **Neu – aufgabenbezogene Datei-Auswahl:** Nach der bereits vorhandenen lokalen Projektindex-Aktualisierung bewertet SYTOX relevante Dateinamen, Klassen, Funktionen und Methoden zur jeweiligen Programmieraufgabe. CamelCase und snake_case werden getrennt erkannt; statt wahllos ganze Projektordner in einen Modellaufruf zu packen, sieht das Modell zuerst eine kurze priorisierte Projektkarte.
