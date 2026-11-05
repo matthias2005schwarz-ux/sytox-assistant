@@ -20,6 +20,7 @@ from .context_planner import project_focus_map
 from .specialists import specialist_messages, specialist_summary
 from .model_runtime import (ollama_generation_options, compact_agent_history,
                             history_character_budget)
+from .model_autotune import probe_hardware, recommend_context
 from .tool_protocol import normalize_tool_calls, ToolProtocolError
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
@@ -72,6 +73,19 @@ class OllamaClient:
         self.url = url.rstrip('/')
         self.model = model
         self.context_tokens = context_tokens
+        self._auto_hardware = None
+        self._effective_context = None
+
+    @property
+    def effective_context_tokens(self):
+        """A fixed auto recommendation per client/task; manual setting wins."""
+        if self.context_tokens not in (None, 0):
+            return self.context_tokens
+        if self._effective_context is None:
+            self._auto_hardware = probe_hardware()
+            recommendation = recommend_context(self.model, self._auto_hardware)
+            self._effective_context = recommendation.context_tokens
+        return self._effective_context
 
     def installed(self):
         resp = requests.get(self.url + '/api/tags', timeout=6)
@@ -80,7 +94,7 @@ class OllamaClient:
 
     def chat(self, messages, tools=None, stop=None):
         payload = {'model': self.model, 'messages': messages, 'stream': True,
-                   'options': ollama_generation_options(self.model, self.context_tokens)}
+                   'options': ollama_generation_options(self.model, self.effective_context_tokens)}
         if tools:
             payload['tools'] = tools
         try:
@@ -321,7 +335,7 @@ class Agent:
                     'den konkreten Blocker melden.')
         steps, idle = previous_steps, 0
         context_budget = history_character_budget(self.client.model,
-                                                  self.client.context_tokens)
+                                                  self.client.effective_context_tokens)
         model_failures = 0
         tool_format_failures = 0
         last_calls = []  # Detect repeatedly identical tool requests, not legitimate iterative edits.
