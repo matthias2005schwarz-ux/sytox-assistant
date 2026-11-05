@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from sytox.project_memory import (
     update_project_memory, lookup_project_memory, _index_path,
@@ -56,6 +58,27 @@ class ProjectMemoryTests(unittest.TestCase):
         fresh = lookup_project_memory(self.workspace, "changed_name", data_dir=self.data)
         self.assertIn("changed_name", fresh)
         self.assertNotIn("VERALTET", fresh)
+
+    def test_agent_automatically_refreshes_index_for_coding(self):
+        from sytox.agent import Agent
+        from sytox.storage import Store
+        with patch("sytox.project_memory.default_data_dir", return_value=self.data):
+            store = Store(self.data / "assistant.sqlite")
+            cid = store.create_chat()
+            store.add_message(cid, "user", "Programmiere main.py")
+            agent = Agent(store, "mock", "http://localhost:11434",
+                          str(self.workspace), lambda *_: True,
+                          lambda *_: None, threading.Event())
+            agent.client.chat = MagicMock(return_value={
+                "role": "assistant", "content": "",
+                "tool_calls": [{"function": {"name": "report_blocker",
+                                             "arguments": {"reason": "Tests stehen aus."}}}]
+            })
+            result = agent.run(cid, "until_done")
+        self.assertEqual(result["status"], "paused")
+        memory_path = _index_path(self.workspace, self.data)
+        self.assertTrue(memory_path.is_file())
+        self.assertIn("MyApp", memory_path.read_text())
 
     def test_tools_are_declared(self):
         names = {tool["function"]["name"] for tool in tool_schema()}
