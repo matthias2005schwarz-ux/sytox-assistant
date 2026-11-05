@@ -1421,6 +1421,12 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self,'Sprachmodell',
                     'Der Download wird noch beendet. Bitte gleich erneut versuchen.')
                 return
+        self.disable_screen()
+        if self.screen_worker and self.screen_worker.isRunning():
+            if not self.screen_worker.wait(2500):
+                QMessageBox.information(self, 'Bildschirmhilfe',
+                    'Lokale Bildanalyse wird beendet. Bitte gleich erneut versuchen.')
+                return
         self.stop_speech()
         if self.parallel_chat and not self.parallel_chat.stop_reply():
             QMessageBox.information(self, 'Nebenunterhaltung',
@@ -1542,6 +1548,111 @@ class MainWindow(QMainWindow):
         if kind in ('Status','Aktion'):
             self._agent_last_status = str(text)[:130]
             self.state.setText(('● ' if kind=='Status' else '◆ ')+str(text)[:80])
+
+    def _screen_state_changed(self):
+        if not self.screen_enabled:
+            self.screen_state.setText('Aus · kein Bildschirmzugriff')
+        else:
+            self.screen_state.setText('AKTIV · Hauptbildschirm wird nur auf Nachfrage erfasst')
+        self.screen_enable_btn.setEnabled(not self.screen_enabled)
+        self.screen_analyze_btn.setEnabled(self.screen_enabled)
+        self.screen_stop_btn.setEnabled(self.screen_enabled)
+
+    def enable_screen(self, question='', spoken=False):
+        """Enable only after a visible human confirmation; never start at boot."""
+        if not self.screen_enabled:
+            model = self.config.get('vision_model', DEFAULT_VISION_MODEL)
+            if QMessageBox.question(
+                self, 'Bildschirmfreigabe für SYTOX',
+                'SYTOX darf auf deinen ausdrücklichen Wunsch einen Screenshot des '
+                'Hauptbildschirms an das lokale Bildmodell „' + model + '“ schicken.\n\n'
+                'Screenshots werden weder gespeichert noch protokolliert. '
+                'Bei jeder Bildschirmfrage wird ein neues Einzelbild erstellt. '
+                'Deaktiviere die Freigabe jederzeit per Button oder Sprachbefehl.\n\n'
+                'Bitte schließe zuvor Passwörter, private Nachrichten und andere '
+                'vertrauliche Inhalte. Jetzt freigeben?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            ) != QMessageBox.Yes:
+                self.log('Bildschirm', 'Freigabe abgelehnt.')
+                return
+            self.screen_enabled = True
+            self.screen_generation += 1
+            self._screen_state_changed()
+            self.log('Bildschirm', 'Freigabe aktiv. Kein automatischer Dauerstream.')
+        if question:
+            self.analyze_screen(question, spoken=spoken)
+
+    def disable_screen(self, spoken=False):
+        """Revoke permission immediately; invalidate all pending result callbacks."""
+        self.screen_enabled = False
+        self.screen_generation += 1
+        if self.screen_worker and self.screen_worker.isRunning():
+            self.screen_worker.cancel_event.set()
+        self._screen_state_changed()
+        self.log('Bildschirm', 'Freigabe aus. Ausstehende Auswertung verworfen.')
+        if spoken and self.listener and self.listener.isRunning():
+            self.start_speech('Okay, ich schaue nicht mehr auf deinen Bildschirm.')
+
+    def analyze_screen(self, question, spoken=False):
+        """Capture on Qt GUI thread; ship bytes directly to the local worker."""
+        if not self.screen_enabled:
+            return
+        if self.screen_worker and self.screen_worker.isRunning():
+            self.log('Bildschirm', 'Eine Analyse läuft bereits. Bitte kurz warten.')
+            return
+        try:
+            from PySide6.QtGui import QGuiApplication
+            screen = QGuiApplication.primaryScreen()
+            if screen is None:
+                raise RuntimeError('Kein aktiver Hauptbildschirm verfügbar.')
+            pixmap = screen.grabWindow(0)
+            if pixmap.isNull():
+                raise RuntimeError('Bildschirmaufnahme fehlgeschlagen.')
+            if pixmap.width() > 2048:
+                pixmap = pixmap.scaledToWidth(2048, Qt.SmoothTransformation)
+            buffer = QBuffer()
+            if not buffer.open(QIODevice.WriteOnly):
+                raise RuntimeError('Screenshot-Speicher nicht verfügbar.')
+            if not pixmap.save(buffer, 'PNG'):
+                raise RuntimeError('Screenshot konnte nicht als PNG verarbeitet werden.')
+            png = bytes(buffer.data())
+            buffer.close()
+            if len(png) > MAX_SCREENSHOT_BYTES:
+                raise RuntimeError('Screenshot ist zu groß. Bitte Bildschirmauflösung reduzieren.')
+        except Exception as exc:
+            self.log('Bildschirm', str(exc))
+            QMessageBox.warning(self, 'Bildschirmhilfe', str(exc))
+            return
+        generation = self.screen_generation
+        self.screen_state.setText('AKTIV · lokales Bildmodell analysiert Einzelbild …')
+        worker = ScreenAnalysisWorker(png, question, self.config['ollama_url'],
+                                      self.config.get('vision_model', DEFAULT_VISION_MODEL),
+                                      generation, self)
+        self.screen_worker = worker
+        worker.completed.connect(self._screen_analysis_completed)
+        worker.finished.connect(lambda w=worker: self._screen_analysis_finished(w))
+        worker.start()
+
+    def _screen_analysis_completed(self, generation, success, message):
+        if not self.screen_enabled or generation != self.screen_generation:
+            return
+        if success:
+            # Deliberately do not save screen-derived text to the chat DB.
+            self.add_bubble('assistant', 'BILDSCHIRMHILFE · nicht gespeichert\n' + message)
+            if self.listener and self.listener.isRunning():
+                self.start_speech(message)
+        else:
+            self.log('Bildschirm', 'Lokale Bildanalyse fehlgeschlagen.')
+            self.add_bubble('assistant', 'Bildschirmanalyse fehlgeschlagen: ' + message +
+                            '\nBildmodell installieren, z. B. ollama pull ' +
+                            self.config.get('vision_model', DEFAULT_VISION_MODEL))
+        self._screen_state_changed()
+
+    def _screen_analysis_finished(self, worker):
+        if self.screen_worker is worker:
+            self.screen_worker = None
+        worker.deleteLater()
+        self._screen_state_changed()
 
     def send(self):
         txt=self.input.toPlainText().strip()
