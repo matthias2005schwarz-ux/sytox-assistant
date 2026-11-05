@@ -1,10 +1,12 @@
-# In Entwicklung: Programme mit überprüftem Windows-EXE-Build
+# SYTOX Assistant 0.3.6: verifizierte lokale Windows-Programm-Builds
 
-- **Projektprüfung:** Das Agent-Werkzeug project_build_plan erkennt einfache C#-, Go-, Rust- und Python-Projekte und zeigt den erwarteten EXE-Pfad. Bei Mehrdeutigkeit bricht es ab.
-- **Bauen mit Zustimmung:** project_build führt erst nach ausdrücklicher Freigabe den ausgewählten Windows-Compiler aus. Builds können beliebigen Projektcode ausführen und Abhängigkeiten nachladen.
-- **Binärdatei statt Erfolgstext:** Nur nach erfolgreichem Build und Prüfung einer echten Windows-x64-PE-Datei mit SHA-256 wird eine Build-Quittung erzeugt. Der Agent soll eine angeforderte EXE ohne diese Nachweise nicht als fertig melden.
-- **Grenzen:** Ein gültiger PE-Header beweist nicht, dass das Programm läuft. Es wird kein Installer erstellt. C++-, Java- und komplexe Projekte haben noch keinen Build-Plan. Python benötigt separat PyInstaller.
-- **Verifikation:** Neue automatisierte Regressionstests; echte Compiler und Programme müssen auf dem Anwender-PC erprobt werden. Noch kein neues Release aus diesem Entwicklungsstand.
+- **Programme entwickeln:** Der Agent kann im gewählten Projektordner Dateien erstellen, bearbeiten und nach Tests weiterentwickeln. Die erzeugte EXE wird erst nach einem tatsächlich erfolgreich ausgeführten Compiler-Build als fertig anerkannt.
+- **Unterstützte einfache Projekte:** Python (main.py/app.py + PyInstaller), C# (ein .csproj + .NET SDK), Go (go.mod) und Rust (Cargo.toml). Bei Mehrdeutigkeit oder unbekannten Projektstrukturen wird kein Erfolg behauptet.
+- **Sichere Freigabe:** Vor jedem Projekt-Build ist eine ausdrückliche Zustimmung erforderlich; ohne sie wird kein Build-Code ausgeführt. Toolchain-Installationen werden separat bestätigt.
+- **Echte Ausgabeprüfung:** Die .exe muss neu erzeugt worden sein, Windows-PE-x64-Header und Dateigröße bestehen und einen SHA-256-Prüfwert erhalten. Änderungen nach dem Build machen den Nachweis ungültig.
+- **Reale Windows-Build-Verifikation:** Der Windows-CI-Lauf baut mit dem realen SDK/Compiler je ein kleines Python-, C#-, Go- und Rust-Programm, prüft dessen PE-Header/SHA-256 und **startet die erzeugte EXE**, um die tatsächliche Programmausgabe zu kontrollieren. Ein grüner CI-Lauf ist Voraussetzung für die offizielle Veröffentlichung.
+- **Installer von SYTOX selbst:** Windows-EXE/Installer werden gebaut, gestartet, installiert und deinstalliert; gespeicherte Nutzerdaten werden beim Entfernen geprüft. Ein Installer *für beliebige vom Agenten erstellte Projekte* ist dagegen noch keine automatische Funktion.
+- **Weiterhin Grenzen:** EXE-Header und Smoke-Tests beweisen keine fehlerfreie komplexe Anwendung. C++, Java und umfangreiche Multi-Projekt-Builds benötigen projektspezifische Schritte. Bei PyInstaller `--onedir` muss der gesamte Ausgabeverzeichnisinhalt verteilt werden, nicht nur die EXE. Für lokale Builds benötigt der Nutzer die jeweils passenden Compiler/Abhängigkeiten.
 
 ---
 # Entwicklungsstand: Automatische Webrecherche (noch kein Release)
