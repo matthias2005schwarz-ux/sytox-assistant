@@ -33,6 +33,19 @@ def _within_workspace(root: Path, path: Path) -> Path:
     return result
 
 
+def _python_command() -> str | None:
+    """Choose a real Python executable, not the Microsoft Store placeholder.
+
+    'python' is preferred over the py launcher to honour a selected project
+    environment and its installed PyInstaller dependencies.
+    """
+    for name in ('python', 'py'):
+        executable = shutil.which(name)
+        if executable and 'windowsapps' not in executable.lower():
+            return executable
+    return None
+
+
 def build_plan(workspace: Path) -> dict:
     """Generate fixed, reproducible commands for an unambiguous Windows project."""
     root = Path(workspace).resolve()
@@ -66,7 +79,7 @@ def build_plan(workspace: Path) -> dict:
         expected = 'target/release/' + name + '.exe'
     elif (root / 'main.py').is_file() and not (root / 'main.py').is_symlink():
         language = 'python'
-        python = shutil.which('py') or shutil.which('python')
+        python = _python_command()
         if not python:
             raise RuntimeError('Python fehlt. Erst toolchain_inspect aufrufen.')
         command = [python, '-m', 'PyInstaller', '--noconfirm', '--onedir',
@@ -75,7 +88,7 @@ def build_plan(workspace: Path) -> dict:
         expected = 'build_output/SYTOX_Program/SYTOX_Program.exe'
     elif (root / 'app.py').is_file() and not (root / 'app.py').is_symlink():
         language = 'python'
-        python = shutil.which('py') or shutil.which('python')
+        python = _python_command()
         if not python:
             raise RuntimeError('Python fehlt. Erst toolchain_inspect aufrufen.')
         command = [python, '-m', 'PyInstaller', '--noconfirm', '--onedir',
