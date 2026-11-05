@@ -64,7 +64,7 @@ class WindowsInstallerTimeoutTests(unittest.TestCase):
 
     def test_ci_has_explicit_timeout_and_preserves_release_artifact(self):
         workflow = content('.github/workflows/windows-ci.yml')
-        self.assertIn('timeout-minutes: 55', workflow)
+        self.assertIn('timeout-minutes: 80', workflow)
         self.assertIn('actions/upload-artifact@v4', workflow)
         self.assertIn('SYTOX_Assistant_Setup_0.3.6.exe', workflow)
 
