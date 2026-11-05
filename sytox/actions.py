@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .toolchains import canonical_language, propose, status, TOOLCHAINS
-from .program_build import build_plan, inspect_windows_executable
+from .program_build import build_plan, inspect_build_artifact
 from .storage import default_data_dir
 from .selfdev import SelfDevelopment
 from .extensions import Registry
@@ -31,8 +31,8 @@ TOOLS = [
      {'path':('string','Relative file path'),'content':('string','Complete file contents')},['path','content']),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
-    ('project_build_plan','Read-only: show a deterministic Windows EXE build command and expected output for the project.',{},[]),
-    ('project_build','Build a Windows x64 executable from a supported project. Always requires explicit approval, verifies file format and SHA256; does not launch the EXE.',{},[]),
+    ('project_build_plan','Read-only: show deterministic Windows project build command, expected artifact and runtime dependencies.',{},[]),
+    ('project_build','Build a supported project with explicit approval; verify a native EXE, JVM artifact or checked script and SHA256, without launching it.',{},[]),
     ('toolchain_inspect','Read-only: recommend a language for a task, inspect project files and check installed developer tools. Never installs anything.',
      {'task':('string','Describe the program to build; may be empty to inspect the project')},[]),
     ('toolchain_install','Install ONE curated Windows compiler/SDK through winget. Always asks for explicit user approval of the exact package first.',
@@ -349,7 +349,7 @@ class Toolkit:
         verified = []
         for receipt in getattr(self, 'built_artifacts', []):
             try:
-                current = inspect_windows_executable(self.workspace, receipt['path'])
+                current = inspect_build_artifact(self.workspace, receipt['path'], receipt.get('artifact_kind', 'pe'))
                 if current['sha256'] == receipt['sha256']:
                     verified.append(current)
             except (OSError, ValueError):
@@ -357,23 +357,25 @@ class Toolkit:
         return verified
 
     def action_project_build(self):
-        """Execute an explicit Windows x64 build, then verify real output bytes."""
+        """Build or validate a supported project with per-build approval."""
         if platform.system() != 'Windows':
-            raise RuntimeError('Automatische EXE-Builds sind nur unter Windows verfügbar.')
+            raise RuntimeError('Automatische Projekt-Builds sind nur unter Windows verfügbar.')
         plan = build_plan(self.workspace)
         argv = plan['command']
+        expected_name = plan.get('expected_artifact', plan.get('expected_executable'))
+        kind = plan.get('artifact_kind', 'pe')
         self._request(
-            'Windows-EXE aus Projekt bauen',
-            'Dieser Build kann Projektcode ausführen und Dateien erzeugen. '
-            'Abhängigkeiten können heruntergeladen werden.\n\n'
+            'Windows-Projekt erstellen: ' + plan['language'],
+            'Ein Build kann Projektcode ausführen und Dateien erzeugen. '
+            'Abhängigkeiten können heruntergeladen werden.\\n\\n'
             + 'Befehl (ohne Shell): ' + subprocess.list2cmdline(argv)
-            + '\nErwartete EXE: ' + plan['expected_executable']
-            + '\nErst nach deiner Zustimmung wird der Build ausgeführt. '
-              'Die EXE wird danach geprüft, aber NICHT gestartet.'
+            + '\\nErwartetes Artefakt: ' + expected_name
+            + '\\nFormat: ' + kind
+            + '\\nNur nach Zustimmung wird der Build ausgeführt. '
+              'Die erzeugte Datei wird verifiziert, aber NICHT gestartet.'
         )
         self._check()
-        expected = self._path(plan['expected_executable'])
-        # Go does not automatically create the -o parent directory.
+        expected = self._path(expected_name)
         expected.parent.mkdir(parents=True, exist_ok=True)
         started_ns = time.time_ns()
         proc = None
@@ -396,19 +398,26 @@ class Toolkit:
                     continue
             if proc.returncode != 0:
                 raise RuntimeError('Compiler-Fehler (Exitcode ' + str(proc.returncode)
-                                   + '):\n' + output[-2500:])
-            receipt = inspect_windows_executable(self.workspace,
-                                                 plan['expected_executable'])
-            if expected.stat().st_mtime_ns + 2_000_000_000 < started_ns:
-                raise RuntimeError('EXE stammt von einem früheren Build. Kein neues Ergebnis.')
+                                   + '):\\n' + output[-2500:])
+            if plan.get('copy_after_validation'):
+                source = self._path(plan['copy_after_validation'])
+                if source.is_symlink() or not source.is_file():
+                    raise ValueError('Prüfquelle fehlt oder ist ein Link.')
+                shutil.copyfile(source, expected)
+            receipt = inspect_build_artifact(self.workspace, expected_name, kind)
+            if expected.stat().st_mtime_ns < started_ns:
+                raise RuntimeError('Ausgabe stammt aus einem früheren Build.')
             self._check()
             self.built_artifacts = [receipt]
             self.passed_checks += 1
             self.unvalidated_paths.clear()
-            return json.dumps({'build': 'compiled', 'command': argv,
-                               'artifact': receipt,
-                               'compiler_output_tail': output[-1200:]},
-                              ensure_ascii=False)
+            outcome = 'validated' if plan.get('copy_after_validation') else 'compiled'
+            return json.dumps({
+                'build': outcome, 'language': plan['language'],
+                'command': argv, 'artifact': receipt,
+                'runtime_command': plan.get('runtime_command'),
+                'compiler_output_tail': output[-1200:]},
+                ensure_ascii=False)
         finally:
             if proc is not None and proc.poll() is None:
                 proc.kill()
