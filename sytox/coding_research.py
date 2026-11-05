@@ -14,8 +14,8 @@ _OFFLINE = re.compile(
     r"without internet|do not browse)\b", re.I)
 
 _LANGUAGES = (
-    (r"\bc\+\+\b|\b(?:g\+\+|clang\+\+|cpp|cmake)\b|\.cpp\b|\.hpp\b", "C++"),
-    (r"\bc#\b|\b(?:csharp|dotnet|msbuild)\b|\.csproj\b|\.cs\b", "C#"),
+    (r"\bc\+\+(?!\w)|\b(?:g\+\+|clang\+\+|cpp|cmake)\b|\.cpp\b|\.hpp\b", "C++"),
+    (r"\bc#(?!\w)|\b(?:csharp|dotnet|msbuild)\b|\.csproj\b|\.cs\b", "C#"),
     (r"\b(?:typescript|tsc|ts\d{4})\b|\.tsx?\b", "TypeScript"),
     (r"\b(?:javascript|node\.?js|npm)\b|\.jsx?\b", "JavaScript"),
     (r"\b(?:python|pytest|pyinstaller|pip|traceback)\b|\.py\b", "Python"),
