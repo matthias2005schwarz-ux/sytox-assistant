@@ -146,7 +146,8 @@ class AgentToolProtocolTests(unittest.TestCase):
         ])
         agent = self.agent([large, {"role": "assistant", "content": "Nicht ausgeführt."}])
         result = agent.run(self.cid, "once")
-        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["status"], "paused")
+        self.assertIn("nicht ausgeführt", result["content"].lower())
         self.assertEqual(list(self.workspace.glob("*.py")), [])
 
     def test_valid_batch_executes_all_and_returns_results_to_model(self):
