@@ -119,6 +119,25 @@ class FocusedCodeContextTests(unittest.TestCase):
         tool = schema["project_context_bundle"]["function"]["parameters"]
         self.assertEqual(tool["required"], ["query"])
 
+    def test_agent_receives_file_focus_without_full_source_text(self):
+        from sytox.agent import Agent
+        store = Store(self.data / "agent.sqlite")
+        chat = store.create_chat()
+        store.add_message(chat, "user", "Programmiere PaymentProcessor refund_order")
+        agent = Agent(store, "qwen3-coder:30b", "http://localhost:11434",
+                      self.workspace, lambda *_: True,
+                      lambda *_: None, threading.Event())
+        agent.client.chat = MagicMock(return_value={
+            "role": "assistant", "content": "Ich muss zuerst den aktuellen Code prüfen."
+        })
+        with patch("sytox.project_memory.default_data_dir", return_value=self.data):
+            agent.run(chat, "once")
+        sent = agent.client.chat.call_args.args[0]
+        prompt = sent[0]["content"]
+        self.assertIn("Priorisierter Projektfokus", prompt)
+        self.assertIn("payments.py", prompt)
+        self.assertNotIn("return amount", prompt)
+
     def test_tool_uses_existing_workspace_without_saving_code(self):
         store = Store(self.data / "assistant.sqlite")
         toolkit = Toolkit(store, self.workspace, lambda *_: True, threading.Event())
