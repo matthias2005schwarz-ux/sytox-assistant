@@ -10,6 +10,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .memory_engine import extract_facts, tokens, is_continuation_request
+
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
@@ -61,6 +63,17 @@ class Store:
             CREATE TABLE IF NOT EXISTS journal(
               id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, event TEXT NOT NULL,
               details TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS memory_facts(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              scope TEXT NOT NULL, fact_key TEXT NOT NULL,
+              content TEXT NOT NULL, kind TEXT NOT NULL,
+              source_chat_id TEXT NOT NULL,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              UNIQUE(scope, fact_key));
+            CREATE INDEX IF NOT EXISTS idx_memory_facts_updated
+              ON memory_facts(updated_at DESC);
+            CREATE TABLE IF NOT EXISTS preferences(
+              key TEXT PRIMARY KEY, value TEXT NOT NULL);
             ''')
             try:
                 db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(content, chat_id UNINDEXED)')
@@ -85,6 +98,7 @@ class Store:
     def delete_chat(self, cid):
         with self._lock, self._connect() as db:
             db.execute('DELETE FROM message_search WHERE chat_id=?', (cid,)) if self._fts_available(db,'message_search') else None
+            db.execute('DELETE FROM memory_facts WHERE source_chat_id=?',(cid,))
             db.execute('DELETE FROM messages WHERE chat_id=?',(cid,))
             db.execute('DELETE FROM tasks WHERE chat_id=?',(cid,))
             db.execute('DELETE FROM chats WHERE id=?',(cid,))
@@ -99,6 +113,21 @@ class Store:
             if self._fts_available(db,'message_search'):
                 db.execute('INSERT INTO message_search(content,chat_id) VALUES(?,?)', (content,cid))
             db.execute('UPDATE chats SET updated_at=? WHERE id=?',(now(),cid))
+            if role == 'user':
+                enabled = db.execute("SELECT value FROM preferences WHERE key='auto_memory'").fetchone()
+                if enabled is None or enabled['value'] == '1':
+                    for fact in extract_facts(content):
+                        moment = now()
+                        db.execute('''INSERT INTO memory_facts
+                            (scope,fact_key,content,kind,source_chat_id,created_at,updated_at)
+                            VALUES (?,?,?,?,?,?,?)
+                            ON CONFLICT(scope,fact_key) DO UPDATE SET
+                              content=excluded.content,kind=excluded.kind,
+                              source_chat_id=excluded.source_chat_id,
+                              updated_at=excluded.updated_at
+                            WHERE content != excluded.content''',
+                            (fact['scope'],fact['fact_key'],fact['content'],
+                             fact['kind'],cid,moment,moment))
             return cur.lastrowid
 
     def messages(self, cid, limit=200):
@@ -127,6 +156,77 @@ class Store:
             if self._fts_available(db,'memory_search'):
                 db.execute('DELETE FROM memory_search WHERE memory_id=?',(str(mid),))
 
+    def auto_memory_enabled(self):
+        with self._connect() as db:
+            row = db.execute("SELECT value FROM preferences WHERE key='auto_memory'").fetchone()
+            return row is None or row['value'] == '1'
+
+    def set_auto_memory_enabled(self, enabled):
+        with self._lock, self._connect() as db:
+            db.execute('''INSERT INTO preferences(key,value) VALUES('auto_memory',?)
+                       ON CONFLICT(key) DO UPDATE SET value=excluded.value''',
+                       ('1' if enabled else '0',))
+
+    def list_memory_facts(self, limit=500):
+        with self._connect() as db:
+            return [dict(r) for r in db.execute(
+                'SELECT * FROM memory_facts ORDER BY updated_at DESC,id DESC LIMIT ?',
+                (max(1,min(int(limit),500)),))]
+
+    def delete_memory_fact(self, fact_id):
+        with self._lock, self._connect() as db:
+            db.execute('DELETE FROM memory_facts WHERE id=?',(int(fact_id),))
+
+    def update_memory_fact(self, fact_id, content):
+        """Manual edits never inherit a claim of automated verification."""
+        content = str(content).strip()[:350]
+        if not content:
+            raise ValueError('Erinnerung darf nicht leer sein.')
+        with self._lock, self._connect() as db:
+            db.execute('UPDATE memory_facts SET content=?,kind=?,updated_at=? WHERE id=?',
+                       (content,'edited',now(),int(fact_id)))
+
+    def recent_project_context(self, query, exclude_task_id=None, limit=2):
+        """Summaries of actual stored tasks, not model guesses about progress."""
+        if not is_continuation_request(query):
+            return []
+        terms=set(tokens(query))
+        with self._connect() as db:
+            tasks=db.execute('''SELECT id, goal, status, checkpoint, updated_at
+                 FROM tasks WHERE status IN ('paused','failed','time_elapsed','done')
+                 ORDER BY updated_at DESC LIMIT 70''').fetchall()
+        results=[]
+        for t in tasks:
+            if t['id'] == exclude_task_id:
+                continue
+            matches=set(tokens(t['goal'])) & terms
+            generic=bool(re.search(
+                r'(?i)\b(?:letztes?\s+projekt|vorherig\w*\s+projekt|wo\s+waren\s+wir)\b',
+                str(query or '')))
+            if len(terms)>2 and not matches and not generic:
+                continue
+            try:
+                checkpoint=json.loads(t['checkpoint'] or '{}')
+                if not isinstance(checkpoint,dict):
+                    checkpoint={}
+            except (TypeError, ValueError):
+                checkpoint={}
+            notes=checkpoint.get('progress_notes',[])
+            if not isinstance(notes,list):
+                notes=[]
+            results.append({
+                'source':'Projektverlauf ('+t['status']+')',
+                'content':('Auftrag: '+t['goal'][:450]+
+                  '\nZuletzt gespeichert: '+str(t['updated_at'])+
+                  '\nLetzter Statusbericht (unverifiziert): '+
+                  str(checkpoint.get('last_result',''))[:500]+
+                  '\nNotizen (unverifiziert): '+
+                  json.dumps(notes[-2:],ensure_ascii=False)[:650])
+            })
+            if len(results)>=limit:
+                break
+        return results
+
     def related_context(self, query, exclude_chat=None, limit=6):
         """Cross-chat recall; this is lexical FTS, not perfect semantic memory."""
         tokens=re.findall(r'[^\W_]{3,}',query,flags=re.UNICODE)[:8]
@@ -134,6 +234,23 @@ class Store:
         expr=' OR '.join('"'+t.replace('"','')+'"' for t in tokens)
         results=[]
         with self._connect() as db:
+            # Newest per-topic facts take precedence over older chat snippets.
+            term_set=set(tokens(query))
+            matching=[]
+            for fact in db.execute(
+                    'SELECT * FROM memory_facts ORDER BY updated_at DESC LIMIT 450'):
+                content_terms=set(tokens(fact['content']))
+                overlap=len(term_set & content_terms)
+                scope=fact['scope']
+                if scope.startswith('project:') and scope[8:] in str(query).casefold():
+                    overlap+=3
+                # Preferences apply across chats; other facts require relevance.
+                if overlap or (scope=='global' and fact['kind']=='explicit'):
+                    matching.append((overlap,fact))
+            matching.sort(key=lambda pair:pair[0],reverse=True)
+            for score,fact in matching[:6]:
+                results.append({'source':'Langzeitgedächtnis '+fact['scope'],
+                                'content':fact['content'][:350]})
             if self._fts_available(db,'message_search'):
                 try:
                     rows=db.execute('''SELECT content,chat_id FROM message_search
