@@ -37,9 +37,10 @@ TOOLCHAINS: dict[str, Toolchain] = {
     "go": Toolchain("Go", (("go",),), "GoLang.Go"),
     "rust": Toolchain("Rust", (("rustc",), ("cargo",)), "Rustlang.Rustup",
                       "Nach rustup können noch Rust-Toolchains bzw. C++ Build Tools nötig sein."),
-    "php": Toolchain("PHP", (("php",),)),
-    "lua": Toolchain("Lua", (("lua",),)),
-    "kotlin": Toolchain("Kotlin", (("kotlinc",), ("javac",))),
+    "php": Toolchain("PHP", (("php",),), "PHP.PHP.8.4"),
+    "lua": Toolchain("Lua", (("lua",), ("luac",)), "DEVCOM.Lua"),
+    "kotlin": Toolchain("Kotlin", (("kotlinc",), ("java",)), None,
+                         "Kotlin-Compiler laut Hersteller als offizielles ZIP installieren; keine geprüfte winget-ID."),
 }
 
 ALIASES = {

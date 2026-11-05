@@ -13,6 +13,7 @@ import struct
 from pathlib import Path
 
 from .toolchains import project_language
+from .multilang_build import extra_plan, check_artifact
 
 
 def needs_compiled_artifact(task: str) -> str:
@@ -96,11 +97,14 @@ def build_plan(workspace: Path) -> dict:
                    '--specpath', 'build_work', '--name', 'SYTOX_Program', 'app.py']
         expected = 'build_output/SYTOX_Program/SYTOX_Program.exe'
     else:
+        extended = extra_plan(root)
+        if extended is not None:
+            return extended
         detected = project_language(root)
         raise ValueError(
-            'Für diese Projektstruktur gibt es noch keinen automatischen Windows-EXE-Build. '
-            f'Erkannt: {detected or "unbekannt"}. Bestehende Compilerbefehle '
-            'können mit run_command nach Freigabe ausgeführt werden.')
+            'Für diese Projektstruktur gibt es noch keinen automatisierten Einzelprojekt-Build. '
+            f'Erkannt: {detected or "unbekannt"}. Komplexere Projekte benötigen '
+            'projektspezifische Compilerbefehle und Tests.')
 
     output = _within_workspace(root, root / expected)
     return {
@@ -151,3 +155,11 @@ def inspect_windows_executable(workspace: Path, relative_path: str) -> dict:
         'runtime_tested': False,
         'note': 'Datei und PE-Header geprüft, aber nicht gestartet oder funktional getestet.',
     }
+
+def inspect_build_artifact(workspace: Path, relative_path: str, kind='pe') -> dict:
+    """Verify an exact output format. Never mistake a script for a native EXE."""
+    if kind == 'pe':
+        return inspect_windows_executable(workspace, relative_path)
+    if kind not in ('class', 'jar', 'lua_bytecode', 'script_js', 'script_php'):
+        raise ValueError('Unbekanntes Build-Artefaktformat.')
+    return check_artifact(workspace, relative_path, kind)
