@@ -53,9 +53,10 @@ jobs:
       - name: Verify real Python, C#, Go and Rust EXEs
         shell: pwsh
         run: |
-          python -m pip install "pyinstaller>=6.10,<7"
+          $env:PATH = (Join-Path $PWD '.venv\Scripts') + ';' + $env:PATH
+          & .\.venv\Scripts\python.exe -m pip install "pyinstaller>=6.10,<7"
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller setup for real project builds failed' }
-          python tools/windows_project_build_smoke.py
+          & .\.venv\Scripts\python.exe tools/windows_project_build_smoke.py
           if ($LASTEXITCODE -ne 0) { throw 'Real project EXE build or launch test failed' }
       - name: Make sure Inno Setup 6 is installed
         shell: pwsh
