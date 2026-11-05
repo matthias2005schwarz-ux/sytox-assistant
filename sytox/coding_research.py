@@ -63,7 +63,7 @@ def coding_uncertain(text: str) -> bool:
     """Detect model-signalled inability, not arbitrary error messages or task text."""
     text = str(text or '')[:1400]
     return bool(re.search(
-        r"\b(?:weiß nicht (?:wie|weiter)|weiss nicht (?:wie|weiter)|"
+        r"\b(?:weiß nicht,?\s+(?:wie|weiter)|weiss nicht,?\s+(?:wie|weiter)|"
         r"keine ahnung|unklar,? wie|nicht sicher,? wie|"
         r"ich (?:bin|weiß) (?:mir )?nicht sicher|"
         r"i (?:don't|do not) know (?:how|what)|"
