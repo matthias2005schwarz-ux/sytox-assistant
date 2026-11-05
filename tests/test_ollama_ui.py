@@ -50,7 +50,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
     def test_dark_red_workspace_controls_and_suggestion(self):
         from PySide6.QtWidgets import QFrame
         cards = self.window.findChildren(QFrame, 'utilityCard')
-        self.assertEqual(len(cards), 4)
+        self.assertEqual(len(cards), 5)  # Street View adds one utility card
         self.assertIsNotNone(self.window.empty_widget)
         self.window._use_suggestion('Erstelle eine Funktion')
         self.assertEqual(self.window.input.toPlainText(), 'Erstelle eine Funktion')
@@ -60,19 +60,19 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         from PySide6.QtWidgets import QFrame
         panel = self.window.utility_panel
         cards_before = self.window.findChildren(QFrame, 'utilityCard')
-        self.assertEqual(len(cards_before), 4)
+        self.assertEqual(len(cards_before), 5)
         self.assertFalse(panel.isHidden())
 
         self.window.toggle_focus_mode()
         self.assertTrue(panel.isHidden())
         self.assertTrue(self.window.focus_btn.isChecked())
-        self.assertEqual(self.window.focus_btn.text(), 'Steuerzentrale')
+        self.assertEqual(self.window.focus_btn.text(), '☰')
 
         self.window.toggle_focus_mode()
         self.assertFalse(panel.isHidden())
         self.assertFalse(self.window.focus_btn.isChecked())
-        self.assertEqual(self.window.focus_btn.text(), 'Fokusmodus')
-        self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 4)
+        self.assertEqual(self.window.focus_btn.text(), '☰')
+        self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 5)
 
     def test_spoken_desktop_command_opens_panel_without_issuing_agent_task(self):
         with patch.object(self.window, 'show_desktop_tools') as show_tools, \
