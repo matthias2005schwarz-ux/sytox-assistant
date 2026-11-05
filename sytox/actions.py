@@ -6,6 +6,7 @@ import re
 import json
 import hashlib
 import shutil
+import tempfile
 import shlex
 import subprocess
 import sys
@@ -42,6 +43,8 @@ TOOLS = [
       'old_text':('string','Exact unique text already in the file, without line numbers'),
       'new_text':('string','Replacement text'),
       'expected_sha256':('string','Optional SHA-256 of the original file, to reject concurrent changes')},['path','old_text','new_text']),
+    ('apply_patchset','Apply up to eight coordinated, exact text replacements in different existing source files. All changes are checked first; originals are backed up and restored if any write fails. Tests must be rerun.',
+     {'changes':('array','List of {path, old_text, new_text, optional expected_sha256} edits; every old_text must occur exactly once')},['changes']),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
     ('project_build_plan','Read-only: show deterministic Windows project build command, expected artifact and runtime dependencies.',{},[]),
@@ -99,10 +102,18 @@ TOOLS = [
 def tool_schema():
     result=[]
     for name,desc,props,required in TOOLS:
+        parameters = {p: {'type': ty, 'description': helptext} for p,(ty,helptext) in props.items()}
+        if name == 'apply_patchset':
+            parameters['changes']['items'] = {
+                'type': 'object', 'properties': {
+                    'path': {'type': 'string'},
+                    'old_text': {'type': 'string'},
+                    'new_text': {'type': 'string'},
+                    'expected_sha256': {'type': 'string'},
+                }, 'required': ['path', 'old_text', 'new_text'], 'additionalProperties': False}
         result.append({'type':'function','function':{
             'name':name,'description':desc,
-            'parameters':{'type':'object','properties':{
-                p:{'type':ty,'description':helptext} for p,(ty,helptext) in props.items()},
+            'parameters':{'type':'object','properties':parameters,
                 'required':required,'additionalProperties':False}}})
     return result
 
@@ -198,7 +209,7 @@ class Toolkit:
             # Side effects (e.g. saved files or drafts) and actual reads count toward
             # a non-coding task; coding tasks additionally need post-write validation.
             evidence_tools = {
-                'read_file', 'read_file_lines', 'write_file', 'replace_in_file', 'run_command', 'remember', 'browser_visit', 'web_search',
+                'read_file', 'read_file_lines', 'write_file', 'replace_in_file', 'apply_patchset', 'run_command', 'remember', 'browser_visit', 'web_search',
                 'browser_read', 'browser_click', 'browser_type', 'pc_open_app',
                 'pc_inspect_window', 'pc_click_control',
                 'pc_type_text', 'pc_hotkey', 'pc_click', 'selfdev_prepare',
@@ -214,10 +225,14 @@ class Toolkit:
                     or ok_command or name.startswith('ext_')):
                 self.action_count += 1
                 self.has_meaningful_evidence = True
-            if name in ('write_file', 'replace_in_file'):
+            if name in ('write_file', 'replace_in_file', 'apply_patchset') and not outcome.startswith('FEHLER '):
                 self.built_artifacts.clear()
-                self.writes += 1
-                self.unvalidated_paths.add(self._path(args['path']).relative_to(self.workspace).as_posix())
+                if name == 'apply_patchset':
+                    paths = [self._path(edit['path']) for edit in args['changes']]
+                else:
+                    paths = [self._path(args['path'])]
+                self.writes += len(paths)
+                self.unvalidated_paths.update(p.relative_to(self.workspace).as_posix() for p in paths)
             if ok_command and self._validates_pending_edits(str(args.get('command', '')), outcome):
                 self.passed_checks += 1
                 self.unvalidated_paths.clear()
@@ -286,6 +301,82 @@ class Toolkit:
         self.action_write_file(path, updated)
         return (f'Gezielt geändert: {p.relative_to(self.workspace)}; '
                 'vorherige Version gesichert; erneute Tests erforderlich.')
+
+    def action_apply_patchset(self, changes):
+        """Coordinate precise multi-file edits with preflight, backups and rollback."""
+        if not isinstance(changes, list) or not 1 <= len(changes) <= 8:
+            raise ValueError('Eine Liste aus 1 bis 8 Dateiänderungen wird benötigt.')
+        prepared = []
+        seen = set()
+        total = 0
+        for change in changes:
+            if not isinstance(change, dict):
+                raise ValueError('Jede Änderung muss ein Objekt sein.')
+            raw = change.get('path')
+            old = change.get('old_text')
+            new = change.get('new_text')
+            digest = change.get('expected_sha256', '')
+            if not isinstance(raw, str) or not raw or not isinstance(old, str) or not old or not isinstance(new, str):
+                raise ValueError('Pfad sowie alter und neuer Text müssen angegeben werden.')
+            if len(old) > 25000 or len(new) > 25000:
+                raise ValueError('Textänderung zu groß.')
+            total += len(old) + len(new)
+            if total > 100000:
+                raise ValueError('Änderungspaket zu groß.')
+            # Even an in-workspace symlink must not be edited through a batch.
+            if (self.workspace / raw).is_symlink():
+                raise ValueError('Symbolische Verknüpfung als Änderungsziel ist gesperrt.')
+            p = self._path(raw)
+            if p in seen or not p.is_file() or p.is_symlink():
+                raise ValueError('Dateipfad doppelt, nicht vorhanden oder symbolisch verknüpft.')
+            seen.add(p)
+            if p.stat().st_size > 900000:
+                raise ValueError('Datei zu groß für eine Änderung.')
+            contents = p.read_bytes()
+            if digest:
+                if not isinstance(digest, str) or len(digest) != 64 or hashlib.sha256(contents).hexdigest() != digest.lower():
+                    raise ValueError('Quelldatei wurde geändert (SHA-256-Abweichung).')
+            source = contents.decode('utf-8')
+            if source.count(old) != 1:
+                raise ValueError('Exakter alter Text muss genau einmal vorkommen.')
+            revised = source.replace(old, new, 1)
+            if revised == source:
+                raise ValueError('Änderung darf nicht leer sein.')
+            prepared.append((p, contents, revised.encode('utf-8')))
+
+        # No target is changed until all edits have passed preflight.
+        backup = default_data_dir() / 'backups' / str(self.chat_id or 'unknown') / datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        staged = []
+        applied = []
+        try:
+            for p, original, updated in prepared:
+                self._check()
+                if p.read_bytes() != original:
+                    raise ValueError('Quelldatei während der Vorbereitung geändert.')
+                out = backup / p.relative_to(self.workspace)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(original)
+                # A random temporary file prevents overwriting project files.
+                with tempfile.NamedTemporaryFile(dir=p.parent, prefix='.sytox_patch_', suffix='.tmp',
+                                                  delete=False) as tmp:
+                    temp = Path(tmp.name)
+                    staged.append(temp)
+                    tmp.write(updated)
+            for (p, original, updated), temp in zip(prepared, staged):
+                self._check()
+                if p.read_bytes() != original:
+                    raise ValueError('Quelldatei vor dem Speichern geändert.')
+                temp.replace(p)
+                applied.append((p, original))
+        except Exception:
+            for p, original in reversed(applied):
+                p.write_bytes(original)
+            raise
+        finally:
+            for temp in staged:
+                temp.unlink(missing_ok=True)
+        names = ', '.join(p.relative_to(self.workspace).as_posix() for p, _, _ in prepared)
+        return f'{len(prepared)} Dateien gezielt geändert und gesichert: {names}. Erneute Tests erforderlich.'
 
     def action_write_file(self,path,content):
         p=self._path(path)
