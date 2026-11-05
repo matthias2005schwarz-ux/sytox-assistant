@@ -919,6 +919,7 @@ class MainWindow(QMainWindow):
         self.screen_enabled=False
         self.screen_generation=0
         self.screen_worker=None
+        self.screen_analysis_chat_id=None
         self.performance_worker=None
         self.performance_timer=QTimer(self)
         self.performance_timer.setInterval(12000)
@@ -1523,6 +1524,8 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning() and cid!=self.chat_id:
             QMessageBox.information(self,'Auftrag läuft','Während der Ausführung kann der Chat nicht gewechselt werden.')
             return
+        if self.screen_enabled and self.chat_id is not None and cid != self.chat_id:
+            self.disable_screen()
         self.chat_id=cid
         current=next((c for c in self.store.chats() if c['id']==cid),None)
         self.chat_heading.setText(current['title'] if current else 'Chat')
@@ -1683,6 +1686,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, 'Bildschirmhilfe', str(exc))
             return
         generation = self.screen_generation
+        self.screen_analysis_chat_id = self.chat_id
         self.screen_state.setText('AKTIV · lokales Bildmodell analysiert Einzelbild …')
         worker = ScreenAnalysisWorker(png, question, self.config['ollama_url'],
                                       self.config.get('vision_model', DEFAULT_VISION_MODEL),
@@ -1693,7 +1697,8 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _screen_analysis_completed(self, generation, success, message):
-        if not self.screen_enabled or generation != self.screen_generation:
+        if (not self.screen_enabled or generation != self.screen_generation or
+                self.screen_analysis_chat_id != self.chat_id):
             return
         if success:
             # Deliberately do not save screen-derived text to the chat DB.
