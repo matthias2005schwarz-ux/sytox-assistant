@@ -73,6 +73,7 @@ def measure_performance(base_url="http://localhost:11434", *,
         "cpu_percent": None,
         "ram_used_gb": None,
         "ram_total_gb": None,
+        "ram_available_gb": None,
         "gpu_name": None,
         "gpu_percent": None,
         "gpu_load_kind": None,
@@ -89,6 +90,8 @@ def measure_performance(base_url="http://localhost:11434", *,
         ram = psutil.virtual_memory()
         metrics["ram_total_gb"] = round(float(ram.total) / (1024 ** 3), 1)
         metrics["ram_used_gb"] = round(float(ram.used) / (1024 ** 3), 1)
+        if getattr(ram, 'available', None) is not None:
+            metrics['ram_available_gb'] = round(float(ram.available) / (1024 ** 3), 1)
     except (ImportError, OSError, ValueError, AttributeError):
         pass
 
