@@ -42,6 +42,10 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.assertIn('Ollama nicht erreichbar', self.window.status_chip.text())
         self.assertIn('Ollama starten', self.window.model_status_label.text())
 
+    def test_new_install_uses_30b_default_and_keeps_custom_settings(self):
+        self.assertEqual(self.window.config['model'], 'qwen3-coder:30b')
+        self.assertIn('qwen3-coder:30b', [value for _, value in __import__('sytox.ollama_installer', fromlist=['MODEL_CHOICES']).MODEL_CHOICES])
+
     def test_ready_status_is_clear(self):
         self.window._model_status_checked(OllamaStatus('ready', 'KI bereit',
                                                       'Ollama verbunden · qwen2.5-coder:7b'))
