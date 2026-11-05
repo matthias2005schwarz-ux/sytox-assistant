@@ -1,3 +1,15 @@
+# SYTOX: automatisierte Projekt-Builds in zwölf Programmiersprachen (Entwicklungszweig)
+
+**Neue Build-Formate, bevor eine Release-Version veröffentlicht wird:** Für eindeutige Projekte sind Python, C#, Go, Rust, C, C++, Java, Kotlin, JavaScript, TypeScript, PHP und Lua integriert. Build-Plan und tatsächliche Ausführung sind getrennt. Jeder Build benötigt vor der Ausführung eine Freigabe; ein Fehler oder fehlender Compiler wird als Fehler gemeldet.
+
+- **Echte Windows-x64-EXE:** C/C++ (main.c/main.cpp), Python (main.py oder app.py, mit PyInstaller), C# (ein .csproj), Go (go.mod) und Rust (Cargo.toml).
+- **Andere passende Artefakte:** Java (Main.java zu Main.class), Kotlin (Main.kt zu ausführbarer JAR), TypeScript (main.ts zu JavaScript), Lua (main.lua zu Lua-Bytecode). JavaScript (main.js) und PHP (main.php) werden mit dem jeweiligen Interpreter auf Syntax geprüft und als Skript in den Build-Ordner kopiert. Diese Formate benötigen ihre Laufzeit und sind keine eigenständigen Windows-EXEs.
+- **Überprüfbar:** Dateiformat, Hash, frisches Build-Ergebnis; abschließende Windows-CI-Smoke-Tests starten kleine Beispielprogramme nach dem Build tatsächlich.
+- **Grenzen:** Einzeldatei- oder einfache Standardprojekte, keine beliebigen Build-Systeme/Mehrmodul-Projekte. Benutzerabhängigkeiten/Frameworks können zusätzliche Installationen, Build-Konfiguration und funktionale Tests brauchen. Keine automatische Installer-Erstellung für die vom Assistenten programmierten Projekte.
+- **Abhängigkeiten:** Windows-Compiler/Interpreter müssen installiert sein. C/C++ benötigt eine vollständige Compiler/Linker-Toolchain, TypeScript zusätzlich tsc. Die winget-Installation ausgewählter Werkzeuge erfolgt nur mit Zustimmung. Für Kotlin ist derzeit kein verifizierter winget-Installer integriert; das offizielle Kommandozeilen-Paket ist separat einzurichten.
+
+---
+
 # SYTOX Assistant 0.3.6: verifizierte lokale Windows-Programm-Builds
 
 - **Programme entwickeln:** Der Agent kann im gewählten Projektordner Dateien erstellen, bearbeiten und nach Tests weiterentwickeln. Die erzeugte EXE wird erst nach einem tatsächlich erfolgreich ausgeführten Compiler-Build als fertig anerkannt.
