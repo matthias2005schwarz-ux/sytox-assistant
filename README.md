@@ -1,3 +1,14 @@
+# Qwen3-Coder 30B: zuverlässigere Werkzeugaufrufe (Entwicklungszweig)
+
+- **Atomare Prüfung vor Ausführung:** Für jeden vom Modell gewünschten Tool-Aufruf werden Funktionsname, Pflichtargumente, Datentypen, erlaubte Werte und maximale Größe anhand der **tatsächlich übergebenen Tool-Schemas** geprüft. JSON-Strings aus Ollama werden geparst, falsches JSON wird **nicht** als leeres Objekt fehlinterpretiert.
+- **Keine halben Aktionen:** Schlägt Qwen3 eine zu große Serie (mehr als acht Aufrufe in einer Modellantwort) oder einen ungültigen Aufruf vor, wird **das gesamte Paket** vor Ausführung abgelehnt. Acht ist eine Obergrenze *pro Modellantwort*, **kein tägliches oder monatliches Nutzungslimit**: Weitere Aufrufe sind in späteren Antworten möglich.
+- **Gezielte Korrektur:** Das Modell erhält eine kurze Fehlermeldung und kann bis zu drei Versuche unternehmen, seine Argumente zu korrigieren. Danach wird ein längerer Auftrag pausiert; abgelehnte Aufrufe gelten nicht als abgeschlossene Arbeit. Bestehende Berechtigungsdialoge werden nicht umgangen.
+- **Ollama-Streaming:** Die Anwendung sammelt mehrere Tool-Aufrufe aus Streaming-Antworten, aber verwirft unvollständige oder am Tokenlimit abgeschnittene Antworten, statt unvollständigen Code auszuführen. Bisherige Modelle bleiben wählbar.
+- **Grenzen:** Tests verwenden simulierte Modellantworten; die tatsächliche Zuverlässigkeit mit `qwen3-coder:30b` muss nach dem Download auf dem Nutzer-PC noch gemessen werden. Es wird noch kein neuer Installer veröffentlicht.
+- **Referenz:** [Offizielle Ollama-Dokumentation zu Streaming und Werkzeugaufrufen](https://github.com/ollama/ollama/blob/main/docs/capabilities/tool-calling.mdx).
+
+---
+
 # SYTOX: Fünf lokale Erweiterungen (Entwicklungszweig, noch kein Release)
 
 1. **Bildschirmhilfe mit Zustimmung:** In der rechten Leiste auf „Bildschirmfreigabe starten“ klicken oder nach aktiviertem Sprachmodus „Hey Sytox, schau auf meinen Bildschirm“ sagen. Erst ein zusätzlicher Zustimmungsdialog schaltet die Funktion frei. Jede Frage erfasst ein **einzelnes Screenshot** des Hauptbildschirms; es gibt keinen heimlichen Dauerstream. „Kannst wieder aus meinem Bildschirm rausgehen“, der Stop-Button, Chatwechsel oder Schließen ins Tray beenden den Zugriff; eine verspätete Antwort wird dann nicht angezeigt. Ein sichtbarer Hinweis in der Kopfzeile zeigt die aktive Berechtigung. Screenshots selbst werden von SYTOX nicht auf die Festplatte geschrieben und nicht im Chat gespeichert. Ein bereits an Ollama übertragenes Einzelbild kann nachträglich nicht aus dessen Verarbeitung zurückgeholt werden.
