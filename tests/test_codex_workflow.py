@@ -120,7 +120,7 @@ class CodingPlanTests(unittest.TestCase):
                       str(self.root / "workspace"),
                       lambda *_: True, lambda *_: None, threading.Event())
         agent.client.chat = MagicMock(side_effect=[
-            tool("write_file", path="main.py", content="print(3)\\n"),
+            tool("write_file", path="main.py", content="print(3)\n"),
             tool("run_command", command="python -m compileall main.py"),
             tool("review_coding_changes"),
             {"role": "assistant", "content": "Review: kein offensichtlicher Syntaxfehler."},
