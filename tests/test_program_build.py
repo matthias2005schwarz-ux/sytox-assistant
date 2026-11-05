@@ -105,7 +105,7 @@ class ApprovalBuildTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / 'go.mod').write_text('module example.org/app\n', encoding='utf-8')
         self.toolkit = object.__new__(Toolkit)
-        self.toolkit.workspace = self.root
+        self.toolkit.workspace = self.root.resolve()
         self.toolkit.approval = lambda *_: False
         self.toolkit.stop_event = None
         self.toolkit.built_artifacts = []
