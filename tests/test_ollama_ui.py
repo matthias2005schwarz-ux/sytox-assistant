@@ -74,6 +74,37 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         after = len(self.window.findChildren(QFrame, 'bubbleAssistant'))
         self.assertEqual(before, after)
 
+    def test_auto_tune_settings_show_live_ram_suggestion_and_manual_override(self):
+        from sytox.ui import SettingsDialog
+        from unittest.mock import patch
+        with patch("sytox.ui.probe_hardware", return_value={
+            "ram_total_gb": 16, "ram_available_gb": 8, "vram_total_gb": None
+        }):
+            dialog = SettingsDialog(self.window.config, self.window)
+        try:
+            self.assertEqual(dialog.model_context.currentData(), 0)
+            self.assertIn("4,096", dialog.hardware_preview.text())
+            self.assertIn("WARNUNG", dialog.hardware_preview.text())
+            pos = dialog.model_context.findData(32768)
+            self.assertGreaterEqual(pos, 0)
+            dialog.model_context.setCurrentIndex(pos)
+            self.assertIn("Manuell", dialog.hardware_preview.text())
+            self.assertEqual(dialog.values()["model_context_tokens"], 32768)
+            dialog.model_context.setCurrentIndex(dialog.model_context.findData(0))
+            self.assertEqual(dialog.values()["model_context_tokens"], 0)
+        finally:
+            dialog.close()
+
+    def test_performance_panel_reports_auto_model_recommendation(self):
+        self.window.config["model_context_tokens"] = 0
+        self.window._performance_measured({
+            "ram_total_gb": 16, "ram_used_gb": 8,
+            "ram_available_gb": 8, "model_size_gb": None,
+            "cpu_percent": 42, "gpu_name": None, "loaded_models": [],
+        })
+        self.assertIn("Automatisch empfohlen", self.window.performance_info.text())
+        self.assertIn("WARNUNG", self.window.performance_info.text())
+
     def test_offline_does_not_claim_ki_ready(self):
         self.window._model_status_checked(OllamaStatus('offline', 'Ollama nicht erreichbar',
                                                       'Bitte Ollama starten'))
