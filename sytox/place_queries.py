@@ -51,7 +51,9 @@ def place_from_message(message: str) -> str | None:
 
 def instant_street_view_url(place: str) -> str:
     """Public address-search URL documented by Instant Street View."""
+    if any(ord(ch) < 32 for ch in str(place)):
+        raise ValueError("Bitte einen gültigen Ortsnamen oder eine Adresse eingeben.")
     place = normalize_place(place)
-    if not place or len(place) > 180 or any(ord(ch) < 32 for ch in place):
+    if not place or len(place) > 180:
         raise ValueError("Bitte einen gültigen Ortsnamen oder eine Adresse eingeben.")
     return _BASE_URL + quote(place, safe="")
