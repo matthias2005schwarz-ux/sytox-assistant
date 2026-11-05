@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .toolchains import canonical_language, propose, status, TOOLCHAINS
+from .program_build import build_plan, inspect_windows_executable
 from .storage import default_data_dir
 from .selfdev import SelfDevelopment
 from .extensions import Registry
@@ -30,6 +31,8 @@ TOOLS = [
      {'path':('string','Relative file path'),'content':('string','Complete file contents')},['path','content']),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
+    ('project_build_plan','Read-only: show a deterministic Windows EXE build command and expected output for the project.',{},[]),
+    ('project_build','Build a Windows x64 executable from a supported project. Always requires explicit approval, verifies file format and SHA256; does not launch the EXE.',{},[]),
     ('toolchain_inspect','Read-only: recommend a language for a task, inspect project files and check installed developer tools. Never installs anything.',
      {'task':('string','Describe the program to build; may be empty to inspect the project')},[]),
     ('toolchain_install','Install ONE curated Windows compiler/SDK through winget. Always asks for explicit user approval of the exact package first.',
@@ -122,6 +125,7 @@ class Toolkit:
         self._pc_controls={}
         self.writes=0
         self.passed_checks=0
+        self.built_artifacts=[]  # Build receipts are invalidated after every subsequent source edit.
         self.unvalidated_paths=set()  # Relative paths changed since the last successful code check.
 
     def _check(self):
@@ -186,7 +190,7 @@ class Toolkit:
                 'pc_inspect_window', 'pc_click_control',
                 'pc_type_text', 'pc_hotkey', 'pc_click', 'selfdev_prepare',
                 'selfdev_validate', 'selfdev_stage',
-                'extension_install', 'toolchain_install', 'gmail_search', 'gmail_read', 'gmail_draft',
+                'extension_install', 'toolchain_install', 'project_build', 'gmail_search', 'gmail_read', 'gmail_draft',
                 'gmail_send',
             }
             ok_command = name == 'run_command' and outcome.startswith('Exit code: 0\n')
@@ -198,6 +202,7 @@ class Toolkit:
                 self.action_count += 1
                 self.has_meaningful_evidence = True
             if name == 'write_file':
+                self.built_artifacts.clear()
                 self.writes += 1
                 self.unvalidated_paths.add(str(self._path(args['path']).relative_to(self.workspace)))
             if ok_command and self._validates_pending_edits(str(args.get('command', '')), outcome):
@@ -334,6 +339,77 @@ class Toolkit:
             except (ValueError, PermissionError):
                 return False
         return False
+
+
+    def action_project_build_plan(self):
+        return json.dumps(build_plan(self.workspace), ensure_ascii=False)
+
+    def verified_builds(self):
+        """Only report artifacts whose content still matches the approved build receipt."""
+        verified = []
+        for receipt in getattr(self, 'built_artifacts', []):
+            try:
+                current = inspect_windows_executable(self.workspace, receipt['path'])
+                if current['sha256'] == receipt['sha256']:
+                    verified.append(current)
+            except (OSError, ValueError):
+                continue
+        return verified
+
+    def action_project_build(self):
+        """Execute an explicit Windows x64 build, then verify real output bytes."""
+        if platform.system() != 'Windows':
+            raise RuntimeError('Automatische EXE-Builds sind nur unter Windows verfügbar.')
+        plan = build_plan(self.workspace)
+        argv = plan['command']
+        self._request(
+            'Windows-EXE aus Projekt bauen',
+            'Dieser Build kann Projektcode ausführen und Dateien erzeugen. '
+            'Abhängigkeiten können heruntergeladen werden.\n\n'
+            + 'Befehl (ohne Shell): ' + subprocess.list2cmdline(argv)
+            + '\nErwartete EXE: ' + plan['expected_executable']
+            + '\nErst nach deiner Zustimmung wird der Build ausgeführt. '
+              'Die EXE wird danach geprüft, aber NICHT gestartet.'
+        )
+        self._check()
+        expected = self._path(plan['expected_executable'])
+        started_ns = time.time_ns()
+        proc = None
+        try:
+            proc = subprocess.Popen(argv, cwd=str(self.workspace), shell=False,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, encoding='utf-8', errors='replace')
+            start = time.monotonic()
+            while True:
+                if self.stop_event is not None and self.stop_event.is_set():
+                    proc.kill()
+                    raise Cancelled('Build abgebrochen.')
+                if time.monotonic() - start > 600:
+                    proc.kill()
+                    raise TimeoutError('Build nach zehn Minuten abgebrochen.')
+                try:
+                    output, _ = proc.communicate(timeout=.4)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if proc.returncode != 0:
+                raise RuntimeError('Compiler-Fehler (Exitcode ' + str(proc.returncode)
+                                   + '):\n' + output[-2500:])
+            receipt = inspect_windows_executable(self.workspace,
+                                                 plan['expected_executable'])
+            if expected.stat().st_mtime_ns + 2_000_000_000 < started_ns:
+                raise RuntimeError('EXE stammt von einem früheren Build. Kein neues Ergebnis.')
+            self._check()
+            self.built_artifacts = [receipt]
+            self.passed_checks += 1
+            self.unvalidated_paths.clear()
+            return json.dumps({'build': 'compiled', 'command': argv,
+                               'artifact': receipt,
+                               'compiler_output_tail': output[-1200:]},
+                              ensure_ascii=False)
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
 
     def action_toolchain_inspect(self, task=''):
         if not isinstance(task, str) or len(task) > 1000:

@@ -1,3 +1,12 @@
+# In Entwicklung: Programme mit überprüftem Windows-EXE-Build
+
+- **Projektprüfung:** Das Agent-Werkzeug project_build_plan erkennt einfache C#-, Go-, Rust- und Python-Projekte und zeigt den erwarteten EXE-Pfad. Bei Mehrdeutigkeit bricht es ab.
+- **Bauen mit Zustimmung:** project_build führt erst nach ausdrücklicher Freigabe den ausgewählten Windows-Compiler aus. Builds können beliebigen Projektcode ausführen und Abhängigkeiten nachladen.
+- **Binärdatei statt Erfolgstext:** Nur nach erfolgreichem Build und Prüfung einer echten Windows-x64-PE-Datei mit SHA-256 wird eine Build-Quittung erzeugt. Der Agent soll eine angeforderte EXE ohne diese Nachweise nicht als fertig melden.
+- **Grenzen:** Ein gültiger PE-Header beweist nicht, dass das Programm läuft. Es wird kein Installer erstellt. C++-, Java- und komplexe Projekte haben noch keinen Build-Plan. Python benötigt separat PyInstaller.
+- **Verifikation:** Neue automatisierte Regressionstests; echte Compiler und Programme müssen auf dem Anwender-PC erprobt werden. Noch kein neues Release aus diesem Entwicklungsstand.
+
+---
 # Entwicklungsstand: Automatische Webrecherche (noch kein Release)
 
 - **Ohne gesonderten Suchbefehl:** Bei kurzen öffentlichen Wissensfragen wie „Wer ist Jenna Ortega?“ sucht SYTOX selbstständig nach aktuellen Quellen. Reine Programmieraufträge und Steuerfragen wie „Wie weit bist du?“ lösen keine automatische Suche aus.
