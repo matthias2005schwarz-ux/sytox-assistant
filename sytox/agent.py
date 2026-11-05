@@ -61,7 +61,7 @@ class OllamaError(RuntimeError):
 
 
 class OllamaClient:
-    def __init__(self, url='http://localhost:11434', model='qwen2.5-coder:7b'):
+    def __init__(self, url='http://localhost:11434', model='qwen3-coder:30b'):
         self.url = url.rstrip('/')
         self.model = model
 
