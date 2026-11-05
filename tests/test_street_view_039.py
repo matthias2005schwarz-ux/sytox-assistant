@@ -15,7 +15,7 @@ class InstantStreetViewTests(unittest.TestCase):
         )
 
     def test_empty_or_unreasonably_large_query_rejected(self):
-        for value in (' ', 'x' * 200, 'abc\\nxyz'):
+        for value in (' ', 'x' * 200, 'abc' + chr(10) + 'xyz'):
             with self.subTest(value=value[:12]):
                 with self.assertRaises(ValueError):
                     instant_street_view_url(value)
