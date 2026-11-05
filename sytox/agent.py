@@ -18,6 +18,7 @@ from .program_build import needs_compiled_artifact
 from .project_memory import lookup_project_memory, update_project_memory
 from .specialists import specialist_messages, specialist_summary
 from .model_runtime import ollama_generation_options, compact_agent_history
+from .tool_protocol import normalize_tool_calls, ToolProtocolError
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
 Stil: freundlich, klar und direkt. Sprich Hochdeutsch ohne Dialekt.
@@ -294,6 +295,7 @@ class Agent:
                     'den konkreten Blocker melden.')
         steps, idle = previous_steps, 0
         model_failures = 0
+        tool_format_failures = 0
         last_calls = []  # Detect repeatedly identical tool requests, not legitimate iterative edits.
         finished = False
         status, result = 'failed', ''
@@ -308,8 +310,9 @@ class Agent:
                 steps += 1
                 self.logger('Status', f'{mode}: Schritt {steps} – Modell arbeitet …')
                 try:
-                    reply = self.client.chat(messages,
-                        tools=tool_schema() + toolkit.extensions.schema() + (CONTROL_TOOLS if mode != 'once' else []), stop=self.stop)
+                    offered_tools = (tool_schema() + toolkit.extensions.schema()
+                                     + (CONTROL_TOOLS if mode != 'once' else []))
+                    reply = self.client.chat(messages, tools=offered_tools, stop=self.stop)
                     model_failures = 0
                 except OllamaError as exc:
                     model_failures += 1
@@ -334,21 +337,43 @@ class Agent:
                     if self.stop.wait(delay):
                         raise Cancelled('Auftrag gestoppt')
                     continue
-                calls = reply.get('tool_calls') or []
+                calls = reply.get('tool_calls')
+                if calls is not None and calls != []:
+                    try:
+                        calls = normalize_tool_calls(calls, offered_tools)
+                    except ToolProtocolError as exc:
+                        # Never run a partially valid batch; send precise feedback
+                        # without invoking the Toolkit or asking for PC approval.
+                        tool_format_failures += 1
+                        self.logger('Status', 'Ungültiger Werkzeugaufruf: ' + str(exc)[:180])
+                        if tool_format_failures >= 3:
+                            status, result = (
+                                'paused',
+                                'Lokales Modell hat dreimal ungültige Werkzeugaufrufe '
+                                'vorgeschlagen. Kein unbestätigter Aufruf wurde ausgeführt. '
+                                'Fortschritt gespeichert: ' + str(exc)[:250])
+                            break
+                        messages.append({'role': 'assistant',
+                                         'content': str(reply.get('content') or '')[:1200]})
+                        messages.append({'role': 'user', 'content':
+                            'Dein Werkzeugaufruf wurde vor Ausführung abgelehnt: '
+                            + str(exc)[:350] + '\nBitte die korrekte Funktion mit '
+                            'gültigem JSON-Objekt, allen Pflichtargumenten und nur '
+                            'mit angebotenen Funktionsnamen erneut aufrufen. '
+                            'Keine Aktion wurde ausgeführt.'})
+                        continue
+                    tool_format_failures = 0
+                    reply = dict(reply)
+                    reply['tool_calls'] = calls
+                else:
+                    calls = []
                 messages.append(reply)
                 if calls:
                     idle = 0
-                    for call in calls[:8]:
-                        fn = call.get('function') or {}
-                        name = fn.get('name', '')
-                        args = fn.get('arguments') or {}
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except ValueError:
-                                args = {}
-                        if not isinstance(args, dict):
-                            args = {}
+                    for call in calls:
+                        fn = call['function']
+                        name = fn['name']
+                        args = fn['arguments']
                         # A small local model can get stuck making the same call forever.
                         # Stop after three identical consecutive requests rather than wasting hours
                         # or repeating a side effect (e.g. sending the same email).
