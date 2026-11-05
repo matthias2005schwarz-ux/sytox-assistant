@@ -71,7 +71,7 @@ class BuildPlanTests(unittest.TestCase):
 
     def test_no_arbitrary_shell_command_for_unknown_project(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / 'index.js').write_text('console.log(1)', encoding='utf-8')
+            (Path(d) / 'unknown_file.xyz').write_text('unknown', encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'noch keinen'):
                 build_plan(Path(d))
 
