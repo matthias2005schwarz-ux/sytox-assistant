@@ -217,7 +217,7 @@ class Toolkit:
             if name in ('write_file', 'replace_in_file'):
                 self.built_artifacts.clear()
                 self.writes += 1
-                self.unvalidated_paths.add(str(self._path(args['path']).relative_to(self.workspace)))
+                self.unvalidated_paths.add(self._path(args['path']).relative_to(self.workspace).as_posix())
             if ok_command and self._validates_pending_edits(str(args.get('command', '')), outcome):
                 self.passed_checks += 1
                 self.unvalidated_paths.clear()
