@@ -109,7 +109,8 @@ class Worker(QThread):
         try:
             a=Agent(self.store,self.settings['model'],self.settings['ollama_url'],
                     self.settings['workspace'],self.request_approval,self.log_line.emit,self.stop_event,
-                    self.settings.get('gmail_client_secrets',''))
+                    self.settings.get('gmail_client_secrets',''),
+                    self.settings.get('model_context_tokens', 0))
             result=a.run(self.chat_id,self.mode,self.hours,self.task_id)
             self.completed.emit(result)
         except Exception as e:
@@ -719,6 +720,14 @@ class SettingsDialog(QDialog):
         self.original=settings.copy()
         form=QFormLayout(self)
         self.model=QLineEdit(settings['model'])
+        self.model_context=QComboBox()
+        for label, tokens in [('Automatisch (30B: 16K / andere: 8K)', 0),
+                              ('8.192 Tokens (weniger RAM)', 8192),
+                              ('16.384 Tokens (mehr Projektkontext)', 16384),
+                              ('32.768 Tokens (hoher RAM-Bedarf)', 32768)]:
+            self.model_context.addItem(label, tokens)
+        index=self.model_context.findData(settings.get('model_context_tokens', 0))
+        self.model_context.setCurrentIndex(max(0,index))
         self.url=QLineEdit(settings['ollama_url'])
         self.folder=QLineEdit(settings['workspace'])
         choose=QPushButton('…');choose.setMaximumWidth(38)
@@ -757,6 +766,7 @@ class SettingsDialog(QDialog):
         self.follow_up.setSuffix(' Sekunden')
         self.follow_up.setValue(int(settings.get('voice_followup_seconds',25)))
         form.addRow('Ollama-Modell',self.model)
+        form.addRow('Kontextgröße',self.model_context)
         form.addRow('Ollama-Adresse',self.url)
         form.addRow('Projektordner',row)
         form.addRow('Vosk-Modellordner (Deutsch)',self.vosk)
@@ -806,6 +816,7 @@ class SettingsDialog(QDialog):
 
     def values(self):
         return {'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
+                'model_context_tokens':self.model_context.currentData(),
                 'workspace':self.folder.text().strip(), 'vosk_model':self.vosk.text().strip(),
                 'piper_exe':self.piperexe.text().strip(),'piper_model':self.pipermodel.text().strip(),
                 'voice_enabled':self.voice.isChecked(),
@@ -871,6 +882,7 @@ class MainWindow(QMainWindow):
     def load_settings(self):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
         settings={'model':'qwen3-coder:30b','ollama_url':'http://localhost:11434',
+                  'model_context_tokens':0,
                   'workspace':str(base/'projects'/'default'),'vosk_model':'',
                   'piper_exe':'','piper_model':'','voice_enabled':False,
                   'speech_engine':'windows','edge_voice':'de-DE-KatjaNeural','edge_rate':'+8%',
