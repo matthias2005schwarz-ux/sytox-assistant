@@ -115,5 +115,26 @@ class CodingPlanTests(unittest.TestCase):
         self.assertIn("Module ändern", prompt)
 
 
+    def test_read_only_reviewer_runs_with_local_model_after_tests(self):
+        agent = Agent(self.store, "mock", "http://localhost:11434",
+                      str(self.root / "workspace"),
+                      lambda *_: True, lambda *_: None, threading.Event())
+        agent.client.chat = MagicMock(side_effect=[
+            tool("write_file", path="main.py", content="print(3)\\n"),
+            tool("run_command", command="python -m compileall main.py"),
+            tool("review_coding_changes"),
+            {"role": "assistant", "content": "Review: kein offensichtlicher Syntaxfehler."},
+            tool("complete_task", summary="Code geschrieben und geprüft", evidence="compileall 0"),
+        ])
+        done = agent.run(self.cid, "until_done")
+        self.assertEqual(done["status"], "done", done["content"])
+        review_request = agent.client.chat.call_args_list[3].args[0]
+        self.assertIn("unabhängige SYTOX-Codeprüfer", str(review_request))
+        self.assertIn("main.py", str(review_request))
+        self.assertIn("print(3)", str(review_request))
+        final_request = agent.client.chat.call_args_list[4].args[0]
+        self.assertIn("Prüferhinweise", str(final_request))
+
+
 if __name__ == "__main__":
     unittest.main()
