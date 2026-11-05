@@ -161,7 +161,7 @@ class ApprovalBuildTests(unittest.TestCase):
 
         def build(*_args, **_kwargs):
             output = self.root / 'build_output' / 'SYTOX_Program.exe'
-            output.parent.mkdir()
+            output.parent.mkdir(exist_ok=True)
             output.write_bytes(b'not an executable')
             return fake_compiler()
 
