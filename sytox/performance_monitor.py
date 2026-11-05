@@ -76,7 +76,7 @@ def measure_performance(base_url="http://localhost:11434", *,
             metrics["ollama_vram_gb"] = round(
                 sum(float(x.get("size_vram") or 0) for x in loaded[:5]) / (1024 ** 3), 1
             )
-    except (requests.RequestException, ValueError, TypeError, KeyError):
+    except (requests.RequestException, OSError, ValueError, TypeError, KeyError):
         pass
     return metrics
 
