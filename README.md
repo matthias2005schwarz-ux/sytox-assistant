@@ -1,3 +1,17 @@
+# Kontextverwaltung 2.0 (große Programmierprojekte, Entwicklungszweig)
+
+**Neu – aufgabenbezogene Datei-Auswahl:** Nach der bereits vorhandenen lokalen Projektindex-Aktualisierung bewertet SYTOX relevante Dateinamen, Klassen, Funktionen und Methoden zur jeweiligen Programmieraufgabe. CamelCase und snake_case werden getrennt erkannt; statt wahllos ganze Projektordner in einen Modellaufruf zu packen, sieht das Modell zuerst eine kurze priorisierte Projektkarte.
+
+**Neues read-only Werkzeug:** `project_context_bundle` wählt bis zu acht passende Quelltextdateien aus und zeigt kleine, zeilennummerierte Ausschnitte der relevanten Stellen. Die Rückgabe wird auf maximal 22.000 Zeichen begrenzt, standardmäßig 12.000 Zeichen und sechs Dateien. Mehr Code kann der Agent jederzeit mit weiteren Werkzeugaufrufen gezielt lesen. Verdächtige Secret-Dateien, externe Symlinks und übliche Abhängigkeits-/Build-Ordner werden ausgelassen. Ein seit der letzten Indexierung veränderter Quelltext wird nicht als vermeintlich aktueller Auszug angezeigt.
+
+**Kontextverwaltung beim Weiterarbeiten:** Die Agent-Schleife überwacht zusätzlich die ungefähre Länge des bisherigen Chat-/Werkzeugverlaufs. Wenn die Nachrichtenzahl oder das Kontextbudget überschritten wird, bleiben ursprüngliches Ziel, Arbeitsplan, letzte Aktionen, geänderte Dateien und offene Tests in einem kompakten Zwischenstand erhalten. Alte Werkzeugausgaben und Codeargumente werden gekürzt; die letzten zusammengehörenden Assistant-/Tool-Nachrichten bleiben in korrekter Reihenfolge. **Es handelt sich um eine grobe Zeichenabschätzung, keine exakte Tokenzählung.** Die Begrenzung bezieht sich nur auf den Inhalt einer einzelnen Modellanfrage, nicht auf die Anzahl der täglichen oder monatlichen Chat- oder Programmieraufträge.
+
+**Grenzen:** Keine automatische vollständige semantische Kenntnis jedes Dateiinhalts; Datei- und Funktionssuche beruht überwiegend auf Namen. SYTOX muss vor Änderungen den tatsächlichen Code lesen und anschließend Tests ausführen. Der Index erfasst derzeit maximal 600 relevante Dateien und speichert selbst keine vollständigen Quelldateien. Ein sehr großes Repo wird somit nur teilweise abgedeckt. Die tatsächliche Modellqualität und RAM-Last mit Qwen3-Coder 30B können erst mit lokal installiertem Modell geprüft werden.
+
+**Lieferstatus:** Entwicklungszweig/Tests, noch kein neuer veröffentlichter Installer.
+
+---
+
 # Qwen3-Coder 30B: zuverlässigere Werkzeugaufrufe (Entwicklungszweig)
 
 - **Atomare Prüfung vor Ausführung:** Für jeden vom Modell gewünschten Tool-Aufruf werden Funktionsname, Pflichtargumente, Datentypen, erlaubte Werte und maximale Größe anhand der **tatsächlich übergebenen Tool-Schemas** geprüft. JSON-Strings aus Ollama werden geparst, falsches JSON wird **nicht** als leeres Objekt fehlinterpretiert.
