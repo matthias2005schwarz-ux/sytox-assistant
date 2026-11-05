@@ -44,8 +44,17 @@ def _symbol_names(path: Path, content: str) -> list[str]:
             tree = ast.parse(content)
             result = []
             for node in tree.body:
-                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                if isinstance(node, ast.ClassDef):
                     result.append(node.name)
+                    # Methods carry useful cross-file relationships without
+                    # storing function bodies in the persistent metadata index.
+                    for child in node.body:
+                        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            result.append(node.name + "." + child.name)
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    result.append(node.name)
+                if len(result) >= MAX_SYMBOLS:
+                    break
             return result[:MAX_SYMBOLS]
         except SyntaxError:
             return []
