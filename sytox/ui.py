@@ -750,6 +750,8 @@ class SettingsDialog(QDialog):
         self.original=settings.copy()
         form=QFormLayout(self)
         self.model=QLineEdit(settings['model'])
+        self.vision_model=QLineEdit(settings.get('vision_model', DEFAULT_VISION_MODEL))
+        self.vision_model.setToolTip('Bildmodell für Screenshots; separat über Ollama laden, z. B. ollama pull qwen3-vl:4b')
         self.model_context=QComboBox()
         for label, tokens in [('Automatisch (30B: 16K / andere: 8K)', 0),
                               ('8.192 Tokens (weniger RAM)', 8192),
@@ -796,6 +798,7 @@ class SettingsDialog(QDialog):
         self.follow_up.setSuffix(' Sekunden')
         self.follow_up.setValue(int(settings.get('voice_followup_seconds',25)))
         form.addRow('Ollama-Modell',self.model)
+        form.addRow('Bildmodell (separat)',self.vision_model)
         form.addRow('Kontextgröße',self.model_context)
         form.addRow('Ollama-Adresse',self.url)
         form.addRow('Projektordner',row)
@@ -847,6 +850,7 @@ class SettingsDialog(QDialog):
     def values(self):
         return {'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
                 'model_context_tokens':self.model_context.currentData(),
+                'vision_model':self.vision_model.text().strip(),
                 'workspace':self.folder.text().strip(), 'vosk_model':self.vosk.text().strip(),
                 'piper_exe':self.piperexe.text().strip(),'piper_model':self.pipermodel.text().strip(),
                 'voice_enabled':self.voice.isChecked(),
@@ -916,6 +920,7 @@ class MainWindow(QMainWindow):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
         settings={'model':'qwen3-coder:30b','ollama_url':'http://localhost:11434',
                   'model_context_tokens':0,
+                  'vision_model':DEFAULT_VISION_MODEL,
                   'workspace':str(base/'projects'/'default'),'vosk_model':'',
                   'piper_exe':'','piper_model':'','voice_enabled':False,
                   'speech_engine':'windows','edge_voice':'de-DE-KatjaNeural','edge_rate':'+8%',
