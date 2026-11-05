@@ -26,6 +26,7 @@ from .pc_control import WindowsDesktop
 from .web_search import search_web, format_results
 from .project_inspect import project_overview, search_project, read_project_lines
 from .project_memory import update_project_memory, lookup_project_memory
+from .code_recovery import create_snapshot, snapshot_paths, restore_snapshot
 
 
 TOOLS = [
@@ -49,6 +50,10 @@ TOOLS = [
       'expected_sha256':('string','Optional SHA-256 of the original file, to reject concurrent changes')},['path','old_text','new_text']),
     ('apply_patchset','Apply up to eight coordinated, exact text replacements in different existing source files. All changes are checked first; originals are backed up and restored if any write fails. Tests must be rerun.',
      {'changes':('array','List of {path, old_text, new_text, optional expected_sha256} edits; every old_text must occur exactly once')},['changes']),
+    ('snapshot_project_files','Back up up to 16 existing project files before a risky change; save outside workspace.',
+     {'paths':('array','Relative file paths to protect before editing')},['paths']),
+    ('rollback_project_snapshot','After failed tests, restore a named snapshot of original files, only with explicit human approval; new tests are required.',
+     {'snapshot_id':('string','ID returned by snapshot_project_files')},['snapshot_id']),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
     ('project_build_plan','Read-only: show deterministic Windows project build command, expected artifact and runtime dependencies.',{},[]),
@@ -107,6 +112,8 @@ def tool_schema():
     result=[]
     for name,desc,props,required in TOOLS:
         parameters = {p: {'type': ty, 'description': helptext} for p,(ty,helptext) in props.items()}
+        if name == 'snapshot_project_files':
+            parameters['paths']['items'] = {'type': 'string'}
         if name == 'apply_patchset':
             parameters['changes']['items'] = {
                 'type': 'object', 'properties': {
@@ -284,6 +291,26 @@ class Toolkit:
         p=self._path(path)
         if p.stat().st_size > 250_000: return 'Datei ist größer als 250 KB; bitte gezielter lesen.'
         return p.read_text(encoding='utf-8',errors='replace')[:22000]
+
+    def action_snapshot_project_files(self,paths):
+        snapshot_id, saved = create_snapshot(self.workspace, paths)
+        return ('Snapshot angelegt: ' + snapshot_id + '\nGeschützte Dateien: ' +
+                ', '.join(saved) + '. Keine Projektdatei geändert.')
+
+    def action_rollback_project_snapshot(self,snapshot_id):
+        selected = snapshot_paths(self.workspace, snapshot_id)
+        self._request('Projektdateien wiederherstellen?',
+                      'Snapshot: ' + snapshot_id + '\nDateien werden mit dem gespeicherten '
+                      'Vorher-Zustand überschrieben: ' + ', '.join(selected[:16]) +
+                      '\nDer aktuell vorhandene Zustand wird zusätzlich gesichert. '
+                      'Anschließend müssen alle Tests wiederholt werden.')
+        self._check()
+        restored = restore_snapshot(self.workspace, snapshot_id)
+        self.built_artifacts.clear()
+        self.unvalidated_paths.update(restored)
+        self.modified_paths.update(restored)
+        self.writes += len(restored)
+        return 'Snapshot wiederhergestellt: ' + ', '.join(restored) + '. Tests erneut ausführen.'
 
     def action_replace_in_file(self,path,old_text,new_text,expected_sha256=''):
         """Apply one precise edit with the same backup and atomic write as write_file."""
