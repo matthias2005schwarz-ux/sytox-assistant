@@ -25,12 +25,16 @@ from .gmail import GmailClient
 from .pc_control import WindowsDesktop
 from .web_search import search_web, format_results
 from .project_inspect import project_overview, search_project, read_project_lines
+from .project_memory import update_project_memory, lookup_project_memory
 
 
 TOOLS = [
     ('list_files','List files relative to the chosen project workspace.',{'path':('string','Relative directory, e.g. .')},['path']),
     ('project_overview','Read-only: map source files, languages, likely entry points and tests in a large project. Dependency/build folders are skipped.',
      {'path':('string','Relative project subdirectory; use . for the full workspace')},[]),
+    ('project_memory_update','Refresh private local project file/symbol index; stores only metadata, never code content.',{},[]),
+    ('project_memory_lookup','Find likely source files and top-level symbols in saved local project index; verify the actual source before editing.',
+     {'query':('string','Feature, error, module, or symbol to locate')},['query']),
     ('search_project','Read-only: search for a literal term across source files in the workspace, with path and line-number matches.',
      {'query':('string','Exact phrase/function/symbol to find (case insensitive)'),'path':('string','Relative subdirectory to narrow search')},['query']),
     ('read_file_lines','Read a specific 1-180-line window of a UTF-8 source file by line numbers.',
@@ -263,6 +267,12 @@ class Toolkit:
 
     def action_project_overview(self,path='.'):
         return project_overview(self.workspace, path)
+
+    def action_project_memory_update(self):
+        return update_project_memory(self.workspace)
+
+    def action_project_memory_lookup(self,query):
+        return lookup_project_memory(self.workspace, query)
 
     def action_search_project(self,query,path='.'):
         return search_project(self.workspace, query, path)
