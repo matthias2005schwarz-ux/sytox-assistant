@@ -37,7 +37,7 @@ jobs:
       - name: Upload visual workspace preview
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-ui-preview-0.3.7
+          name: sytox-ui-preview-0.3.8
           path: preview/sytox-black-crimson.png
           if-no-files-found: error
       - name: Build EXE and smoke-test startup
@@ -90,7 +90,7 @@ jobs:
         shell: powershell
         run: |
           .\Build_Installer.ps1 -SkipExeBuild
-          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.7.exe')) { throw 'Installer was not built' }
+          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.8.exe')) { throw 'Installer was not built' }
       - name: Install, launch, uninstall and verify user data on Windows runner
         shell: powershell
         run: .\Installer_Install_Smoke_Test.ps1
@@ -98,25 +98,25 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            'installer/SYTOX_Assistant_Setup_0.3.7.exe',
+            'installer/SYTOX_Assistant_Setup_0.3.8.exe',
             'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
           )
           foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
       - name: Archive Windows standalone app (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-app-0.3.7
+          name: sytox-windows-app-0.3.8
           path: dist/SYTOX_Assistant/
           if-no-files-found: error
       - name: Archive Windows installer (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.7
-          path: installer/SYTOX_Assistant_Setup_0.3.7.exe
+          name: sytox-windows-setup-0.3.8
+          path: installer/SYTOX_Assistant_Setup_0.3.8.exe
           if-no-files-found: error
 
-  publish-verified-037:
-    name: Publish SYTOX 0.3.7 after verified Windows install
+  publish-verified-038:
+    name: Publish SYTOX 0.3.8 after verified Windows install
     needs: windows-smoke
     # Only the tested default-branch commit can publish an official release.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -128,7 +128,7 @@ jobs:
       - name: Download the tested installer artifact
         uses: actions/download-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.7
+          name: sytox-windows-setup-0.3.8
           path: release
       - name: Check exact release version and existing official release
         id: gate
@@ -138,15 +138,15 @@ jobs:
         run: |
           set -euo pipefail
           version=$(python -c 'from sytox import __version__; print(__version__)')
-          if [ "$version" != "0.3.7" ]; then
+          if [ "$version" != "0.3.8" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if gh release view v0.3.7 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view v0.3.8 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          test -f release/SYTOX_Assistant_Setup_0.3.7.exe
+          test -f release/SYTOX_Assistant_Setup_0.3.8.exe
           echo "publish=true" >> "$GITHUB_OUTPUT"
       - name: Checksum and publish tested installer with verified tag
         if: steps.gate.outputs.publish == 'true'
@@ -156,10 +156,10 @@ jobs:
         run: |
           set -euo pipefail
           cd release
-          sha256sum SYTOX_Assistant_Setup_0.3.7.exe > SYTOX_Assistant_Setup_0.3.7.exe.sha256
-          gh release create v0.3.7 \
-            SYTOX_Assistant_Setup_0.3.7.exe \
-            SYTOX_Assistant_Setup_0.3.7.exe.sha256 \
+          sha256sum SYTOX_Assistant_Setup_0.3.8.exe > SYTOX_Assistant_Setup_0.3.8.exe.sha256
+          gh release create v0.3.8 \
+            SYTOX_Assistant_Setup_0.3.8.exe \
+            SYTOX_Assistant_Setup_0.3.8.exe.sha256 \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "SYTOX Assistant 0.3.7" \
-            --notes "12 Sprachen: Windows-EXE fuer Python, C#, Go, Rust, C und C++; JAR/JVM fuer Java/Kotlin; validierte oder uebersetzte JavaScript/TypeScript/PHP/Lua Programme. Jede erstellte Datei mit Hash und Windows-Tests, einschliesslich realem Ausfuehren der kleinen Testprogramme. Windows-Tests, EXE-Start, Installation und Deinstallation wurden im CI-Lauf vor Veröffentlichung bestanden. Installer mit SHA-256-Datei."
+            --title "SYTOX Assistant 0.3.8" \
+            --notes "Version 0.3.8: lokales Langzeitgedaechtnis mit Auto-Erinnerungen, Aktualisierung, Loeschen, Opt-out und Projektverlauf. Bestehende Windows-Komponenten-, Build-, Installer- und 12-Sprachen-Tests erfolgreich. Windows-Tests, EXE-Start, Installation und Deinstallation wurden im CI-Lauf vor Veröffentlichung bestanden. Installer mit SHA-256-Datei."
