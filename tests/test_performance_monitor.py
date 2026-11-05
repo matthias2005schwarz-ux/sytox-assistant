@@ -44,7 +44,7 @@ class PerformanceTests(unittest.TestCase):
                     (_ for _ in ()).throw(OSError("no Ollama")),
             )
         self.assertIsNone(result["gpu_name"])
-        self.assertIn("nicht verfügbar", format_performance(result))
+        self.assertIn("nicht erkannt", format_performance(result))
 
 
     def test_windows_amd_gpu_via_cim_without_shell_commands(self):
