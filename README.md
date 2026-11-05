@@ -1,3 +1,10 @@
+# SYTOX: Qwen3-Coder 30B als bevorzugtes lokales Modell (Entwicklungszweig)
+
+- **Standard für neue Einstellungen:** `qwen3-coder:30b` statt Qwen2.5-Coder 7B. Dies ist das etwa 19 GB große Q4_K_M-Modell aus der offiziellen Ollama-Bibliothek (`ollama pull qwen3-coder:30b`).
+- **Systemanforderungen:** Die 19 GB sind die Modell-/Downloadgröße, nicht der maximale Arbeitsspeicherbedarf. Für flüssigeres Arbeiten sind mindestens 32 GB RAM empfehlenswert; auf CPUs oder älteren GPUs kann die Ausführung sehr langsam sein. Kontextfenster und parallele Agenten benötigen zusätzliche Ressourcen.
+- **Kompatibilität:** Bereits gespeicherte Nutzereinstellungen bleiben unverändert; Qwen2.5-Coder 7B/3B/1.5B bleiben wählbar. Das neue Modell wird nicht ohne Auswahl und Einrichtungsfreigabe heruntergeladen.
+- **Status:** Modellname/Standard/Einrichtungsoption im Quellcode angepasst. Ein echter Download, RAM-Leistung und Coding-Qualität mit Ollama auf dem Nutzer-PC sind noch nicht verifiziert. Kein neues Release.
+
 # Entwicklungszweig: Instant Street View in der rechten Leiste
 
 SYTOX bietet eine ausklappbare rechte Leiste mit **Instant Street View**. Das Hamburger-Symbol ☰ rechts oben blendet die Leiste ein oder aus. Klare Ortsfragen wie „Wofür ist Wien bekannt?“ übernehmen den Ort in das Suchfeld. Mit „Ansicht laden“ kann die Website direkt im Windows-Programm geöffnet werden. „Im Browser“ öffnet denselben Ort im Standardbrowser.
