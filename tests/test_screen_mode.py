@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from sytox.screen_intents import screen_intent
+from sytox.voice_features import VoiceTurnRouter
 from sytox.screen_assist import explain_image
 
 PNG = bytes.fromhex('89504e470d0a1a0a') + b'synthetic'
@@ -16,6 +17,13 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(screen_intent('SYTOX, verlass meinen Bildschirm'), 'stop')
         self.assertEqual(screen_intent('Kannst wieder aus meinem Bildschirm rausgehen'), 'stop')
         self.assertIsNone(screen_intent('Was ist das fuer ein Fehler?'))
+
+    def test_bare_sytox_wake_word(self):
+        router = VoiceTurnRouter()
+        self.assertEqual(router.command_for('Sytox guck auf meinen Bildschirm'),
+                         'guck auf meinen Bildschirm')
+        router.reset()
+        self.assertIsNone(router.command_for('eine Sytox Webseite'))
 
     @patch('sytox.screen_assist.requests.post')
     def test_png_is_sent_only_to_loopback(self, post):
