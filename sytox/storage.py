@@ -229,9 +229,9 @@ class Store:
 
     def related_context(self, query, exclude_chat=None, limit=6):
         """Cross-chat recall; this is lexical FTS, not perfect semantic memory."""
-        tokens=re.findall(r'[^\W_]{3,}',query,flags=re.UNICODE)[:8]
-        if not tokens: return []
-        expr=' OR '.join('"'+t.replace('"','')+'"' for t in tokens)
+        query_words=re.findall(r'[^\W_]{3,}',str(query or ''),flags=re.UNICODE)[:8]
+        if not query_words: return []
+        expr=' OR '.join('"'+t.replace('"','')+'"' for t in query_words)
         results=[]
         with self._connect() as db:
             # Newest per-topic facts take precedence over older chat snippets.
