@@ -86,6 +86,48 @@ class ProjectInspectTests(unittest.TestCase):
         self.assertNotIn("outside.py", project_overview(self.root))
         self.assertNotIn("outside.py", search_project(self.root, "important_handler"))
 
+    def test_targeted_edit_is_unique_backed_up_and_invalidates_checks(self):
+        from unittest.mock import patch
+        store = Store(Path(self.temp.name) / "assistant.db")
+        cid = store.create_chat("Edit test")
+        tools = Toolkit(store, self.root, lambda *args: True,
+                        threading.Event(), cid, logger=lambda *args: None)
+        file_path = self.root / "src" / "main.py"
+        before = file_path.read_text(encoding="utf-8")
+        tools.passed_checks = 1
+        with patch("sytox.actions.default_data_dir",
+                   return_value=Path(self.temp.name) / "userdata"):
+            outcome = tools.call("replace_in_file", {
+                "path": "src/main.py", "old_text": "return 42",
+                "new_text": "return 43"})
+        self.assertIn("Gezielt geändert", outcome)
+        self.assertIn("return 43", file_path.read_text(encoding="utf-8"))
+        self.assertEqual(tools.writes, 1)
+        self.assertIn("src/main.py", tools.unvalidated_paths)
+        backups = list((Path(self.temp.name) / "userdata" / "backups").rglob("main.py"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), before)
+        tools.close()
+
+    def test_targeted_edit_rejects_ambiguous_missing_or_stale_source(self):
+        store = Store(Path(self.temp.name) / "assistant.db")
+        cid = store.create_chat("Edit rejects")
+        tools = Toolkit(store, self.root, lambda *args: True,
+                        threading.Event(), cid, logger=lambda *args: None)
+        file_path = self.root / "src" / "main.py"
+        before = file_path.read_text(encoding="utf-8")
+        for old_text, digest in (("return", "0" * 64),
+                                 ("not present", ""),
+                                 (" ", "")):
+            with self.subTest(old=old_text, digest=digest):
+                outcome = tools.call("replace_in_file", {
+                    "path": "src/main.py", "old_text": old_text,
+                    "new_text": "changed", "expected_sha256": digest})
+                self.assertIn("FEHLER", outcome)
+                self.assertEqual(file_path.read_text(encoding="utf-8"), before)
+        self.assertEqual(tools.writes, 0)
+        tools.close()
+
     def test_toolkit_exposes_read_only_tools(self):
         store = Store(Path(self.temp.name) / "assistant.db")
         tools = Toolkit(store, self.root, lambda *args: True,
