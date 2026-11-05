@@ -34,6 +34,7 @@ from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command,
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
 from .screen_vision import (DEFAULT_VISION_MODEL, screen_intent, screen_followup_intent,
                             analyze_screenshot, MAX_SCREENSHOT_BYTES)
+from .performance_monitor import measure_performance, format_performance
 
 class BrandMark(QWidget):
     """Vector-drawn SYTOX monogram; no external image or web UI required."""
@@ -564,6 +565,21 @@ class ScreenAnalysisWorker(QThread):
             self.question = ''
 
 
+class PerformanceWorker(QThread):
+    """Nonblocking local metrics; never uses the main GUI thread for network I/O."""
+    measured = Signal(object)
+
+    def __init__(self, base_url, parent=None):
+        super().__init__(parent)
+        self.base_url = base_url
+
+    def run(self):
+        try:
+            self.measured.emit(measure_performance(self.base_url))
+        except Exception:
+            self.measured.emit({})
+
+
 class OllamaProbe(QThread):
     """Avoid freezing the Qt event loop while checking a local model server."""
     checked = Signal(object)
@@ -903,10 +919,16 @@ class MainWindow(QMainWindow):
         self.screen_enabled=False
         self.screen_generation=0
         self.screen_worker=None
+        self.performance_worker=None
+        self.performance_timer=QTimer(self)
+        self.performance_timer.setInterval(12000)
+        self.performance_timer.timeout.connect(self.check_performance)
         self.setWindowTitle('SYTOX Assistant · Dein KI-Workspace')
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
         self.build_ui();self.setup_tray();self.reload_chats()
+        self.performance_timer.start()
+        QTimer.singleShot(1900, self.check_performance)
         if self.chatlist.count()==0:self.create_chat()
         else:self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
         self.log('System','Bereit. Lokale Daten: '+str(default_data_dir()))
@@ -1243,6 +1265,19 @@ class MainWindow(QMainWindow):
         screen.addWidget(self.screen_stop_btn)
         r.addWidget(screen_card)
 
+        performance_card, performance = new_card()
+        perf_title = QLabel('LEISTUNGSZENTRALE')
+        perf_title.setObjectName('sectionTitle')
+        performance.addWidget(perf_title)
+        self.performance_info = QLabel('CPU/RAM/Ollama werden lokal geprüft …')
+        self.performance_info.setObjectName('panelDescription')
+        self.performance_info.setWordWrap(True)
+        performance.addWidget(self.performance_info)
+        refresh_perf = QPushButton('Leistungsdaten aktualisieren')
+        refresh_perf.clicked.connect(lambda: self.check_performance(force=True))
+        performance.addWidget(refresh_perf)
+        r.addWidget(performance_card)
+
         activity_card, activity = new_card()
         logs_title = QLabel('AKTIVITÄTEN')
         logs_title.setObjectName('sectionTitle')
@@ -1427,6 +1462,12 @@ class MainWindow(QMainWindow):
                     'Der Download wird noch beendet. Bitte gleich erneut versuchen.')
                 return
         self.disable_screen()
+        self.performance_timer.stop()
+        if self.performance_worker and self.performance_worker.isRunning():
+            if not self.performance_worker.wait(5500):
+                QMessageBox.information(self, 'Leistungszentrale',
+                    'Hardwaremessung wird noch beendet. Bitte gleich erneut versuchen.')
+                return
         if self.screen_worker and self.screen_worker.isRunning():
             if not self.screen_worker.wait(2500):
                 QMessageBox.information(self, 'Bildschirmhilfe',
@@ -1988,6 +2029,25 @@ class MainWindow(QMainWindow):
         row.addWidget(delbtn)
         lay.addLayout(row)
         dialog.exec()
+
+    def check_performance(self, force=False):
+        if not force and not self.isVisible():
+            return
+        if self.performance_worker and self.performance_worker.isRunning():
+            return
+        worker = PerformanceWorker(self.config.get('ollama_url', 'http://localhost:11434'), self)
+        self.performance_worker = worker
+        worker.measured.connect(self._performance_measured)
+        worker.finished.connect(lambda w=worker: self._performance_finished(w))
+        worker.start()
+
+    def _performance_measured(self, result):
+        self.performance_info.setText(format_performance(result))
+
+    def _performance_finished(self, worker):
+        if self.performance_worker is worker:
+            self.performance_worker = None
+        worker.deleteLater()
 
     def check_model_status(self):
         """Check the configured Ollama model without blocking mouse/keyboard UI."""
