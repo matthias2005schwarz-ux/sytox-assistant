@@ -373,6 +373,8 @@ class Toolkit:
         )
         self._check()
         expected = self._path(plan['expected_executable'])
+        # Go does not automatically create the -o parent directory.
+        expected.parent.mkdir(parents=True, exist_ok=True)
         started_ns = time.time_ns()
         proc = None
         try:

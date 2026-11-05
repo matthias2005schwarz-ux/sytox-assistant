@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -285,6 +286,11 @@ class Agent:
                             if count and artifact_ok and (not coding_task or (writes and checks and validated_writes >= writes and not toolkit.unvalidated_paths)):
                                 status, result = 'done', str(args.get('summary', 'Auftrag erledigt'))[:3000]
                                 result += '\nNachweis (Modellbericht, bitte prüfen): ' + str(args.get('evidence', '(keiner)'))[:1300]
+                                if artifact_need == 'exe':
+                                    artifact = toolkit.verified_builds()[0]
+                                    result += ('\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
+                                               + '\nSHA-256: ' + artifact['sha256']
+                                               + '\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
                                 finished = True
                                 break
                             res = ('Abschluss abgelehnt: kein ausreichender Nachweis. '
@@ -349,6 +355,11 @@ class Agent:
                                'der Installer wurde nicht durch einen erfolgreichen Build nachgewiesen.')
                     else:
                         status, result = 'done', text or 'Das Modell hat keine Antwort geliefert.'
+                        if artifact_need == 'exe':
+                            artifact = toolkit.verified_builds()[0]
+                            result += ('\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
+                                       + '\nSHA-256: ' + artifact['sha256']
+                                       + '\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
                     break
                 idle += 1
                 if idle >= 3:
