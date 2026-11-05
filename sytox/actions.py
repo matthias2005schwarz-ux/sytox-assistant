@@ -26,6 +26,7 @@ from .pc_control import WindowsDesktop
 from .web_search import search_web, format_results
 from .project_inspect import project_overview, search_project, read_project_lines
 from .project_memory import update_project_memory, lookup_project_memory
+from .context_planner import build_context_bundle
 from .code_recovery import create_snapshot, snapshot_paths, restore_snapshot
 
 
@@ -36,6 +37,10 @@ TOOLS = [
     ('project_memory_update','Refresh private local project file/symbol index; stores only metadata, never code content.',{},[]),
     ('project_memory_lookup','Find likely source files and top-level symbols in saved local project index; verify the actual source before editing.',
      {'query':('string','Feature, error, module, or symbol to locate')},['query']),
+    ('project_context_bundle','Read-only: select relevant code files from the local index, returning short, line-numbered source excerpts under a strict character budget. No files are changed.',
+     {'query':('string','Current concrete programming objective or error'),
+      'max_chars':('integer','Optional output character budget, 1500 to 22000'),
+      'max_files':('integer','Optional maximum relevant source files, 1 to 8')},['query']),
     ('search_project','Read-only: search for a literal term across source files in the workspace, with path and line-number matches.',
      {'query':('string','Exact phrase/function/symbol to find (case insensitive)'),'path':('string','Relative subdirectory to narrow search')},['query']),
     ('read_file_lines','Read a specific 1-180-line window of a UTF-8 source file by line numbers.',
@@ -280,6 +285,10 @@ class Toolkit:
 
     def action_project_memory_lookup(self,query):
         return lookup_project_memory(self.workspace, query)
+
+    def action_project_context_bundle(self,query,max_chars=12000,max_files=6):
+        return build_context_bundle(self.workspace, query, max_chars=max_chars,
+                                    max_files=max_files)
 
     def action_search_project(self,query,path='.'):
         return search_project(self.workspace, query, path)
