@@ -66,12 +66,12 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.window.toggle_focus_mode()
         self.assertTrue(panel.isHidden())
         self.assertTrue(self.window.focus_btn.isChecked())
-        self.assertEqual(self.window.focus_btn.text(), 'Steuerzentrale')
+        self.assertEqual(self.window.focus_btn.text(), '☰')
 
         self.window.toggle_focus_mode()
         self.assertFalse(panel.isHidden())
         self.assertFalse(self.window.focus_btn.isChecked())
-        self.assertEqual(self.window.focus_btn.text(), 'Fokusmodus')
+        self.assertEqual(self.window.focus_btn.text(), '☰')
         self.assertEqual(len(self.window.findChildren(QFrame, 'utilityCard')), 5)
 
     def test_spoken_desktop_command_opens_panel_without_issuing_agent_task(self):
