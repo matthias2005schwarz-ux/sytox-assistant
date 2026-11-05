@@ -11,6 +11,10 @@ import shutil
 import subprocess
 from typing import Any
 
+import requests
+
+from .screen_vision import local_ollama_url
+
 
 @dataclass(frozen=True)
 class ModelRecommendation:
@@ -143,6 +147,34 @@ def probe_hardware(*, psutil_module=None, which=None, command=None) -> dict:
         except (IndexError, ValueError, OSError, subprocess.TimeoutExpired):
             pass
     return result
+
+
+def read_local_model_size_gb(model: str, base_url: str, *, get=None) -> float | None:
+    """Inspect size of a locally installed model without downloading anything."""
+    try:
+        endpoint = local_ollama_url(base_url)
+    except (ValueError, TypeError):
+        return None
+    request = get or requests.get
+    try:
+        response = request(endpoint + "/api/tags", timeout=2)
+        response.raise_for_status()
+        payload = response.json()
+        entries = payload.get("models", []) if isinstance(payload, dict) else []
+        if not isinstance(entries, list):
+            return None
+        wanted = str(model or "").strip()
+        wanted_alt = wanted if ":" in wanted.rsplit("/", 1)[-1] else wanted + ":latest"
+        for entry in entries[:100]:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("name") in (wanted, wanted_alt):
+                size = _numeric(entry.get("size"))
+                if size and size > 0:
+                    return round(size / 1_000_000_000, 1)
+    except (requests.RequestException, ValueError, TypeError, OSError, KeyError):
+        return None
+    return None
 
 
 def describe_recommendation(model: str, hardware: dict | None = None,
