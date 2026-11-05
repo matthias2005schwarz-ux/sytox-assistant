@@ -659,8 +659,9 @@ class OllamaHelpDialog(QDialog):
             self, 'KI lokal einrichten',
             'SYTOX wird – falls nötig – Ollama über den Windows-Paketmanager '
             'installieren und anschließend das Modell „' + self.chosen_model() + '“ laden.\n\n'
-            'Dafür werden mehrere GB freier Speicherplatz und Internet benötigt. '
-            'Die Installation kann einige Minuten dauern. Fortfahren?',
+            'Für Qwen3-Coder 30B sind etwa 19 GB Download und deutlich mehr Arbeitsspeicher '
+            '(empfohlen mindestens 32 GB RAM) erforderlich. Das Modell kann auf schwächeren PCs '
+            'sehr langsam sein. Es wird nur nach deiner Bestätigung heruntergeladen. Fortfahren?',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
@@ -869,7 +870,7 @@ class MainWindow(QMainWindow):
 
     def load_settings(self):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
-        settings={'model':'qwen2.5-coder:7b','ollama_url':'http://localhost:11434',
+        settings={'model':'qwen3-coder:30b','ollama_url':'http://localhost:11434',
                   'workspace':str(base/'projects'/'default'),'vosk_model':'',
                   'piper_exe':'','piper_model':'','voice_enabled':False,
                   'speech_engine':'windows','edge_voice':'de-DE-KatjaNeural','edge_rate':'+8%',
