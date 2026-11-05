@@ -7,14 +7,17 @@ from __future__ import annotations
 
 import json
 
+from .model_autotune import recommend_context
 
-def ollama_generation_options(model: str, context_tokens: int | None = None) -> dict:
+
+def ollama_generation_options(model: str, context_tokens: int | None = None,
+                              *, hardware: dict | None = None) -> dict:
     """Return conservative, RAM-aware model options; never a usage quota."""
     name = str(model or "").lower().strip()
     large_coder = name.startswith("qwen3-coder:30b")
     default_context = 16384 if large_coder else 8192
     if context_tokens in (None, 0):
-        context = default_context
+        context = recommend_context(model, hardware).context_tokens if hardware is not None else default_context
     elif (isinstance(context_tokens, bool) or not isinstance(context_tokens, int)
           or not 4096 <= context_tokens <= 32768):
         raise ValueError("Kontextgröße muss zwischen 4096 und 32768 Tokens liegen.")
