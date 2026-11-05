@@ -527,9 +527,13 @@ class Agent:
                         # Verification must come after the LAST file edit, not before.
                         if name in ('run_command', 'selfdev_validate', 'project_build') and toolkit.passed_checks > before_checks:
                             validated_writes = previous_writes + toolkit.writes
-                        private_pc = name in ('pc_find_apps', 'pc_list_windows', 'pc_select_window', 'pc_inspect_window')
-                        safe_res = (f'{len(res)} Zeichen; Fensterinhalte nicht protokolliert'
-                                    if private_pc else res[:1800])
+                        private_result = name in (
+                            'pc_find_apps', 'pc_list_windows', 'pc_select_window',
+                            'pc_inspect_window', 'read_file', 'read_file_lines',
+                            'search_project', 'project_context_bundle',
+                        )
+                        safe_res = (f'{len(res)} Zeichen; private Datei-/Fensterinhalte '
+                                    'nicht protokolliert' if private_result else res[:1800])
                         self.logger('Aktion', f'{name}: {safe_res[:180]}')
                         messages.append({'role': 'tool', 'tool_name': name, 'content': res})
                         if failed_coding_tool(name, res):
