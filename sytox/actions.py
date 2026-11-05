@@ -4,6 +4,7 @@ import os
 import platform
 import re
 import json
+import hashlib
 import shutil
 import shlex
 import subprocess
@@ -36,6 +37,11 @@ TOOLS = [
     ('read_file','Read a UTF-8 file in the project workspace.',{'path':('string','Relative file path')},['path']),
     ('write_file','Create/replace a UTF-8 file inside the project workspace. Backups of edited files are made.',
      {'path':('string','Relative file path'),'content':('string','Complete file contents')},['path','content']),
+    ('replace_in_file','Safely replace ONE exact snippet in an existing text file. Reject absent/ambiguous snippets, backup old file, invalidate build and test receipts.',
+     {'path':('string','Relative text file in workspace'),
+      'old_text':('string','Exact unique text already in the file, without line numbers'),
+      'new_text':('string','Replacement text'),
+      'expected_sha256':('string','Optional SHA-256 of the original file, to reject concurrent changes')},['path','old_text','new_text']),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
     ('project_build_plan','Read-only: show deterministic Windows project build command, expected artifact and runtime dependencies.',{},[]),
@@ -192,7 +198,7 @@ class Toolkit:
             # Side effects (e.g. saved files or drafts) and actual reads count toward
             # a non-coding task; coding tasks additionally need post-write validation.
             evidence_tools = {
-                'read_file', 'read_file_lines', 'write_file', 'run_command', 'remember', 'browser_visit', 'web_search',
+                'read_file', 'read_file_lines', 'write_file', 'replace_in_file', 'run_command', 'remember', 'browser_visit', 'web_search',
                 'browser_read', 'browser_click', 'browser_type', 'pc_open_app',
                 'pc_inspect_window', 'pc_click_control',
                 'pc_type_text', 'pc_hotkey', 'pc_click', 'selfdev_prepare',
@@ -208,7 +214,7 @@ class Toolkit:
                     or ok_command or name.startswith('ext_')):
                 self.action_count += 1
                 self.has_meaningful_evidence = True
-            if name == 'write_file':
+            if name in ('write_file', 'replace_in_file'):
                 self.built_artifacts.clear()
                 self.writes += 1
                 self.unvalidated_paths.add(str(self._path(args['path']).relative_to(self.workspace)))
@@ -251,6 +257,35 @@ class Toolkit:
         p=self._path(path)
         if p.stat().st_size > 250_000: return 'Datei ist größer als 250 KB; bitte gezielter lesen.'
         return p.read_text(encoding='utf-8',errors='replace')[:22000]
+
+    def action_replace_in_file(self,path,old_text,new_text,expected_sha256=''):
+        """Apply one precise edit with the same backup and atomic write as write_file."""
+        p = self._path(path)
+        if not p.is_file():
+            raise ValueError('Die Quelldatei existiert nicht.')
+        if p.stat().st_size > 900_000:
+            raise ValueError('Datei zu groß für diese Änderung.')
+        if (not isinstance(old_text, str) or not old_text
+                or not isinstance(new_text, str)):
+            raise ValueError('old_text muss nicht-leer sein, new_text muss Text sein.')
+        if len(old_text) > 25_000 or len(new_text) > 25_000:
+            raise ValueError('Bitte eine kleinere, gezielte Änderung verwenden.')
+        source_bytes = p.read_bytes()
+        if expected_sha256:
+            if (not isinstance(expected_sha256, str)
+                    or len(expected_sha256) != 64
+                    or hashlib.sha256(source_bytes).hexdigest() != expected_sha256.lower()):
+                raise ValueError('Quelldatei wurde geändert (SHA-256-Abweichung).')
+        original = source_bytes.decode('utf-8')
+        count = original.count(old_text)
+        if count != 1:
+            raise ValueError(f'Exakter Text muss genau einmal vorkommen (Treffer: {count}).')
+        updated = original.replace(old_text, new_text, 1)
+        if updated == original:
+            raise ValueError('Keine Änderung erforderlich.')
+        self.action_write_file(path, updated)
+        return (f'Gezielt geändert: {p.relative_to(self.workspace)}; '
+                'vorherige Version gesichert; erneute Tests erforderlich.')
 
     def action_write_file(self,path,content):
         p=self._path(path)
