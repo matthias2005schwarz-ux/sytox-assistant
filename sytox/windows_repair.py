@@ -105,20 +105,20 @@ def identify_error(text: str) -> dict:
 # Shared with the quick-conversation model: it can diagnose and safely repair
 # the same operating-system errors without switching to the larger code model.
 _WINDOWS_HELP = re.compile(
-    r"\\b(?:0x[0-9a-f]{8}|0x800[0-9a-f]{5}|\\w+\\.dll|"
-    r"fehler(?:code|meldung)?|error(?:\\s*code)?|absturz|"
-    r"stürzt\\s+ab|funktioniert\\s+nicht|startet\\s+nicht|"
-    r"reparier\\w*|beheb\\w*|fehlende\\s+datei|"
-    r"windows[- ]?problem)\\b", re.IGNORECASE
+    r"\b(?:0x[0-9a-f]{8}|0x800[0-9a-f]{5}|\w+\.dll|"
+    r"fehler(?:code|meldung)?|error(?:\s*code)?|absturz|"
+    r"stürzt\s+ab|funktioniert\s+nicht|startet\s+nicht|"
+    r"reparier\w*|beheb\w*|fehlende\s+datei|"
+    r"windows[- ]?problem)\b", re.IGNORECASE
 )
 _REPAIR_WISH = re.compile(
-    r"\\b(?:beheb\\w*|reparier\\w*|fix\\w*|"
-    r"installier\\w*|lade\\s+.{0,12}herunter|"
-    r"mach\\s+(?:es|das|den\\s+fehler)\\s+(?:wieder\\s+)?(?:heil|weg|ganz)|"
-    r"bring\\s+.{0,30}zum\\s+laufen)\\b", re.IGNORECASE
+    r"\b(?:beheb\w*|reparier\w*|fix\w*|"
+    r"installier\w*|lade\s+.{0,12}herunter|"
+    r"mach\s+(?:es|das|den\s+fehler)\s+(?:wieder\s+)?(?:heil|weg|ganz)|"
+    r"bring\s+.{0,30}zum\s+laufen)\b", re.IGNORECASE
 )
 _REPAIR_NEGATION = re.compile(
-    r"\\b(?:nicht|niemals|nie|ohne|keine?)\\b.{0,35}"
+    r"\b(?:nicht|niemals|nie|ohne|keine?)\b.{0,35}"
     r"(?:beheb|reparier|fix|installier|lade|herunter)", re.IGNORECASE
 )
 
@@ -147,11 +147,11 @@ def choose_unambiguous_fix(error_text: str) -> str | None:
     Unknown codes and generic access violations cannot authorize a download.
     """
     text = str(error_text or "")[:6000].lower()
-    if not re.search(r"\\b(?:vcruntime140(?:_1)?|msvcp140|concrt140|api-ms-win-crt)[\\w.-]*\\b",
+    if not re.search(r"\b(?:vcruntime140(?:_1)?|msvcp140|concrt140|api-ms-win-crt)[\w.-]*\b",
                      text):
         return None
-    is_x64 = bool(re.search(r"\\b(?:x64|64[ -]?bit|amd64)\\b", text))
-    is_x86 = bool(re.search(r"\\b(?:x86|32[ -]?bit|win32)\\b", text))
+    is_x64 = bool(re.search(r"\b(?:x64|64[ -]?bit|amd64)\b", text))
+    is_x86 = bool(re.search(r"\b(?:x86|32[ -]?bit|win32)\b", text))
     if is_x64 == is_x86:
         return None
     return "vc_redist_x64" if is_x64 else "vc_redist_x86"
