@@ -208,6 +208,23 @@ class ControlPanelTests(unittest.TestCase):
         finally:
             dispose(collapsed)
 
+    def test_focus_mode_survives_reopening_and_can_be_disabled_again(self):
+        self.window.toggle_focus_mode(True)
+        reopened = MainWindow()
+        try:
+            self.assertTrue(reopened.focus_btn.isChecked())
+            self.assertTrue(reopened.utility_panel.isHidden())
+            reopened.toggle_focus_mode(False)
+        finally:
+            reopened._is_exiting = True
+            if reopened.tray:
+                reopened.tray.hide()
+            reopened.close()
+            reopened.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+            self.app.processEvents()
+        self.assertFalse(self.window.load_settings()['focus_mode'])
+
 
 if __name__ == '__main__':
     unittest.main()

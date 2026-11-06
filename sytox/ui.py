@@ -952,7 +952,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('SYTOX Assistant · Dein KI-Workspace')
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
-        self.build_ui();self.setup_tray();self.reload_chats()
+        self.build_ui()
+        if self.config.get('focus_mode') is True:
+            self.toggle_focus_mode(True)
+        self.setup_tray();self.reload_chats()
         if not (self.chatlist.count() or self.projectlist.count()):
             self.create_chat()
         elif self.chatlist.count():
@@ -1462,6 +1465,8 @@ class MainWindow(QMainWindow):
             panel_width = getattr(self, '_utility_last_width', 296)
             center_width = max(450, self.splitter.width() - sidebar_width - panel_width - 2)
             self.splitter.setSizes([sidebar_width, center_width, panel_width])
+        if self.config.get('focus_mode', False) != checked:
+            self._save_panel_state('focus_mode', checked)
         self.input.setFocus()
 
     def _animate_appearance(self, widget, duration=260):
