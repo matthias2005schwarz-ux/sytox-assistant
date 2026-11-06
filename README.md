@@ -1,3 +1,26 @@
+## Direkt-Updates innerhalb von SYTOX (in Entwicklung)
+
+Unter **Nach Updates suchen** erkennt die installierte Windows-App offizielle GitHub Releases.
+Neue Versionen koennen neben einem Erstinstallationsprogramm ein signiertes HTTPS-Release-
+Paket `SYTOX_Assistant_Portable_VERSION.zip` mit separater SHA-256-Pruefdatei bereitstellen.
+Die App bevorzugt das direkte Paket: Nach **zweifacher ausdruecklicher Zustimmung** wird
+es heruntergeladen, vollstaendig geprueft und in einen isolierten Ordner entpackt.
+SYTOX beendet sich, der neue EXE-Helfer wartet auf das Ende des alten Prozesses,
+ersetzt die installierte Anwendung, prueft sie mit `--smoke-test` und startet sie erneut.
+Wenn der neue Starttest fehlschlaegt oder die App sofort abstuerzt, wird die
+vorherige Version automatisch zurueckgesetzt und neu gestartet.
+
+Die bestehenden Chat- und Projektdaten im Benutzerprofil werden niemals ausgetauscht;
+Inno-Setup-Deinstallationsdateien, Programmverknuepfungen und Autostart-Einstellungen
+bleiben erhalten. Direkt-Updates funktionieren nur mit einer bereits installierten
+Windows-EXE, nicht im Quellcode-Modus. Eine vorhandene **alte Version** ohne diese
+Funktion benoetigt beim **einmaligen Wechsel** einen regulaeren Update-Installer,
+den der eingebaute Update-Button selbst laden und ausfuehren kann. Anschliessend
+laufen weitere geeignete Releases ohne Installer. Nicht veroeffentlichte
+Entwicklungsstaende erscheinen absichtlich nicht bei der Update-Suche.
+
+**Status:** Quellcode und automatisierte Tests in Entwicklung; noch kein neues Release.
+
 # SYTOX Assistant 0.3.8 – lokales Langzeitgedächtnis
 
 Das Gedächtnis speichert nachvollziehbare, ausgewählte Fakten aus **Nutzernachrichten** lokal in der vorhandenen SQLite-Datei. Es ist ein regelbasierter Anfang, kein perfektes semantisches Verständnis und kein selbständiges Training des KI-Modells.
