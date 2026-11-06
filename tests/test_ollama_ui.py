@@ -164,6 +164,55 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         finally:
             self.window.worker = None
 
+    def test_eta_question_uses_checkpoint_without_stopping_coding(self):
+        import threading
+        import json
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        task_id = self.window.store.create_task(
+            self.window.chat_id, 'Programmiere ein Spiel', 'until_done')
+        self.window.store.update_task(task_id, 'running', {
+            'steps': 5, 'remaining_steps': 4, 'remaining_steps_at': 5,
+            'step_durations': [
+                {'step': 1, 'seconds': 45}, {'step': 2, 'seconds': 55},
+                {'step': 3, 'seconds': 65}],
+            'progress_notes': [{'next_step': 'Projekt testen',
+                                'completed': 'Quellcode erstellt',
+                                'evidence': 'Test grün'}],
+        })
+        try:
+            with patch.object(self.window, 'show_parallel_chat') as dialog, \
+                 patch.object(self.window, '_conversation_ready'):
+                reply = self.window.report_agent_status(
+                    'Wie lange brauchst du noch?', spoken=False)
+            self.assertIn('Grob geschätzt', reply)
+            self.assertIn('Projekt testen', reply)
+            self.assertFalse(running.stop_event.is_set())
+            self.assertTrue(dialog.called)
+            self.assertIn('SYTOX', dialog.return_value.transcript.appendPlainText.call_args.args[0])
+        finally:
+            self.window.worker = None
+
+    def test_eta_spoken_question_is_not_sent_to_coding_agent(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        try:
+            with patch.object(self.window, 'report_agent_status') as status, \
+                 patch.object(self.window, 'ask_parallel') as side:
+                self.window.received_voice_command('Wie lange dauert das noch?')
+            status.assert_called_once_with('Wie lange dauert das noch?', spoken=True)
+            side.assert_not_called()
+            self.assertFalse(running.stop_event.is_set())
+        finally:
+            self.window.worker = None
+
     def test_spoken_progress_question_reports_without_pausing(self):
         import threading
         from unittest.mock import MagicMock
