@@ -385,6 +385,7 @@ class Agent:
                         'unvalidated_paths': sorted(toolkit.unvalidated_paths),
                         'progress_notes': progress_notes[-8:],
                         'coding_plan': coding_plan,
+                        'coding_team': team.snapshot(),
                         'modified_paths': sorted(toolkit.modified_paths),
                         'coding_research_queries': research_queries[-2:],
                         'repair_state': repair_state}
@@ -438,7 +439,7 @@ class Agent:
                         # A small local model can get stuck making the same call forever.
                         # Stop after three identical consecutive requests rather than wasting hours
                         # or repeating a side effect (e.g. sending the same email).
-                        if name not in ('report_blocker', 'complete_task', 'record_progress', 'set_coding_plan', 'review_coding_changes', 'consult_specialist'):
+                        if name not in ('report_blocker', 'complete_task', 'record_progress', 'set_coding_plan', 'review_coding_changes', 'consult_specialist', 'start_coding_team'):
                             signature = json.dumps([name, args], sort_keys=True, ensure_ascii=False, default=str)
                             last_calls = (last_calls + [signature])[-3:]
                             if len(last_calls) == 3 and len(set(last_calls)) == 1:
@@ -461,6 +462,29 @@ class Agent:
                                 coding_plan = {'steps': [x.strip() for x in plan_steps],
                                                'test_strategy': strategy.strip(), 'risks': risks.strip()}
                                 res = 'Programmierplan gespeichert (noch nicht umgesetzt): ' + json.dumps(coding_plan, ensure_ascii=False)[:2100]
+                        elif name == 'start_coding_team' and mode != 'once':
+                            if not coding_task:
+                                res = 'FEHLER ValueError: Team-Modus nur bei Programmieraufträgen.'
+                            elif not local_model_only(self.client.url):
+                                res = 'FEHLER PermissionError: Multi-Agent-Coding benötigt lokales Ollama.'
+                            elif team.active:
+                                res = 'Multi-Agent-Team bereits aktiv; vorhandenen Checkpoint weiterverwenden.'
+                            else:
+                                try:
+                                    hints = lookup_project_memory(self.workspace, goal[:160])
+                                    advice = self.client.chat(
+                                        specialist_messages('architect', goal,
+                                            'Modulstruktur, sichere Änderungen und Teststrategie prüfen.',
+                                            hints), tools=None, stop=self.stop)
+                                    summary = specialist_summary('architect', advice)
+                                    if not isinstance(advice.get('content'), str) or not advice['content'].strip():
+                                        raise ValueError('Leere Antwort vom Architekten.')
+                                    team.start(summary)
+                                    res = ('Lokales Team aktiviert. Architekt hat ohne Werkzeuge beraten; '
+                                           'Hauptagent programmiert mit bestehenden Freigaben. '
+                                           'Debugger und Reviewer folgen bei echten Tests.\n' + summary)
+                                except (OllamaError, ValueError) as exc:
+                                    res = 'FEHLER ' + type(exc).__name__ + ': ' + str(exc)[:300]
                         elif name == 'consult_specialist' and mode != 'once':
                             host = urlparse(self.client.url).hostname
                             role = args.get('role')
@@ -548,7 +572,7 @@ class Agent:
                                    'per project_build verifizierte Windows-Datei erforderlich. '
                                    'Ein Installer ist damit noch NICHT abgedeckt. '
                                    'Andernfalls Blockade melden oder weitermachen.')
-                        elif name not in ('record_progress', 'report_blocker', 'set_coding_plan', 'review_coding_changes', 'consult_specialist'):
+                        elif name not in ('record_progress', 'report_blocker', 'set_coding_plan', 'review_coding_changes', 'consult_specialist', 'start_coding_team'):
                             before_checks = toolkit.passed_checks
                             res = toolkit.call(name, args)
                         # Verification must come after the LAST file edit, not before.
@@ -594,6 +618,7 @@ class Agent:
                         'unvalidated_paths': sorted(toolkit.unvalidated_paths),
                         'progress_notes': progress_notes[-8:],
                         'coding_plan': coding_plan,
+                        'coding_team': team.snapshot(),
                         'modified_paths': sorted(toolkit.modified_paths),
                         'coding_research_queries': research_queries[-2:],
                         'repair_state': repair_state}
@@ -626,6 +651,7 @@ class Agent:
                         'unvalidated_paths': sorted(toolkit.unvalidated_paths),
                         'progress_notes': progress_notes[-8:],
                         'coding_plan': coding_plan,
+                        'coding_team': team.snapshot(),
                         'modified_paths': sorted(toolkit.modified_paths),
                         'coding_research_queries': research_queries[-2:],
                         'repair_state': repair_state}
@@ -687,6 +713,7 @@ class Agent:
                         'unvalidated_paths': sorted(toolkit.unvalidated_paths),
                         'progress_notes': progress_notes[-8:],
                         'coding_plan': coding_plan,
+                        'coding_team': team.snapshot(),
                         'modified_paths': sorted(toolkit.modified_paths),
                         'coding_research_queries': research_queries[-2:],
                         'repair_state': repair_state}
