@@ -44,6 +44,20 @@ from .model_benchmark import run_local_benchmark, format_benchmark
 from .model_autotune import (probe_hardware, describe_recommendation,
                              read_local_model_size_gb)
 
+def bundled_asset(filename):
+    """Resolve read-only user-provided artwork in source and frozen Windows EXE."""
+    root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
+    return root / 'assets' / filename
+
+
+def brand_wordmark_pixmap(width, height):
+    """Use the supplied SYTOX KI graphic; never distort its aspect ratio."""
+    pixmap = QPixmap(str(bundled_asset('sytox_wordmark.jpg')))
+    if pixmap.isNull():
+        return pixmap
+    return pixmap.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+
 class BrandMark(QWidget):
     """Vector-drawn SYTOX monogram; no external image or web UI required."""
     def __init__(self, parent=None):
@@ -78,8 +92,7 @@ def subtle_glow(widget, color='#92303E', radius=23, opacity=135):
 
 
 def app_icon():
-    resources = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
-    icon_file = resources / 'assets' / 'sytox.ico'
+    icon_file = bundled_asset('sytox.ico')
     if icon_file.exists():
         return QIcon(str(icon_file))
     pix=QPixmap(64,64);pix.fill(Qt.transparent)
@@ -1188,7 +1201,7 @@ class MainWindow(QMainWindow):
         self.splitter = splitter
         layout.addWidget(splitter)
 
-        # Left: simple navigation, with a distinctive native vector brand.
+        # Left: user-provided metallic app icon + functional local model status.
         left = QFrame()
         left.setObjectName('sidebar')
         self.navigation_panel = left
@@ -1197,22 +1210,28 @@ class MainWindow(QMainWindow):
         l.setContentsMargins(14, 23, 14, 17)
         l.setSpacing(9)
         identity = QHBoxLayout()
-        identity.setSpacing(11)
-        mark = BrandMark()
-        subtle_glow(mark)
-        identity.addWidget(mark)
-        names = QVBoxLayout()
-        names.setSpacing(1)
-        title = QLabel('SYTOX')
-        title.setObjectName('brandName')
-        names.addWidget(title)
-        subtitle = QLabel('DESKTOP AI')
-        subtitle.setObjectName('brandSubtitle')
-        names.addWidget(subtitle)
-        identity.addLayout(names)
-        identity.addStretch(1)
+        identity.setSpacing(12)
+        self.brand_app_icon = QLabel()
+        self.brand_app_icon.setObjectName('brandIcon')
+        self.brand_app_icon.setFixedSize(54, 54)
+        self.brand_app_icon.setAlignment(Qt.AlignCenter)
+        self.brand_app_icon.setPixmap(app_icon().pixmap(QSize(50, 50)))
+        subtle_glow(self.brand_app_icon, color='#A72A39', radius=17, opacity=85)
+        identity.addWidget(self.brand_app_icon)
+        details = QVBoxLayout()
+        details.setSpacing(4)
+        brand_title = QLabel('LOKALER WORKSPACE')
+        brand_title.setObjectName('brandStatusTitle')
+        details.addWidget(brand_title)
+        self.brand_status_btn = QPushButton('●  Modell prüfen')
+        self.brand_status_btn.setObjectName('brandStatusButton')
+        self.brand_status_btn.setAccessibleName('KI-Modellstatus prüfen und Modell einrichten')
+        self.brand_status_btn.setToolTip('Lokales KI-Modell prüfen und bei Bedarf einrichten')
+        self.brand_status_btn.clicked.connect(self.show_model_help)
+        details.addWidget(self.brand_status_btn)
+        identity.addLayout(details, 1)
         l.addLayout(identity)
-        l.addSpacing(21)
+        l.addSpacing(18)
         self.btn_quick = QPushButton('⚡  Neuer Schnellchat')
         self.btn_quick.setObjectName('primary')
         self.btn_quick.setToolTip('Schnelle Gespräche, Sprachfragen und kurze Skripte')
@@ -1274,7 +1293,18 @@ class MainWindow(QMainWindow):
         top = QFrame()
         top.setObjectName('topbar')
         th = QHBoxLayout(top)
-        th.setContentsMargins(24, 14, 24, 14)
+        th.setContentsMargins(19, 11, 20, 11)
+        self.topbar_wordmark = QLabel()
+        self.topbar_wordmark.setObjectName('topbarWordmark')
+        self.topbar_wordmark.setAlignment(Qt.AlignCenter)
+        self.topbar_wordmark.setFixedSize(148, 51)
+        top_logo = brand_wordmark_pixmap(148, 51)
+        if not top_logo.isNull():
+            self.topbar_wordmark.setPixmap(top_logo)
+        else:
+            self.topbar_wordmark.setText('SYTOX')
+        th.addWidget(self.topbar_wordmark, 0, Qt.AlignVCenter)
+        th.addSpacing(9)
         titles = QVBoxLayout()
         titles.setSpacing(2)
         breadcrumb = QLabel('WORKSPACE  /  KONVERSATION')
@@ -1608,8 +1638,15 @@ class MainWindow(QMainWindow):
         hero.setObjectName('hero')
         hero.setMaximumWidth(670)
         box = QVBoxLayout(hero)
-        box.setContentsMargins(32, 30, 32, 30)
+        box.setContentsMargins(29, 25, 29, 30)
         box.setSpacing(13)
+        self.hero_wordmark = QLabel()
+        self.hero_wordmark.setObjectName('heroWordmark')
+        self.hero_wordmark.setAlignment(Qt.AlignCenter)
+        large_logo = brand_wordmark_pixmap(545, 183)
+        if not large_logo.isNull():
+            self.hero_wordmark.setPixmap(large_logo)
+            box.addWidget(self.hero_wordmark)
         eyebrow = QLabel('DEIN PERSÖNLICHER KI-WORKSPACE')
         eyebrow.setObjectName('heroEyebrow')
         box.addWidget(eyebrow)
@@ -2366,6 +2403,7 @@ class MainWindow(QMainWindow):
             self._probe_again = True
             return
         self.status_chip.setText('KI wird geprüft')
+        self.brand_status_btn.setText('●  Prüfe Modell …')
         self.model_status_label.setText('Verbindung wird geprüft …')
         self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.current_chat_model())
         self.ollama_probe.checked.connect(self._model_status_checked)
@@ -2381,10 +2419,18 @@ class MainWindow(QMainWindow):
             self.model_status_label.setText(status.details)
             self.model_status_label.setToolTip(status.details)
             if status.ready:
+                self.brand_status_btn.setText('●  KI bereit')
+                self.brand_status_btn.setProperty('connected', 'true')
+                self.brand_status_btn.style().unpolish(self.brand_status_btn)
+                self.brand_status_btn.style().polish(self.brand_status_btn)
                 self.status_chip.setText('●  KI bereit')
                 self.status_chip.setStyleSheet('color:#86E1BD;background:#173027;'
                     'border:1px solid #316049;border-radius:11px;padding:5px 11px;')
             else:
+                self.brand_status_btn.setText('●  Modell prüfen')
+                self.brand_status_btn.setProperty('connected', 'false')
+                self.brand_status_btn.style().unpolish(self.brand_status_btn)
+                self.brand_status_btn.style().polish(self.brand_status_btn)
                 self.status_chip.setText('●  ' + status.title)
                 self.status_chip.setStyleSheet('color:#F3BB95;background:#30231F;'
                     'border:1px solid #6A4235;border-radius:11px;padding:5px 11px;')
