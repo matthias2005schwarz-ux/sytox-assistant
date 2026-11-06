@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
 from .ram_saver import keep_alive_for_config, normalized_keep_alive_seconds
+from .model_router import select_chat_model, wants_screen
+from .screen_vision import describe_screen
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
@@ -138,10 +140,21 @@ class Worker(QThread):
 
     def run(self):
         try:
-            a=Agent(self.store,self.settings['model'],self.settings['ollama_url'],
+            messages = self.store.messages(self.chat_id, limit=24)
+            question = next((item['content'] for item in reversed(messages)
+                             if item['role'] == 'user'), '')
+            model, route = select_chat_model(question, self.settings, self.mode)
+            self.log_line.emit('System', 'Verwendetes Modell: ' + model
+                               + (' (Projekt)' if route == 'project' else ' (Schnellchat)'))
+            screen_context = ''
+            if wants_screen(question):
+                self.log_line.emit('Status', 'Bildschirm wird auf Wunsch analysiert …')
+                screen_context = describe_screen(question, self.settings, self.stop_event)
+            a=Agent(self.store,model,self.settings['ollama_url'],
                     self.settings['workspace'],self.request_approval,self.log_line.emit,self.stop_event,
                     self.settings.get('gmail_client_secrets',''),
-                    ram_keep_alive=keep_alive_for_config(self.settings))
+                    ram_keep_alive=keep_alive_for_config(self.settings),
+                    screen_context=screen_context)
             result=a.run(self.chat_id,self.mode,self.hours,self.task_id)
             self.completed.emit(result)
         except Exception as e:
@@ -750,6 +763,10 @@ class SettingsDialog(QDialog):
         self.original=settings.copy()
         form=QFormLayout(self)
         self.model=QLineEdit(settings['model'])
+        self.fast_model=QLineEdit(settings.get('fast_model') or settings['model'])
+        self.project_model=QLineEdit(settings.get('project_model') or settings['model'])
+        self.vision_model=QLineEdit(settings.get('vision_model') or 'qwen3-vl:4b')
+        self.vision_model.setToolTip('Internes Bildmodell, verwendet in jedem Chat bei ausdrücklicher Bildschirm-Anfrage.')
         self.url=QLineEdit(settings['ollama_url'])
         self.folder=QLineEdit(settings['workspace'])
         choose=QPushButton('…');choose.setMaximumWidth(38)
@@ -798,7 +815,10 @@ class SettingsDialog(QDialog):
         self.follow_up.setRange(5,90)
         self.follow_up.setSuffix(' Sekunden')
         self.follow_up.setValue(int(settings.get('voice_followup_seconds',25)))
-        form.addRow('Ollama-Modell',self.model)
+        form.addRow('Ollama-Fallback-Modell',self.model)
+        form.addRow('Schnellchat-Modell',self.fast_model)
+        form.addRow('Projekt-/Coding-Modell',self.project_model)
+        form.addRow('Bildmodell (in beiden Chats)',self.vision_model)
         form.addRow('Ollama-Adresse',self.url)
         form.addRow('',self.ram_saver)
         form.addRow('Modell nach Inaktivität entladen',self.ram_delay)
@@ -850,6 +870,10 @@ class SettingsDialog(QDialog):
 
     def values(self):
         return {'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
+                'fast_model':self.fast_model.text().strip(),
+                'project_model':self.project_model.text().strip(),
+                'vision_model':self.vision_model.text().strip(),
+                'model_mode':self.original.get('model_mode', 'auto'),
                 'workspace':self.folder.text().strip(), 'vosk_model':self.vosk.text().strip(),
                 'piper_exe':self.piperexe.text().strip(),'piper_model':self.pipermodel.text().strip(),
                 'voice_enabled':self.voice.isChecked(),
@@ -923,6 +947,8 @@ class MainWindow(QMainWindow):
                   'edge_consent':False,'voice_no_wake':False,'voice_followup_seconds':25,
                   'voice_auto_start':False,'voice_interruptible':True,
                   'auto_check_updates':True,
+                  'model_mode':'auto','fast_model':'qwen3:4b',
+                  'project_model':'qwen3-coder:30b','vision_model':'qwen3-vl:4b',
                   'ram_saver_enabled':True,'ram_keep_alive_seconds':60,
                   'gmail_client_secrets':''}
         default_model=base/'models'/'vosk-model-small-de-0.15'
@@ -1081,6 +1107,18 @@ class MainWindow(QMainWindow):
         cbox.setSpacing(12)
         upper = QHBoxLayout()
         upper.setSpacing(12)
+        self.model_mode = QComboBox()
+        self.model_mode.setObjectName('modelMode')
+        self.model_mode.addItem('Automatisch', 'auto')
+        self.model_mode.addItem('⚡ Schnellchat', 'fast')
+        self.model_mode.addItem('◆ Projekt', 'project')
+        self.model_mode.setToolTip('Modell automatisch wählen oder manuell festlegen. Bildschirmsehen ist in jedem Modus möglich.')
+        self.model_mode.setAccessibleName('Chat-Modell wählen')
+        self.model_mode.setMaximumWidth(165)
+        selected = self.model_mode.findData(self.config.get('model_mode', 'auto'))
+        self.model_mode.setCurrentIndex(max(0, selected))
+        self.model_mode.currentIndexChanged.connect(self._model_mode_changed)
+        upper.addWidget(self.model_mode)
         self.mode = QComboBox()
         self.mode.addItems(['Einmal', '1 Stunde arbeiten', '3 Stunden arbeiten', 'Bis fertig'])
         self.mode.setMaximumWidth(192)
@@ -1258,6 +1296,19 @@ class MainWindow(QMainWindow):
         self._new_chat_shortcut = QShortcut(QKeySequence('Ctrl+N'), self)
         self._new_chat_shortcut.activated.connect(self.create_chat)
         self.input.setFocus()
+
+    def _model_mode_changed(self, _index=None):
+        """Remember manual override without restarting a running model."""
+        self.config['model_mode'] = self.model_mode.currentData()
+        self.config_path.write_text(
+            json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
+        if self.parallel_chat is not None:
+            self.parallel_chat.config = self.config.copy()
+        route = self.model_mode.currentData()
+        label = (self.config.get('project_model') if route == 'project'
+                 else self.config.get('fast_model') if route == 'fast'
+                 else 'Automatische Modellauswahl')
+        self.model_name.setText(label or self.config['model'])
 
     def toggle_focus_mode(self, checked=None):
         """Give the conversation more room without stopping AI, voice or agent tasks."""
@@ -1542,6 +1593,8 @@ class MainWindow(QMainWindow):
             hours=max(.02,min(float(duration.group(1).replace(',','.')),24.0))
             mode='timed'
         if re.search(r'\bbis (?:es |alles )?fertig\b',txt.lower()):mode='until_done'
+        selected, _route = select_chat_model(txt, self.config, mode)
+        self.model_name.setText(selected)
         self.start_worker(mode,hours)
 
     def start_worker(self,mode='once',hours=1.0,task_id=None):
@@ -1875,6 +1928,7 @@ class MainWindow(QMainWindow):
         dialog=SettingsDialog(self.config,self)
         if dialog.exec()==QDialog.Accepted:
             self.config=dialog.values()
+            self.config['model_mode'] = self.model_mode.currentData()
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
             self.model_name.setText(self.config['model'])
             if self.parallel_chat is not None:
