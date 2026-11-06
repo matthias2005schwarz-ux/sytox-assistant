@@ -119,6 +119,57 @@ class ControlPanelTests(unittest.TestCase):
         self.assertNotIn('paused', self.window.task_state.text())
         self.assertEqual(self.window.store.tasks(self.window.chat_id)[0]['status'], 'paused')
 
+    def test_chat_drafts_are_isolated_and_restored_without_saving_messages(self):
+        first = self.window.chat_id
+        second = self.window.store.create_chat('Zweiter Chat')
+        draft = 'Grüße 👋\n```python\nprint("noch nicht senden")\n```'
+        self.window.input.setPlainText(draft)
+        self.window.select_chat(second)
+        self.assertEqual(self.window.input.toPlainText(), '')
+        self.window.input.setPlainText('Entwurf für den zweiten Chat')
+        self.window.select_chat(first)
+        self.assertEqual(self.window.input.toPlainText(), draft)
+        self.window.select_chat(second)
+        self.assertEqual(self.window.input.toPlainText(), 'Entwurf für den zweiten Chat')
+        self.window.select_chat(second)
+        self.assertEqual(self.window.input.toPlainText(), 'Entwurf für den zweiten Chat')
+        self.assertEqual(self.window.store.messages(first), [])
+        self.assertEqual(self.window.store.messages(second), [])
+
+    def test_expanded_and_collapsed_panel_preferences_survive_reopening(self):
+        def dispose(window):
+            window._is_exiting = True
+            if window.tray:
+                window.tray.hide()
+            window.close()
+            window.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+            self.app.processEvents()
+
+        self.window.voice_panel_toggle.click()
+        self.window.activity_panel_toggle.click()
+        reopened = MainWindow()
+        try:
+            for toggle, body in (
+                (reopened.voice_panel_toggle, reopened.voice_panel_body),
+                (reopened.activity_panel_toggle, reopened.activity_panel_body),
+            ):
+                self.assertTrue(toggle.isChecked())
+                self.assertFalse(body.isHidden())
+                toggle.click()
+        finally:
+            dispose(reopened)
+        collapsed = MainWindow()
+        try:
+            for toggle, body in (
+                (collapsed.voice_panel_toggle, collapsed.voice_panel_body),
+                (collapsed.activity_panel_toggle, collapsed.activity_panel_body),
+            ):
+                self.assertFalse(toggle.isChecked())
+                self.assertTrue(body.isHidden())
+        finally:
+            dispose(collapsed)
+
 
 if __name__ == '__main__':
     unittest.main()

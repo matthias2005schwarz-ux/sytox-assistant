@@ -913,6 +913,7 @@ class MainWindow(QMainWindow):
         self.config_path=default_data_dir()/'settings.json'
         self.config=self.load_settings()
         self.chat_id=None;self.worker=None;self.recorder=None;self.listener=None;self.speakers=[]
+        self._chat_drafts = {}  # Unsent text stays in this session, outside chat history.
         self.quick_worker = None
         self._quick_turn = None
         self._exit_after_quick = False
@@ -1251,14 +1252,14 @@ class MainWindow(QMainWindow):
             inner.setSpacing(9)
             return card, inner
 
-        def collapsible_section(title, layout):
+        def collapsible_section(title, layout, setting):
             toggle = QPushButton('▸ ' + title)
             toggle.setObjectName('sectionToggle')
             toggle.setCheckable(True)
             toggle.setAccessibleName(title)
             toggle.setToolTip('Bereich ein- oder ausklappen')
             layout.addWidget(toggle)
-            body = QWidget()
+            body = QWidget(layout.parentWidget())
             contents = QVBoxLayout(body)
             contents.setContentsMargins(0, 3, 0, 0)
             contents.setSpacing(9)
@@ -1268,7 +1269,11 @@ class MainWindow(QMainWindow):
                 body.setVisible(expanded)
                 toggle.setText(('▾ ' if expanded else '▸ ') + title)
 
+            initially_expanded = self.config.get(setting, False) is True
+            toggle.setChecked(initially_expanded)
+            expand(initially_expanded)
             toggle.toggled.connect(expand)
+            toggle.toggled.connect(lambda expanded: self._save_panel_state(setting, expanded))
             return toggle, body, contents
 
         ollama_card, ollama = new_card()
@@ -1337,7 +1342,7 @@ class MainWindow(QMainWindow):
 
         voice_card, voice = new_card()
         self.voice_panel_toggle, self.voice_panel_body, voice_controls = collapsible_section(
-            'SPRACHE & MIKROFON', voice)
+            'SPRACHE & MIKROFON', voice, 'voice_panel_expanded')
         self.voice_state = QLabel('Mikrofon aus')
         self.voice_state.setObjectName('panelDescription')
         voice.addWidget(self.voice_state)
@@ -1361,7 +1366,7 @@ class MainWindow(QMainWindow):
 
         activity_card, activity = new_card()
         self.activity_panel_toggle, self.activity_panel_body, activity_controls = collapsible_section(
-            'AKTIVITÄTEN', activity)
+            'AKTIVITÄTEN', activity, 'activity_panel_expanded')
         self.logs = QPlainTextEdit()
         self.logs.setObjectName('activityLog')
         self.logs.setReadOnly(True)
@@ -1389,6 +1394,15 @@ class MainWindow(QMainWindow):
         self._input_shortcut = QShortcut(QKeySequence('Ctrl+L'), self)
         self._input_shortcut.activated.connect(self.input.setFocus)
         self.input.setFocus()
+
+    def _save_panel_state(self, setting, expanded):
+        self.config[setting] = bool(expanded)
+        temporary = self.config_path.with_suffix('.json.tmp')
+        try:
+            temporary.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
+            temporary.replace(self.config_path)
+        except OSError as exc:
+            self.log('System', 'Ansicht konnte nicht gespeichert werden: ' + str(exc))
 
     def _chat_runtime_config(self):
         """Apply the saved model choice of this chat, never the last-used other chat."""
@@ -1625,6 +1639,10 @@ class MainWindow(QMainWindow):
         current=next((c for c in self.store.chats() if c['id']==cid),None)
         if current is None:
             return
+        if cid != self.chat_id:
+            if self.chat_id:
+                self._chat_drafts[self.chat_id] = self.input.toPlainText()
+            self.input.setPlainText(self._chat_drafts.get(cid, ''))
         self.chat_id=cid
         project = current['kind'] == 'project'
         selected_mode = self.store.chat_model_mode(cid)
@@ -1663,7 +1681,10 @@ class MainWindow(QMainWindow):
         if self.quick_worker is not None:return
         if self.worker and self.worker.isRunning():return
         if QMessageBox.question(self,'Chat löschen','Diesen Chat mit allen Nachrichten wirklich löschen?')!=QMessageBox.Yes:return
-        self.store.delete_chat(self.chat_id);self.chat_id=None;self.reload_chats()
+        self.store.delete_chat(self.chat_id)
+        self._chat_drafts.pop(self.chat_id, None)
+        self.input.clear()
+        self.chat_id=None;self.reload_chats()
         if self.chatlist.count():
             self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
         elif self.projectlist.count():

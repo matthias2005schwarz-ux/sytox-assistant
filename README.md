@@ -11,6 +11,8 @@ eingeklappt. Mikrofonstatus und gespeicherte Erinnerungen bleiben direkt erreich
 Fortschrittsdetails erscheinen nur bei einem laufenden Agentenauftrag.
 Antworten lassen sich über „Kopieren“ unverändert in die Zwischenablage übernehmen.
 Mit `Strg+L` gelangt der Tastaturfokus direkt ins Nachrichtenfeld.
+Ungesendete Entwürfe bleiben während der laufenden Sitzung pro Chat erhalten.
+Der Aufklappzustand von Sprachoptionen und Aktivitäten wird auch über Neustarts gespeichert.
 
 ## Direkt-Updates innerhalb von SYTOX (ab Version 0.3.9)
 
