@@ -23,7 +23,7 @@ from .storage import default_data_dir
 # must not become an assistant command.
 _WAKE_NAME = r"(?:sytox|saitox|seitox|sytoks|seitoks|sei[ -]?tox|sai[ -]?tox)"
 _WAKE_RE = re.compile(
-    rf"^\\s*(?:(?:hey|hei|he)\\s+)?{_WAKE_NAME}\\b",
+    rf"^\s*(?:(?:hey|hei|he)\s+)?{_WAKE_NAME}\b",
     re.I,
 )
 
@@ -97,10 +97,10 @@ class VoiceTurnRouter:
 # wake phrase (or stop command) is required by default to prevent audio echo
 # from silently launching PC actions.
 _INTERRUPT_RE = re.compile(
-    rf"^\\s*(?:(?:(?:hey|hei|he)\\s+)?{_WAKE_NAME}[\\s,]+)?"
+    rf"^\s*(?:(?:(?:hey|hei|he)\s+)?{_WAKE_NAME}[\s,]+)?"
     r"(?:stopp|stop|halt|anhalten|ruhe|sei still|hör auf|hoer auf|"
     r"hör auf zu sprechen|hoer auf zu sprechen|bitte sei still)"
-    r"\\s*[.!?]*$", re.I,
+    r"\s*[.!?]*$", re.I,
 )
 
 
