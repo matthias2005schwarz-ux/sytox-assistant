@@ -120,7 +120,8 @@ class AgentToolProtocolTests(unittest.TestCase):
         ]
         agent.client.chat.side_effect = outputs
         result = agent.run(self.cid, "once")
-        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["status"], "paused")
+        self.assertIn("nicht erfolgreich getestet", result["content"])
         self.assertEqual(seen, [False])
         self.assertEqual((self.workspace / "app.py").read_text(), "print(42)\n")
         self.assertEqual(agent.client.chat.call_count, 3)
@@ -156,7 +157,7 @@ class AgentToolProtocolTests(unittest.TestCase):
             proposed("write_file", {"path": "b.py", "content": "print(2)\n"}),
         )
         agent = self.agent([calls, {"role": "assistant", "content": "Beide gespeichert."}])
-        self.assertEqual(agent.run(self.cid, "once")["status"], "done")
+        self.assertEqual(agent.run(self.cid, "once")["status"], "paused")
         self.assertTrue((self.workspace / "a.py").is_file())
         self.assertTrue((self.workspace / "b.py").is_file())
         messages = agent.client.chat.call_args.args[0]
