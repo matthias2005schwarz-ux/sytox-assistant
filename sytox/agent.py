@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import queue
 import re
+import socket
 import threading
 import time
 from pathlib import Path
@@ -63,60 +65,286 @@ class OllamaError(RuntimeError):
     pass
 
 
+class _NonblockingResponseCleanup:
+    """Do not hang a cancelled chat on requests' response-close reader lock."""
+
+    def __init__(self, transport, was_cancelled):
+        self.transport = transport
+        self.was_cancelled = was_cancelled
+
+    def __enter__(self):
+        return self.transport.__enter__()
+
+    def __exit__(self, exc_type, exc, traceback):
+        if self.was_cancelled():
+            def close_later():
+                try:
+                    self.transport.__exit__(exc_type, exc, traceback)
+                except Exception:
+                    pass
+            threading.Thread(target=close_later,
+                             name='sytox-ollama-close', daemon=True).start()
+            return False
+        return self.transport.__exit__(exc_type, exc, traceback)
+
+
 class OllamaClient:
+    # Read inactivity, not a deadline for a whole programming task.
+    INTERACTIVE_READ_TIMEOUT = 45
+    INTERACTIVE_FIRST_TOKEN_TIMEOUT = 90
+
     def __init__(self, url='http://localhost:11434', model='qwen2.5-coder:7b',
                  keep_alive=None):
         self.url = url.rstrip('/')
         self.model = model
         self.keep_alive = keep_alive
+        self.last_metrics = {}
 
     def installed(self):
         resp = requests.get(self.url + '/api/tags', timeout=6)
         resp.raise_for_status()
         return [entry.get('name', '') for entry in resp.json().get('models', [])]
 
-    def chat(self, messages, tools=None, stop=None, priority='background'):
+    @staticmethod
+    def _abort_response(response):
+        """Wake the NDJSON reader by shutting down its underlying socket.
+
+        Calling requests.Response.close() from the cancellation thread can
+        deadlock with iter_lines(): urllib3's buffered reader owns a lock while
+        waiting on the network. Do not close the response here. The owner
+        thread closes it itself when leaving the 'with requests.post' block.
+        """
+        raw = getattr(response, 'raw', None)
+        candidates = []
+        connection = getattr(raw, '_connection', None)
+        candidates.append(getattr(connection, 'sock', None))
+        for source in (getattr(raw, '_fp', None),
+                       getattr(raw, '_original_response', None)):
+            reader = getattr(source, 'fp', None)
+            stream = getattr(reader, 'raw', None)
+            candidates.append(getattr(stream, '_sock', None))
+        for sock in candidates:
+            if sock is None:
+                continue
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+                return  # Do NOT call response.close() from this watcher thread.
+            except (OSError, AttributeError):
+                continue
+        # When urllib3 does not expose a socket, rely on the configured read
+        # timeout; never block the cancellation watcher on close()'s read lock.
+
+    @staticmethod
+    def _iter_lines_interruptibly(response, stop, aborted):
+        """Read streaming bytes on a daemon while the caller checks cancellation.
+
+        Windows can keep a blocking HTTP socket read alive despite shutdown().
+        The model-calling thread MUST still return promptly on user stop or
+        first-visible-token deadline. Only the model-calling thread consumes
+        these events or sends UI tokens, so cancelled results stay discarded.
+        """
+        events = queue.Queue()
+
+        def read():
+            try:
+                for line in response.iter_lines(chunk_size=1):
+                    events.put(('line', line))
+            except Exception as exc:
+                events.put(('error', exc))
+            finally:
+                events.put(('end', None))
+
+        threading.Thread(target=read, name='sytox-ollama-reader',
+                         daemon=True).start()
+        while True:
+            if stop is not None and stop.is_set():
+                raise Cancelled('Benutzer hat die lokale Modellausführung gestoppt.')
+            if aborted:
+                raise OllamaError(aborted[0])
+            try:
+                kind, item = events.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if kind == 'end':
+                return
+            if kind == 'error':
+                raise item
+            yield item
+
+    @staticmethod
+    def _duration(chunk, field):
+        value = chunk.get(field)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+            return value / 1_000_000_000
+        return None
+
+    def chat(self, messages, tools=None, stop=None, priority='background', *,
+             on_token=None, interactive=False, think=None, on_metrics=None):
+        """Return the full answer, optionally publishing visible tokens as read.
+
+        Interactive options apply only to short conversations. Agent requests
+        retain their existing context/output limits and long read timeout.
+        Queue wait, request-to-first-visible-token and Ollama model timings are
+        separate observations; no inference speed is estimated without metadata.
+        """
+        options = {'temperature': 0.3, 'num_ctx': 8192, 'num_predict': 1600}
+        if interactive:
+            options.update(num_ctx=4096, num_predict=700)
         payload = {'model': self.model, 'messages': messages, 'stream': True,
-                   'options': {'temperature': 0.3, 'num_ctx': 8192, 'num_predict': 1600}}
+                   'options': options}
+        if think is not None or interactive:
+            payload['think'] = bool(think) if think is not None else False
         if tools:
             payload['tools'] = tools
         if self.keep_alive is not None:
             payload['keep_alive'] = self.keep_alive
+        started = time.perf_counter()
+        request_started = None
+        self.last_metrics = {'queue_wait_s': None, 'time_to_first_token_s': None,
+                             'request_s': None, 'total_s': None, 'load_s': None,
+                             'prompt_eval_s': None, 'generation_s': None,
+                             'output_tokens': None, 'tokens_per_second': None,
+                             'completed': False}
+        metrics = self.last_metrics
+        response_finished = threading.Event()
+        first_token = threading.Event()
+        aborted = []
+        watcher = None
+
+        def interruption():
+            if stop is not None and stop.is_set():
+                return Cancelled('Benutzer hat die lokale Modellausführung gestoppt.')
+            if aborted:
+                return OllamaError(aborted[0])
+            return None
+
+        def watch_response(response):
+            while not response_finished.wait(0.05):
+                if stop is not None and stop.is_set():
+                    self._abort_response(response)
+                    return
+                if (interactive and not first_token.is_set()
+                        and time.perf_counter() - request_started
+                        >= self.INTERACTIVE_FIRST_TOKEN_TIMEOUT):
+                    aborted.append('Das Modell liefert noch keine Antwort. '
+                                   'Das Laden oder Nachdenken dauert zu lange. '
+                                   'Bitte Ollama und das gewählte Modell prüfen.')
+                    self._abort_response(response)
+                    return
+
         try:
             with model_gate.inference(priority=priority, stop_event=stop):
-                with requests.post(self.url + '/api/chat', json=payload, stream=True,
-                                   timeout=(8, 600)) as response:
+                request_started = time.perf_counter()
+                metrics['queue_wait_s'] = request_started - started
+                timeout = (5, self.INTERACTIVE_READ_TIMEOUT) if interactive else (8, 600)
+                transport = requests.post(self.url + '/api/chat', json=payload, stream=True,
+                                          timeout=timeout)
+                with _NonblockingResponseCleanup(
+                        transport, lambda: bool(aborted or (
+                            stop is not None and stop.is_set()))) as response:
+                    if stop is not None and stop.is_set():
+                        raise Cancelled('Benutzer hat die lokale Modellausführung gestoppt.')
                     if not response.ok:
                         if response.status_code == 404 and 'model' in response.text.lower():
                             raise OllamaError(
                                 f'Das KI-Modell „{self.model}“ ist in Ollama nicht verfügbar. '
                                 'In SYTOX auf „Einrichten“ klicken und den Modellbefehl kopieren.')
                         raise OllamaError(f'Ollama HTTP {response.status_code}: {response.text[:500]}')
+                    if stop is not None or interactive:
+                        watcher = threading.Thread(target=watch_response, args=(response,),
+                                                   name='sytox-ollama-cancel', daemon=True)
+                        watcher.start()
                     reply = {'role': 'assistant', 'content': '', 'tool_calls': []}
-                    for line in response.iter_lines():
-                        if stop and stop.is_set():
-                            response.close()
-                            raise Cancelled('Benutzer hat den Auftrag gestoppt')
+                    terminal = None
+                    # requests otherwise waits for a 512-byte block on streams
+                    # without HTTP chunking, hiding the first few short tokens.
+                    lines = (self._iter_lines_interruptibly(response, stop, aborted)
+                             if stop is not None or interactive
+                             else response.iter_lines(chunk_size=1))
+                    for line in lines:
+                        error = interruption()
+                        if error:
+                            raise error
                         if not line:
                             continue
                         chunk = json.loads(line)
+                        if not isinstance(chunk, dict):
+                            raise OllamaError('Ollama hat ungültige Antwortdaten gesendet.')
                         if 'error' in chunk:
                             raise OllamaError(str(chunk['error']))
                         msg = chunk.get('message') or {}
-                        reply['content'] += msg.get('content') or ''
+                        if not isinstance(msg, dict):
+                            raise OllamaError('Ollama hat ungültige Nachrichtendaten gesendet.')
+                        content = msg.get('content') or ''
+                        if not isinstance(content, str):
+                            raise OllamaError('Ollama hat ungültigen Antworttext gesendet.')
+                        if content:
+                            if not first_token.is_set():
+                                metrics['time_to_first_token_s'] = time.perf_counter() - request_started
+                                first_token.set()
+                            reply['content'] += content
+                            if on_token is not None:
+                                on_token(content)
                         if msg.get('tool_calls'):
                             reply['tool_calls'].extend(msg['tool_calls'])
-                        if chunk.get('done'):
+                        if chunk.get('done') is True:
+                            terminal = chunk
                             break
+                    error = interruption()
+                    if error:
+                        raise error
+                    if terminal is None:
+                        raise OllamaError('Die Verbindung zu Ollama wurde vor dem Ende der '
+                                          'Antwort unterbrochen. Bitte erneut versuchen.')
                     if not reply['tool_calls']:
                         reply.pop('tool_calls')
+                    metrics['load_s'] = self._duration(terminal, 'load_duration')
+                    metrics['prompt_eval_s'] = self._duration(terminal, 'prompt_eval_duration')
+                    metrics['generation_s'] = self._duration(terminal, 'eval_duration')
+                    count = terminal.get('eval_count')
+                    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                        metrics['output_tokens'] = count
+                        if metrics['generation_s']:
+                            metrics['tokens_per_second'] = count / metrics['generation_s']
+                    metrics['completed'] = True
                     return reply
         except InterruptedError as exc:
             raise Cancelled('Benutzer hat die lokale Modellausführung gestoppt.') from exc
-        except requests.exceptions.ConnectionError as exc:
-            raise OllamaError('Ollama nicht erreichbar. Bitte Ollama starten und Modell installieren.') from exc
-        except requests.exceptions.Timeout as exc:
-            raise OllamaError('Ollama hat nicht innerhalb des Zeitlimits geantwortet.') from exc
+        except (requests.exceptions.RequestException, OSError, ValueError) as exc:
+            error = interruption()
+            if error:
+                raise error from exc
+            if isinstance(exc, requests.exceptions.Timeout):
+                raise OllamaError('Ollama liefert nicht rechtzeitig weitere Antwortdaten. '
+                                  'Bitte Modell und Verbindung prüfen.') from exc
+            # urllib3 wraps read timeouts during iter_lines in ConnectionError.
+            if isinstance(exc, requests.exceptions.ConnectionError):
+                if 'timed out' in str(exc).lower():
+                    raise OllamaError('Ollama liefert nicht rechtzeitig weitere Antwortdaten. '
+                                      'Bitte Modell und Verbindung prüfen.') from exc
+                raise OllamaError('Ollama nicht erreichbar oder Verbindung unterbrochen. '
+                                  'Bitte Ollama starten und das Modell prüfen.') from exc
+            if isinstance(exc, (ValueError, UnicodeError)):
+                raise OllamaError('Ollama hat unvollständige oder ungültige Antwortdaten gesendet.') from exc
+            raise OllamaError('Die Verbindung zu Ollama ist fehlgeschlagen: ' + str(exc)) from exc
+        except Exception as exc:
+            # Concurrent cancellation can surface transport-internal errors
+            # (e.g. a buffered reader closed during read), not only requests'
+            # public exceptions. Classify them only after an actual stop/abort.
+            error = interruption()
+            if error:
+                raise error from exc
+            raise
+        finally:
+            response_finished.set()
+            if watcher is not None:
+                watcher.join(timeout=0.2)
+            now = time.perf_counter()
+            metrics['total_s'] = now - started
+            if request_started is not None:
+                metrics['request_s'] = now - request_started
+            if metrics['completed'] and on_metrics is not None:
+                on_metrics(dict(metrics))
 
 
 # Signals are explicit tools, NOT interpreted from a stray word in the model reply.

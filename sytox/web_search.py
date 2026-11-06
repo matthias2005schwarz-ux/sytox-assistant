@@ -14,11 +14,13 @@ from xml.etree import ElementTree
 import requests
 
 
-def should_search(question: str) -> bool:
+def should_search(question: str, *, local_first: bool = False) -> bool:
     """Conservative automatic search for factual/current questions.
 
     Local task controls and ordinary conversation should not leak to a search
-    provider. Explicit offline requests take precedence.
+    provider. Explicit offline requests take precedence. The quick-chat route
+    can answer timeless definitions locally while preserving explicit/current
+    research and person questions. Existing Agent callers retain their policy.
     """
     text = ' '.join(str(question or '').strip().split())
     if not text or len(text) > 240:
@@ -35,6 +37,19 @@ def should_search(question: str) -> bool:
                  r'recherchier\w*|google|neueste\w*|aktuell\w*|'
                  r'heute|gestern|nachrichten|im web suchen)\b', lower):
         return True
+    if local_first:
+        if re.search(
+            r'\b(?:online|im netz|nachschlagen|version\w*|release\w*|'
+            r'update\w*|wetter|uhrzeit|datum|preis\w*|kurs\w*)\b|'
+            r'\b(?:suche?|recherchiere?)\s+(?:bitte\s+)?(?:nach|dazu|das)\b|'
+            r'\b[a-z][a-z0-9_-]*-\d+|\b\d+\.\d+', lower,
+        ):
+            return True
+        if re.match(
+            r'^(?:hey sytox[,: ]+)?(?:bitte[ ,]+)?'
+            r'was (?:ist|sind|bedeutet)\b', lower,
+        ):
+            return False
     return bool(re.match(
         r'^(?:hey sytox[,: ]+)?(?:bitte[ ,]+)?'
         r'(?:wer (?:ist|war|sind)\b|was ist\b|wann (?:ist|war|wird|hat)\b|'

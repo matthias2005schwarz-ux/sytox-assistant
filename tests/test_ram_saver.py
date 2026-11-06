@@ -29,6 +29,20 @@ class KeepAlivePolicyTests(unittest.TestCase):
                 expected = 1 if candidate is True else 60
                 self.assertEqual(normalized_keep_alive_seconds(candidate), expected)
 
+    def test_fast_chat_default_avoids_one_minute_reload_cycle(self):
+        self.assertEqual(keep_alive_for_config({}, route='fast'), '300s')
+        self.assertEqual(keep_alive_for_config({}, route='project'), '60s')
+        self.assertEqual(keep_alive_for_config({}), '60s')
+
+    def test_fast_retention_preserves_explicit_user_choices(self):
+        for seconds in (0, 30, 60, 300, 3600):
+            with self.subTest(seconds=seconds):
+                expected = 0 if seconds == 0 else f'{seconds}s'
+                self.assertEqual(keep_alive_for_config(
+                    {'ram_keep_alive_seconds': seconds}, route='fast'), expected)
+        self.assertIsNone(keep_alive_for_config(
+            {'ram_saver_enabled': False}, route='fast'))
+
     def test_chat_request_sets_keep_alive_not_global_ollama_process(self):
         response = MagicMock()
         response.ok = True

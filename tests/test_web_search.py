@@ -23,6 +23,32 @@ class SearchHeuristicTests(unittest.TestCase):
         self.assertFalse(should_search('Wer ist Jenna Ortega ohne Internet?'))
         self.assertFalse(should_search('Wer ist ' + 'A' * 300))
 
+    def test_local_first_answers_timeless_definitions_without_a_network_lookup(self):
+        for question in ('Hallo', 'Was ist Python?', 'Was ist ein Algorithmus?',
+                         'Was ist Photosynthese?', 'Hey Sytox, was ist SQLite?'):
+            with self.subTest(question=question):
+                self.assertFalse(should_search(question, local_first=True))
+        # Other callers deliberately retain the existing research policy.
+        self.assertTrue(should_search('Was ist Python?'))
+
+    def test_local_first_keeps_people_explicit_research_and_changing_facts(self):
+        for question in ('Wer ist Jenna Ortega?', 'Was ist GPT-6?',
+                         'Was ist Python 3.14?', 'Welche Python-Version gibt es?',
+                         'Was ist die neueste Python-Version?',
+                         'Was ist das Wetter heute?', 'Was ist die Uhrzeit?',
+                         'Was ist Python? Suche bitte im Internet.',
+                         'Was ist Python? Suche nach einer aktuellen Quelle.',
+                         'Was ist Python? Bitte online nachschlagen.'):
+            with self.subTest(question=question):
+                self.assertTrue(should_search(question, local_first=True))
+
+    def test_explicit_offline_request_still_wins_over_local_first_live_terms(self):
+        for question in ('Was ist GPT-6 ohne Internet?',
+                         'Was ist die neueste Version? Keine Websuche.',
+                         'Wer ist Jenna Ortega offline?'):
+            with self.subTest(question=question):
+                self.assertFalse(should_search(question, local_first=True))
+
     def test_rss_search_has_source_links(self):
         xml = '''<?xml version="1.0"?>
         <rss><channel><item><title>Jenna Ortega — Profil</title>

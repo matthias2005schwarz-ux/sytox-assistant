@@ -1,3 +1,26 @@
+## Schnellchat-Optimierung im Entwicklungszweig
+
+Normale Gespräche verwenden einen eigenen, gestreamten Antwortpfad ohne
+Aufgaben-Agent. Qwen3-Thinking bleibt dabei aus; allgemeine Definitionen werden
+direkt lokal beantwortet. Details zu Abbruch, Modellwahl, RAM und überprüfbaren
+Zeitmessungen: [Schnellchat und Leistung](docs/quickchat-performance.md).
+Noch kein neuer Installer oder Release; echte Ollama-/Windows-Praxistests bleiben offen.
+
+Die Steuerzentrale zeigt Sprachoptionen und technische Aktivitäten zunächst
+eingeklappt. Mikrofonstatus und gespeicherte Erinnerungen bleiben direkt erreichbar;
+Fortschrittsdetails erscheinen nur bei einem laufenden Agentenauftrag.
+Antworten lassen sich über „Kopieren“ unverändert in die Zwischenablage übernehmen.
+Für vollständig empfangene Codeblöcke gibt es zusätzlich einzelne Kopierbuttons ohne Markdown-Zäune.
+Mit `Strg+L` gelangt der Tastaturfokus direkt ins Nachrichtenfeld.
+Ungesendete Entwürfe bleiben während der laufenden Sitzung pro Chat erhalten.
+Dabei werden auch Cursorposition und Textauswahl pro Chat wiederhergestellt.
+Der Aufklappzustand von Sprachoptionen und Aktivitäten wird auch über Neustarts gespeichert.
+Auch der Fokusmodus mit ausgeblendeter Steuerzentrale bleibt nach einem Neustart erhalten.
+Die Suche in der Seitenleiste findet Titel und gespeicherte Nachrichten in Chats und Qwen-Projekten lokal.
+Beim Lesen älterer Nachrichten bleibt die Scrollposition erhalten; „Zur neuesten Nachricht“ führt wieder ans Ende.
+Unter „Chat-Aktionen“ lässt sich der gesamte gespeicherte Verlauf lokal als UTF-8-Textdatei exportieren.
+Ungesendete Entwürfe, Erinnerungen und technische Logs sind darin nicht enthalten.
+
 ## Direkt-Updates innerhalb von SYTOX (ab Version 0.3.9)
 
 Unter **Nach Updates suchen** erkennt die installierte Windows-App offizielle GitHub Releases.

@@ -9,7 +9,7 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QSaveFile, QIODevice
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QTextCursor, QDesktopServices, QLinearGradient, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -23,12 +23,13 @@ from .agent import Agent,OllamaClient
 from .ram_saver import keep_alive_for_config, normalized_keep_alive_seconds
 from .task_eta import task_eta
 from .task_queue import is_change_request
-from .model_router import select_chat_model, wants_screen
+from .model_router import select_chat_model, wants_screen, requires_agent
 from .screen_vision import describe_screen
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
-from .parallel_chat import ParallelChatDialog
+from .parallel_chat import ParallelChatDialog, ParallelReplyWorker
+from .chat_content import MessageLabel, fenced_code_blocks
 from .updater import (check_for_update, download_verified_installer,
                       download_verified_portable, is_installed_app,
                       schedule_installer, schedule_portable_update, RELEASES_PAGE)
@@ -36,6 +37,15 @@ from .work_intents import work_intent
 from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
+
+
+def task_status_text(status):
+    return {
+        'running': 'Aufgabe läuft', 'done': 'Aufgabe abgeschlossen',
+        'paused': 'Aufgabe pausiert', 'failed': 'Aufgabe fehlgeschlagen',
+        'time_elapsed': 'Arbeitszeit beendet', 'cancelled': 'Aufgabe abgebrochen',
+    }.get(status, 'Aufgabe beendet')
+
 
 def brand_asset(filename):
     """Resolve bundled artwork both in development and in the frozen Windows app."""
@@ -806,9 +816,9 @@ class SettingsDialog(QDialog):
         self.ram_delay.setRange(0, 3600)
         self.ram_delay.setSuffix(' Sekunden')
         self.ram_delay.setSpecialValueText('Sofort nach Antwort')
-        self.ram_delay.setToolTip('Ab der fertigen Antwort. 60 Sekunden Standard; während der Antwort wird nichts entladen.')
+        self.ram_delay.setToolTip('Ab der fertigen Antwort. 300 Sekunden Standard vermeiden häufiges Neuladen bei Anschlussfragen; eigene Einstellungen bleiben erhalten.')
         self.ram_delay.setValue(normalized_keep_alive_seconds(
-            settings.get('ram_keep_alive_seconds', 60)))
+            settings.get('ram_keep_alive_seconds', 300)))
         self.ram_delay.setEnabled(self.ram_saver.isChecked())
         self.ram_saver.toggled.connect(self.ram_delay.setEnabled)
         self.auto_voice=QCheckBox('Beim App-Start automatisch auf „Hey Sytox“ hören (Mikrofon aktiv)')
@@ -904,6 +914,15 @@ class MainWindow(QMainWindow):
         self.config_path=default_data_dir()/'settings.json'
         self.config=self.load_settings()
         self.chat_id=None;self.worker=None;self.recorder=None;self.listener=None;self.speakers=[]
+        self._chat_drafts = {}  # Unsent text stays in this session, outside chat history.
+        self._chat_draft_cursors = {}
+        self.quick_worker = None
+        self._quick_turn = None
+        self._exit_after_quick = False
+        self._quick_reply_timer = QTimer(self)
+        self._quick_reply_timer.setSingleShot(True)
+        self._quick_reply_timer.setInterval(40)
+        self._quick_reply_timer.timeout.connect(self._flush_quick_tokens)
         self.voice_muted=threading.Event()
         self.voice_speaking=threading.Event()
         self.voice_jobs=[]
@@ -934,7 +953,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('SYTOX Assistant · Dein KI-Workspace')
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
-        self.build_ui();self.setup_tray();self.reload_chats()
+        self.build_ui()
+        if self.config.get('focus_mode') is True:
+            self.toggle_focus_mode(True)
+        self.setup_tray();self.reload_chats()
         if not (self.chatlist.count() or self.projectlist.count()):
             self.create_chat()
         elif self.chatlist.count():
@@ -953,7 +975,7 @@ class MainWindow(QMainWindow):
         if self.config.get('auto_check_updates', True):
             QTimer.singleShot(2200, self.check_for_updates)
         if self.config.get('voice_auto_start', False):
-            QTimer.singleShot(1600, lambda: self.toggle_listener(auto=True))
+            QTimer.singleShot(1600, self, lambda: self.toggle_listener(auto=True))
 
     def load_settings(self):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
@@ -966,7 +988,7 @@ class MainWindow(QMainWindow):
                   'auto_check_updates':True,
                   'model_mode':'auto','fast_model':'qwen3:4b',
                   'project_model':'qwen3-coder:30b','vision_model':'qwen3-vl:4b',
-                  'ram_saver_enabled':True,'ram_keep_alive_seconds':60,
+                  'ram_saver_enabled':True,'ram_keep_alive_seconds':300,
                   'gmail_client_secrets':''}
         default_model=base/'models'/'vosk-model-small-de-0.15'
         if default_model.is_dir(): settings['vosk_model']=str(default_model)
@@ -1028,7 +1050,8 @@ class MainWindow(QMainWindow):
         self.search = QLineEdit()
         self.search.setObjectName('chatSearch')
         self.search.setAccessibleName('Gespräche durchsuchen')
-        self.search.setPlaceholderText('Chats durchsuchen')
+        self.search.setPlaceholderText('Titel und Nachrichten suchen')
+        self.search.setToolTip('Durchsucht gespeicherte Titel und Nachrichten lokal auf diesem PC')
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.reload_chats)
         l.addWidget(self.search)
@@ -1051,14 +1074,16 @@ class MainWindow(QMainWindow):
         self.chatlist.setSpacing(2)
         self.chatlist.itemClicked.connect(lambda it: self.select_chat(it.data(Qt.UserRole)))
         l.addWidget(self.chatlist, 2)
-        rename = QPushButton('Chat umbenennen')
-        rename.setObjectName('ghost')
-        rename.clicked.connect(self.rename_chat)
-        l.addWidget(rename)
-        delete = QPushButton('Chat löschen')
-        delete.setObjectName('ghost')
-        delete.clicked.connect(self.delete_chat)
-        l.addWidget(delete)
+        chat_actions = QPushButton('Chat-Aktionen')
+        chat_actions.setObjectName('ghost')
+        chat_actions.setAccessibleName('Aktionen für das aktuelle Gespräch')
+        self.chat_actions_menu = QMenu(chat_actions)
+        self.chat_actions_menu.addAction('Chat umbenennen', self.rename_chat)
+        self.chat_actions_menu.addAction('Als Text exportieren', self.export_chat)
+        self.chat_actions_menu.addSeparator()
+        self.chat_actions_menu.addAction('Chat löschen', self.delete_chat)
+        chat_actions.setMenu(self.chat_actions_menu)
+        l.addWidget(chat_actions)
         cfg = QPushButton('Einstellungen')
         cfg.setObjectName('subtle')
         cfg.clicked.connect(self.edit_settings)
@@ -1068,7 +1093,7 @@ class MainWindow(QMainWindow):
         update_button.clicked.connect(lambda: self.check_for_updates(manual=True))
         l.addWidget(update_button)
         self.update_button = update_button
-        version = QLabel('SYTOX  /  VERSION 0.3.9')
+        version = QLabel('SYTOX  /  VERSION 0.3.10')
         version.setObjectName('version')
         version.setAlignment(Qt.AlignCenter)
         l.addSpacing(7)
@@ -1134,6 +1159,18 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.msg_container)
         c.addWidget(scroll, 1)
         self.scroll = scroll
+        self.jump_to_latest = QPushButton('↓ Zur neuesten Nachricht')
+        self.jump_to_latest.setObjectName('subtle')
+        self.jump_to_latest.setAccessibleName('Zur neuesten Nachricht springen')
+        self.jump_to_latest.clicked.connect(self.jump_to_latest_message)
+        self.jump_to_latest.hide()
+        c.addWidget(self.jump_to_latest, 0, Qt.AlignRight)
+        self._follow_latest = True
+        self._scroll_follow_timer = QTimer(self)
+        self._scroll_follow_timer.setSingleShot(True)
+        self._scroll_follow_timer.timeout.connect(self._scroll_to_latest_if_following)
+        scroll.verticalScrollBar().valueChanged.connect(self._message_scroll_position_changed)
+        scroll.verticalScrollBar().rangeChanged.connect(self._message_scroll_range_changed)
         self.empty_widget = None
         self._rendering_history = False
 
@@ -1199,8 +1236,8 @@ class MainWindow(QMainWindow):
         card_row.addLayout(right_buttons)
         cbox.addWidget(input_card)
         # Animate only the initial appearance, not the typing experience.
-        QTimer.singleShot(70, lambda: self._animate_appearance(input_card, 220))
-        hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   KI LÄUFT LOKAL')
+        QTimer.singleShot(70, self, lambda: self._animate_appearance(input_card, 220))
+        hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   STRG + L EINGABE')
         hint.setObjectName('version')
         hint.setWordWrap(True)
         cbox.addWidget(hint)
@@ -1235,6 +1272,30 @@ class MainWindow(QMainWindow):
             inner.setSpacing(9)
             return card, inner
 
+        def collapsible_section(title, layout, setting):
+            toggle = QPushButton('▸ ' + title)
+            toggle.setObjectName('sectionToggle')
+            toggle.setCheckable(True)
+            toggle.setAccessibleName(title)
+            toggle.setToolTip('Bereich ein- oder ausklappen')
+            layout.addWidget(toggle)
+            body = QWidget(layout.parentWidget())
+            contents = QVBoxLayout(body)
+            contents.setContentsMargins(0, 3, 0, 0)
+            contents.setSpacing(9)
+            body.hide()
+
+            def expand(expanded):
+                body.setVisible(expanded)
+                toggle.setText(('▾ ' if expanded else '▸ ') + title)
+
+            initially_expanded = self.config.get(setting, False) is True
+            toggle.setChecked(initially_expanded)
+            expand(initially_expanded)
+            toggle.toggled.connect(expand)
+            toggle.toggled.connect(lambda expanded: self._save_panel_state(setting, expanded))
+            return toggle, body, contents
+
         ollama_card, ollama = new_card()
         ollama_title = QLabel('●  KI-VERBINDUNG')
         ollama_title.setObjectName('sectionTitle')
@@ -1268,14 +1329,17 @@ class MainWindow(QMainWindow):
         self.task_meter.setValue(0)
         self.task_meter.setTextVisible(False)
         self.task_meter.setAccessibleName('Live-Arbeitsfortschritt')
+        self.task_meter.hide()
         task.addWidget(self.task_meter)
         self.task_details = QLabel('Noch keine Arbeitsschritte protokolliert.')
         self.task_details.setObjectName('panelDescription')
         self.task_details.setWordWrap(True)
+        self.task_details.hide()
         task.addWidget(self.task_details)
         self.task_next = QLabel('')
         self.task_next.setObjectName('panelDescription')
         self.task_next.setWordWrap(True)
+        self.task_next.hide()
         task.addWidget(self.task_next)
         self.stopbtn = QPushButton('Aufgabe stoppen')
         self.stopbtn.setEnabled(False)
@@ -1297,39 +1361,39 @@ class MainWindow(QMainWindow):
         r.addWidget(task_card)
 
         voice_card, voice = new_card()
-        voice_heading = QLabel('SPRACHE & MIKROFON')
-        voice_heading.setObjectName('sectionTitle')
-        voice.addWidget(voice_heading)
+        self.voice_panel_toggle, self.voice_panel_body, voice_controls = collapsible_section(
+            'SPRACHE & MIKROFON', voice, 'voice_panel_expanded')
         self.voice_state = QLabel('Mikrofon aus')
         self.voice_state.setObjectName('panelDescription')
         voice.addWidget(self.voice_state)
         self.wakebtn = QPushButton('Gesprächsmodus starten')
         self.wakebtn.setObjectName('subtle')
         self.wakebtn.clicked.connect(self.toggle_listener)
-        voice.addWidget(self.wakebtn)
+        voice_controls.addWidget(self.wakebtn)
         model_button = QPushButton('Sprachmodell laden')
         model_button.clicked.connect(self.install_voice_model)
-        voice.addWidget(model_button)
+        voice_controls.addWidget(model_button)
         self.stopvoicebtn = QPushButton('Sprache stoppen')
         self.stopvoicebtn.clicked.connect(self.stop_speech)
         self.stopvoicebtn.setEnabled(False)
-        voice.addWidget(self.stopvoicebtn)
+        voice_controls.addWidget(self.stopvoicebtn)
         diagnostics_button = QPushButton('Mikrofon / Unterbrechung')
         diagnostics_button.setToolTip('Mikrofon und Unterbrechung testen')
         diagnostics_button.clicked.connect(self.open_voice_diagnostics)
-        voice.addWidget(diagnostics_button)
+        voice_controls.addWidget(diagnostics_button)
+        voice.addWidget(self.voice_panel_body)
         r.addWidget(voice_card)
 
         activity_card, activity = new_card()
-        logs_title = QLabel('AKTIVITÄTEN')
-        logs_title.setObjectName('sectionTitle')
-        activity.addWidget(logs_title)
+        self.activity_panel_toggle, self.activity_panel_body, activity_controls = collapsible_section(
+            'AKTIVITÄTEN', activity, 'activity_panel_expanded')
         self.logs = QPlainTextEdit()
         self.logs.setObjectName('activityLog')
         self.logs.setReadOnly(True)
         self.logs.setMaximumBlockCount(250)
         self.logs.setMinimumHeight(125)
-        activity.addWidget(self.logs)
+        activity_controls.addWidget(self.logs)
+        activity.addWidget(self.activity_panel_body)
         memory = QPushButton('Gespeicherte Erinnerungen')
         memory.setObjectName('ghost')
         memory.clicked.connect(self.show_memories)
@@ -1347,7 +1411,18 @@ class MainWindow(QMainWindow):
         self._search_shortcut.activated.connect(self.search.setFocus)
         self._new_chat_shortcut = QShortcut(QKeySequence('Ctrl+N'), self)
         self._new_chat_shortcut.activated.connect(self.create_chat)
+        self._input_shortcut = QShortcut(QKeySequence('Ctrl+L'), self)
+        self._input_shortcut.activated.connect(self.input.setFocus)
         self.input.setFocus()
+
+    def _save_panel_state(self, setting, expanded):
+        self.config[setting] = bool(expanded)
+        temporary = self.config_path.with_suffix('.json.tmp')
+        try:
+            temporary.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
+            temporary.replace(self.config_path)
+        except OSError as exc:
+            self.log('System', 'Ansicht konnte nicht gespeichert werden: ' + str(exc))
 
     def _chat_runtime_config(self):
         """Apply the saved model choice of this chat, never the last-used other chat."""
@@ -1393,6 +1468,8 @@ class MainWindow(QMainWindow):
             panel_width = getattr(self, '_utility_last_width', 296)
             center_width = max(450, self.splitter.width() - sidebar_width - panel_width - 2)
             self.splitter.setSizes([sidebar_width, center_width, panel_width])
+        if self.config.get('focus_mode', False) != checked:
+            self._save_panel_state('focus_mode', checked)
         self.input.setFocus()
 
     def _animate_appearance(self, widget, duration=260):
@@ -1453,7 +1530,7 @@ class MainWindow(QMainWindow):
         outer_lay.addWidget(hero, 10)
         outer_lay.addStretch(1)
         self.msg_layout.addWidget(outer)
-        QTimer.singleShot(0, lambda: self._animate_appearance(outer) if not self._is_exiting else None)
+        QTimer.singleShot(0, self, lambda: self._animate_appearance(outer) if not self._is_exiting else None)
 
     def setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():return
@@ -1480,6 +1557,11 @@ class MainWindow(QMainWindow):
             self.hide()
             event.ignore()
             return
+        if self.quick_worker is not None:
+            self.quick_worker.stop_event.set()
+            self._exit_after_quick = True
+            event.ignore()
+            return
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self,'Auftrag läuft','Bitte den Auftrag zuerst stoppen.')
             event.ignore()
@@ -1492,6 +1574,11 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def exit_app(self):
+        if self.quick_worker is not None:
+            self.quick_worker.stop_event.set()
+            self._exit_after_quick = True
+            self.state.setText('Antwort wird beendet …')
+            return
         if self._update_download_worker and self._update_download_worker.isRunning():
             QMessageBox.information(self, 'Update läuft',
                                     'Bitte den laufenden Update-Download erst abschließen.')
@@ -1530,11 +1617,12 @@ class MainWindow(QMainWindow):
     def reload_chats(self,*args):
         if not hasattr(self, 'chatlist') or not hasattr(self, 'projectlist'):
             return
-        search = (self.search.text() if hasattr(self, 'search') else '').lower()
+        search = (self.search.text() if hasattr(self, 'search') else '').strip().casefold()
+        content_matches = self.store.matching_chat_ids(search) if search else set()
         self.chatlist.clear()
         self.projectlist.clear()
         for chat in self.store.chats():
-            if search not in chat['title'].lower():
+            if search not in chat['title'].casefold() and chat['id'] not in content_matches:
                 continue
             project = chat['kind'] == 'project'
             widget = self.projectlist if project else self.chatlist
@@ -1545,16 +1633,17 @@ class MainWindow(QMainWindow):
                 widget.setCurrentItem(item)
 
     def create_chat(self):
-        if self.worker and self.worker.isRunning():
+        if self.quick_worker is not None or (self.worker and self.worker.isRunning()):
             QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
             return
         cid = self.store.create_chat(kind='chat')
+        self.search.clear()
         self.reload_chats()
         self.select_chat(cid)
 
     def create_project(self):
         """Create a named, permanent large-model conversation in the sidebar."""
-        if self.worker and self.worker.isRunning():
+        if self.quick_worker is not None or (self.worker and self.worker.isRunning()):
             QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
             return
         title, accepted = QInputDialog.getText(self, 'Neues Qwen-Projekt', 'Projektname:')
@@ -1566,13 +1655,29 @@ class MainWindow(QMainWindow):
         self.select_chat(cid)
 
     def select_chat(self,cid):
-        if self.worker and self.worker.isRunning() and cid!=self.chat_id:
+        if self.quick_worker is not None and cid == self.chat_id:
+            return  # Keep the streaming bubble alive when its list item is clicked.
+        if (self.quick_worker is not None or (self.worker and self.worker.isRunning())) and cid!=self.chat_id:
             QMessageBox.information(self,'Auftrag läuft','Während der Ausführung kann der Chat nicht gewechselt werden.')
             return
         current=next((c for c in self.store.chats() if c['id']==cid),None)
         if current is None:
             return
+        if cid != self.chat_id:
+            if self.chat_id:
+                self._chat_drafts[self.chat_id] = self.input.toPlainText()
+                cursor = self.input.textCursor()
+                self._chat_draft_cursors[self.chat_id] = (cursor.position(), cursor.anchor())
+            self.input.setPlainText(self._chat_drafts.get(cid, ''))
+            cursor = self.input.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            if cid in self._chat_draft_cursors:
+                position, anchor = self._chat_draft_cursors[cid]
+                cursor.setPosition(anchor)
+                cursor.setPosition(position, QTextCursor.KeepAnchor)
+            self.input.setTextCursor(cursor)
         self.chat_id=cid
+        self._follow_latest = True
         project = current['kind'] == 'project'
         selected_mode = self.store.chat_model_mode(cid)
         self.model_mode.blockSignals(True)
@@ -1596,7 +1701,31 @@ class MainWindow(QMainWindow):
             finally:
                 self._rendering_history = False
         tasks=self.store.tasks(cid)
-        self.task_state.setText((tasks[0]['status']+': '+tasks[0]['goal'][:85]) if tasks else 'Keine aktive Aufgabe')
+        self.task_state.setText((task_status_text(tasks[0]['status'])+': '+tasks[0]['goal'][:85]) if tasks else 'Keine aktive Aufgabe')
+
+    def export_chat(self):
+        if not self.chat_id:
+            return
+        chat_id = self.chat_id
+        path, _filter = QFileDialog.getSaveFileName(
+            self, 'Gespeicherten Chat als Text exportieren', 'SYTOX_Chat.txt', 'Textdateien (*.txt)')
+        if not path:
+            return
+        try:
+            content = self.store.chat_export_text(chat_id).encode('utf-8')
+            target = QSaveFile(path)
+            if not target.open(QIODevice.WriteOnly):
+                raise OSError(target.errorString())
+            if target.write(content) != len(content):
+                detail = target.errorString()
+                target.cancelWriting()
+                raise OSError(detail)
+            if not target.commit():
+                raise OSError(target.errorString())
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, 'Export fehlgeschlagen', str(exc))
+            return
+        self.log('System', 'Gespeicherter Chatverlauf wurde als Text exportiert.')
 
     def rename_chat(self):
         if not self.chat_id:return
@@ -1607,9 +1736,14 @@ class MainWindow(QMainWindow):
 
     def delete_chat(self):
         if not self.chat_id:return
+        if self.quick_worker is not None:return
         if self.worker and self.worker.isRunning():return
         if QMessageBox.question(self,'Chat löschen','Diesen Chat mit allen Nachrichten wirklich löschen?')!=QMessageBox.Yes:return
-        self.store.delete_chat(self.chat_id);self.chat_id=None;self.reload_chats()
+        self.store.delete_chat(self.chat_id)
+        self._chat_drafts.pop(self.chat_id, None)
+        self._chat_draft_cursors.pop(self.chat_id, None)
+        self.input.clear()
+        self.chat_id=None;self.reload_chats()
         if self.chatlist.count():
             self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
         elif self.projectlist.count():
@@ -1624,6 +1758,27 @@ class MainWindow(QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
 
+    def _message_scroll_position_changed(self, *_args):
+        bar = self.scroll.verticalScrollBar()
+        self._follow_latest = bar.maximum() - bar.value() <= 80
+        self.jump_to_latest.setVisible(not self._follow_latest)
+
+    def _message_scroll_range_changed(self, *_args):
+        if self._follow_latest:
+            self._scroll_follow_timer.start(0)
+        else:
+            self._message_scroll_position_changed()
+
+    def _scroll_to_latest_if_following(self):
+        if self._follow_latest:
+            self.jump_to_latest_message()
+
+    def jump_to_latest_message(self):
+        self._follow_latest = True
+        bar = self.scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        self.jump_to_latest.hide()
+
     def add_bubble(self, role, message):
         if self.empty_widget is not None:
             self.clear_bubbles()
@@ -1635,13 +1790,55 @@ class MainWindow(QMainWindow):
         b.setSpacing(10)
         header = QLabel('DU' if mine else 'SYTOX AI')
         header.setObjectName('bubbleHeadingUser' if mine else 'bubbleHeadingAssistant')
-        b.addWidget(header)
-        label = QLabel(message)
+        heading = QHBoxLayout()
+        heading.addWidget(header)
+        heading.addStretch(1)
+        if not mine:
+            copy_button = QPushButton('Kopieren')
+            copy_button.setObjectName('copyReplyButton')
+            copy_button.setAccessibleName('Antwort kopieren')
+            copy_button.setToolTip('Sichtbaren Antworttext unverändert kopieren')
+            copy_button.clicked.connect(lambda _checked=False: QApplication.clipboard().setText(label.text()))
+            heading.addWidget(copy_button)
+        b.addLayout(heading)
+        label = QLabel(message) if mine else MessageLabel(message)
         label.setObjectName('bubbleContent')
         label.setTextFormat(Qt.PlainText)
         label.setWordWrap(True)
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         b.addWidget(label)
+        if not mine:
+            code_actions = QWidget(body)
+            code_layout = QVBoxLayout(code_actions)
+            code_layout.setContentsMargins(0, 0, 0, 0)
+            code_layout.setSpacing(3)
+            code_actions.hide()
+            code_actions._blocks = []
+
+            def update_code_actions(text):
+                blocks = fenced_code_blocks(text)
+                if blocks == code_actions._blocks:
+                    return
+                code_actions._blocks = blocks
+                while code_layout.count():
+                    old = code_layout.takeAt(0).widget()
+                    old.hide()
+                    old.setParent(None)
+                    old.deleteLater()
+                for number, block in enumerate(blocks, 1):
+                    language = block['language'][:30]
+                    caption = f'Codeblock {number} kopieren' + (f' ({language})' if language else '')
+                    button = QPushButton(caption)
+                    button.setObjectName('copyCodeButton')
+                    button.setAccessibleName(f'Codeblock {number} kopieren')
+                    button.clicked.connect(lambda _checked=False, code=block['code']:
+                                           QApplication.clipboard().setText(code))
+                    code_layout.addWidget(button)
+                code_actions.setVisible(bool(blocks))
+
+            label.text_changed.connect(update_code_actions)
+            update_code_actions(message)
+            b.addWidget(code_actions)
         body.setMaximumWidth(790)
         row = QWidget()
         row.setObjectName('messageRow')
@@ -1655,8 +1852,11 @@ class MainWindow(QMainWindow):
         self.msg_layout.addWidget(row)
         if not self._rendering_history and self.isVisible():
             self._animate_appearance(row, 200)
-        QTimer.singleShot(100, lambda: self.scroll.verticalScrollBar().setValue(
-            self.scroll.verticalScrollBar().maximum()))
+        if mine or self._rendering_history:
+            self._follow_latest = True
+        if self._follow_latest:
+            self._scroll_follow_timer.start(0)
+        return label
 
     def log(self,kind,text):
         self.logs.appendPlainText(f'{kind}: {text}')
@@ -1671,6 +1871,9 @@ class MainWindow(QMainWindow):
         if intent:
             self.input.clear()
             self.handle_work_control(intent, txt, spoken=False)
+            return
+        if self.quick_worker is not None:
+            self.state.setText('Die aktuelle Antwort läuft noch. Mit Stopp abbrechen.')
             return
         if self.worker and self.worker.isRunning():
             self.input.clear()
@@ -1694,13 +1897,112 @@ class MainWindow(QMainWindow):
         mode={'Einmal':'once','1 Stunde arbeiten':'timed','3 Stunden arbeiten':'timed','Bis fertig':'until_done'}[self.mode.currentText()]
         hours=3.0 if self.mode.currentText().startswith('3') else 1.0
         duration=re.search(r'\b(\d+(?:[,.]\d+)?)\s*(?:stunden?|h)\b',txt.lower())
-        if duration:
+        task_requested = (self.store.chat_kind(self.chat_id) == 'project' or
+                          requires_agent(txt) or
+                          re.search(r'\b(?:arbeite|arbeiten)\b', txt, re.IGNORECASE))
+        if duration and task_requested:
             hours=max(.02,min(float(duration.group(1).replace(',','.')),24.0))
             mode='timed'
         if re.search(r'\bbis (?:es |alles )?fertig\b',txt.lower()):mode='until_done'
         selected, _route = select_chat_model(txt, self._chat_runtime_config(), mode)
         self.model_name.setText(selected)
-        self.start_worker(mode,hours)
+        if self.store.chat_kind(self.chat_id) == 'project' or requires_agent(txt, mode):
+            self.start_worker(mode,hours)
+        else:
+            self.start_quick_reply(txt)
+
+    def start_quick_reply(self, question):
+        """Normal conversation never creates an Agent, Toolkit or task row."""
+        memory = ''
+        if len(question.strip()) > 8:
+            context = self.store.related_context(question, exclude_chat=self.chat_id, limit=3)
+            memory = '\n'.join(item['source'] + ': ' + item['content'] for item in context)[:2000]
+        worker = ParallelReplyWorker(
+            self._chat_runtime_config(), self.store.messages(self.chat_id, limit=12), self,
+            standalone=True, memory_context=memory)
+        self.quick_worker = worker
+        self._quick_turn = {'chat_id': self.chat_id, 'text': '',
+                            'label': self.add_bubble('assistant', 'SYTOX antwortet …'),
+                            'outcome': 'running', 'answer': ''}
+        worker.token.connect(self._quick_token)
+        worker.metrics.connect(self._quick_metrics)
+        worker.model_selected.connect(self.model_name.setText)
+        worker.approval_request.connect(self.handle_approval)
+        worker.completed.connect(self._quick_done)
+        worker.finished.connect(self._quick_finished)
+        self.send_btn.setEnabled(False)
+        self.stopbtn.setEnabled(True)
+        self.stopbtn.setText('Antwort abbrechen')
+        self.model_mode.setEnabled(False)
+        self.state.setText('SYTOX antwortet …')
+        self.task_state.setText('Gespräch · kein Programmierauftrag')
+        worker.start()
+
+    def _quick_token(self, text):
+        if self._quick_turn is None:
+            return
+        self._quick_turn['text'] += text
+        if not self._quick_reply_timer.isActive():
+            self._quick_reply_timer.start()
+
+    def _flush_quick_tokens(self):
+        if self._quick_turn is None or not self._quick_turn['text']:
+            return
+        self._quick_turn['label'].setText(self._quick_turn['text'])
+        if self._follow_latest:
+            self._scroll_follow_timer.start(0)
+
+    def _quick_metrics(self, metrics):
+        self._last_chat_metrics = dict(metrics)
+        parts = []
+        for key, title in (('queue_wait_s', 'Wartezeit'), ('load_s', 'Modell laden'),
+                           ('time_to_first_token_s', 'Erstes Token'),
+                           ('request_s', 'Modellanfrage')):
+            value = metrics.get(key)
+            if value is not None:
+                parts.append(f'{title}: {value:.2f} s')
+        speed = metrics.get('tokens_per_second')
+        if speed is not None:
+            parts.append(f'{speed:.1f} Token/s')
+        details = ' · '.join(parts)
+        self.model_name.setToolTip(details)
+        self.log('Leistung', details)
+
+    def _quick_done(self, answer):
+        if self._quick_turn is None:
+            return
+        self._quick_reply_timer.stop()
+        turn = self._quick_turn
+        outcome = self.quick_worker.outcome
+        # The reply worker marks partial/error output explicitly incomplete.
+        turn.update(answer=answer, outcome=outcome)
+        turn['label'].setText(answer)
+        self.store.add_message(turn['chat_id'], 'assistant', answer)
+        self.state.setText({'done': 'Antwort fertig', 'cancelled': 'Antwort abgebrochen',
+                            'failed': 'Antwort fehlgeschlagen'}.get(outcome, 'Antwort beendet'))
+
+    def _quick_finished(self):
+        worker, turn = self.quick_worker, self._quick_turn
+        self.quick_worker = None
+        self._quick_turn = None
+        self._quick_reply_timer.stop()
+        if worker is not None:
+            worker.deleteLater()
+        self.stopbtn.setEnabled(False)
+        self.stopbtn.setText('Aufgabe stoppen')
+        self.send_btn.setEnabled(True)
+        self.model_mode.setEnabled(self.store.chat_kind(self.chat_id) != 'project')
+        if self._exit_after_quick:
+            self._exit_after_quick = False
+            self.exit_app()
+            return
+        if (turn and turn['outcome'] == 'done' and turn['answer'] and
+                (self.config.get('voice_enabled') or
+                 (self.listener and self.listener.isRunning()))):
+            self.start_speech(turn['answer'])
+        else:
+            self._conversation_ready()
+        self.input.setFocus()
 
     def queue_project_change(self, instruction, spoken=False):
         """Accept a new project instruction without stopping or sending a build."""
@@ -1734,11 +2036,19 @@ class MainWindow(QMainWindow):
 
     def refresh_live_progress(self):
         """Read live task checkpoints; never ask the busy coding model."""
-        if not hasattr(self, 'task_meter') or not self.chat_id:
+        if (self._is_exiting or not hasattr(self, 'task_meter')
+                or not self.chat_id):
             return
         active = bool(self.worker and self.worker.isRunning())
+        for widget in (self.task_meter, self.task_details, self.task_next):
+            widget.setVisible(active)
         entries = self.store.tasks(self.chat_id)
         task = next((item for item in entries if item['status'] == 'running'), None)
+        if active and task is None:
+            self.task_meter.setRange(0, 0)
+            self.task_details.setText('Auftrag wird vorbereitet …')
+            self.task_next.setText('')
+            return
         if active and task:
             try:
                 cp = json.loads(task.get('checkpoint') or '{}')
@@ -1759,9 +2069,10 @@ class MainWindow(QMainWindow):
                     recent = str((notes[-1] if notes and isinstance(notes[-1], dict)
                                   else {}).get('next_step') or '')[:135]
             eta = task_eta(task)
-            label = ('Restzeit: ca. ' + str(eta['low_minutes']) + '–'
-                     + str(eta['high_minutes']) + ' Minuten. ')
-            if eta['state'] != 'estimated':
+            if eta['state'] == 'estimated':
+                label = ('Restzeit: ca. ' + str(eta['low_minutes']) + '–'
+                         + str(eta['high_minutes']) + ' Minuten. ')
+            else:
                 label = 'Restzeit noch nicht zuverlässig abschätzbar. '
             self.task_next.setText(label + ('Zuletzt: ' + recent if recent else ''))
         else:
@@ -1791,10 +2102,21 @@ class MainWindow(QMainWindow):
         self.stopbtn.setEnabled(True)
         # Sending during work routes to the separate, tool-free conversation.
         self.send_btn.setEnabled(True)
-        self.task_state.setText('Läuft: '+(mode if mode!='timed' else f'{hours:g} h'))
+        self.task_state.setText('Aufgabe läuft' if mode == 'once' else
+                               'Arbeitet bis zum Abschluss' if mode == 'until_done' else
+                               f'Arbeitet bis zu {hours:g} Stunden')
+        self.task_meter.setRange(0, 0)
+        self.task_details.setText('Auftrag wird vorbereitet …')
+        self.task_next.setText('')
+        for widget in (self.task_meter, self.task_details, self.task_next):
+            widget.show()
         self.worker.start()
 
     def stop_work(self):
+        if self.quick_worker is not None:
+            self.quick_worker.stop_event.set()
+            self.state.setText('Antwort wird abgebrochen …')
+            return
         if self.worker and self.worker.isRunning():
             self.worker.stop_event.set();self.log('Status','Stopp angefordert …')
 
@@ -1811,6 +2133,9 @@ class MainWindow(QMainWindow):
 
     def handle_work_control(self, intent, original='', spoken=False):
         """Interpret conversational task controls without altering side questions."""
+        if self.quick_worker is not None and intent == 'pause':
+            self.stop_work()
+            return 'Ich breche die aktuelle Antwort ab.'
         active = bool(self.worker and self.worker.isRunning())
         stopping = bool(active and self.worker.stop_event.is_set())
         if intent == 'silence':
@@ -1873,7 +2198,9 @@ class MainWindow(QMainWindow):
 
     def worker_done(self,result):
         self.stopbtn.setEnabled(False);self.send_btn.setEnabled(True)
-        self.task_state.setText(result.get('status','unknown'))
+        self.task_state.setText(task_status_text(result.get('status')))
+        for widget in (self.task_meter, self.task_details, self.task_next):
+            widget.hide()
         answer = result.get('content','')
         self.add_bubble('assistant',answer)
         self.log('Status','Aufgabe: '+result.get('status','unbekannt'))
@@ -1975,6 +2302,7 @@ class MainWindow(QMainWindow):
 
 
     def resume_task(self):
+        if self.quick_worker is not None:return
         if self.worker and self.worker.isRunning():return
         tasks=[t for t in self.store.tasks(self.chat_id) if t['status'] in ('paused','failed','time_elapsed')]
         if not tasks:
@@ -2211,7 +2539,7 @@ class MainWindow(QMainWindow):
         direct = bool(package and package.has_portable)
         self.log('Update', ('Direkt-Update vorbereitet' if direct else 'Installer heruntergeladen')
                  + ' und SHA-256 geprüft.')
-        if self.worker and self.worker.isRunning():
+        if self.quick_worker is not None or (self.worker and self.worker.isRunning()):
             QMessageBox.information(self, 'Auftrag läuft',
                 'Update sicher heruntergeladen. Bitte zuerst den laufenden Auftrag '
                 'abschließen oder stoppen und dann erneut nach Updates suchen.')
