@@ -931,8 +931,12 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
         self.build_ui();self.setup_tray();self.reload_chats()
-        if self.chatlist.count()==0:self.create_chat()
-        else:self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
+        if not (self.chatlist.count() or self.projectlist.count()):
+            self.create_chat()
+        elif self.chatlist.count():
+            self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
+        else:
+            self.select_chat(self.projectlist.item(0).data(Qt.UserRole))
         self.log('System','Bereit. Lokale Daten: '+str(default_data_dir()))
         self._progress_refresh = QTimer(self)
         self._progress_refresh.setInterval(1400)
@@ -1006,6 +1010,13 @@ class MainWindow(QMainWindow):
         btn_new.clicked.connect(self.create_chat)
         btn_new.setMinimumHeight(44)
         l.addWidget(btn_new)
+        btn_project = QPushButton('◆  Neues Qwen-Projekt')
+        btn_project.setObjectName('subtle')
+        btn_project.setMinimumHeight(42)
+        btn_project.setToolTip('Dauerhaftes Coding-Projekt mit dem großen Qwen-Modell starten')
+        btn_project.clicked.connect(self.create_project)
+        self.new_project_btn = btn_project
+        l.addWidget(btn_project)
         l.addSpacing(7)
         self.search = QLineEdit()
         self.search.setObjectName('chatSearch')
@@ -1015,13 +1026,24 @@ class MainWindow(QMainWindow):
         self.search.textChanged.connect(self.reload_chats)
         l.addWidget(self.search)
         l.addSpacing(3)
+        projects_heading = QLabel('QWEN-PROJEKTE')
+        projects_heading.setObjectName('sectionTitle')
+        l.addWidget(projects_heading)
+        self.projectlist = QListWidget()
+        self.projectlist.setObjectName('projectList')
+        self.projectlist.setAccessibleName('Gespeicherte Qwen-Projekte')
+        self.projectlist.setSpacing(2)
+        self.projectlist.itemClicked.connect(lambda it: self.select_chat(it.data(Qt.UserRole)))
+        l.addWidget(self.projectlist, 1)
         recent = QLabel('DEINE GESPRÄCHE')
         recent.setObjectName('sectionTitle')
         l.addWidget(recent)
         self.chatlist = QListWidget()
+        self.chatlist.setObjectName('chatList')
+        self.chatlist.setAccessibleName('Schnelle Gespräche')
         self.chatlist.setSpacing(2)
         self.chatlist.itemClicked.connect(lambda it: self.select_chat(it.data(Qt.UserRole)))
-        l.addWidget(self.chatlist, 1)
+        l.addWidget(self.chatlist, 2)
         rename = QPushButton('Chat umbenennen')
         rename.setObjectName('ghost')
         rename.clicked.connect(self.rename_chat)
@@ -1060,6 +1082,7 @@ class MainWindow(QMainWindow):
         titles.setSpacing(2)
         breadcrumb = QLabel('WORKSPACE  /  KONVERSATION')
         breadcrumb.setObjectName('sectionTitle')
+        self.chat_breadcrumb = breadcrumb
         titles.addWidget(breadcrumb)
         self.chat_heading = QLabel('Neuer Chat')
         self.chat_heading.setObjectName('chatTitle')
@@ -1319,14 +1342,25 @@ class MainWindow(QMainWindow):
         self._new_chat_shortcut.activated.connect(self.create_chat)
         self.input.setFocus()
 
+    def _chat_runtime_config(self):
+        """Apply the saved model choice of this chat, never the last-used other chat."""
+        settings = self.config.copy()
+        if self.chat_id:
+            settings['model_mode'] = self.store.chat_model_mode(self.chat_id) or 'fast'
+        return settings
+
     def _model_mode_changed(self, _index=None):
-        """Remember manual override without restarting a running model."""
-        self.config['model_mode'] = self.model_mode.currentData()
+        """Persist manual selection for normal chats; Qwen projects stay Qwen."""
+        if self.chat_id and self.store.chat_kind(self.chat_id) == 'project':
+            return
+        route = self.model_mode.currentData()
+        if self.chat_id:
+            self.store.set_chat_model_mode(self.chat_id, route)
+        self.config['model_mode'] = route
         self.config_path.write_text(
             json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
         if self.parallel_chat is not None:
-            self.parallel_chat.config = self.config.copy()
-        route = self.model_mode.currentData()
+            self.parallel_chat.config = dict(self.config, model_mode='fast')
         label = (self.config.get('project_model') if route == 'project'
                  else self.config.get('fast_model') if route == 'fast'
                  else 'Automatische Modellauswahl')
@@ -1487,28 +1521,61 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def reload_chats(self,*args):
-        if not hasattr(self,'chatlist'):return
-        search=(self.search.text() if hasattr(self,'search') else '').lower()
+        if not hasattr(self, 'chatlist') or not hasattr(self, 'projectlist'):
+            return
+        search = (self.search.text() if hasattr(self, 'search') else '').lower()
         self.chatlist.clear()
+        self.projectlist.clear()
         for chat in self.store.chats():
-            if search not in chat['title'].lower():continue
-            it=QListWidgetItem(chat['title']);it.setData(Qt.UserRole,chat['id'])
-            self.chatlist.addItem(it)
-            if chat['id']==self.chat_id:self.chatlist.setCurrentItem(it)
+            if search not in chat['title'].lower():
+                continue
+            project = chat['kind'] == 'project'
+            widget = self.projectlist if project else self.chatlist
+            item = QListWidgetItem(('◆  ' if project else '') + chat['title'])
+            item.setData(Qt.UserRole, chat['id'])
+            widget.addItem(item)
+            if chat['id'] == self.chat_id:
+                widget.setCurrentItem(item)
 
     def create_chat(self):
         if self.worker and self.worker.isRunning():
-            QMessageBox.information(self,'Auftrag läuft','Bitte erst den laufenden Auftrag stoppen.')
+            QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
             return
-        cid=self.store.create_chat();self.reload_chats();self.select_chat(cid)
+        cid = self.store.create_chat(kind='chat')
+        self.reload_chats()
+        self.select_chat(cid)
+
+    def create_project(self):
+        """Create a named, permanent large-model conversation in the sidebar."""
+        if self.worker and self.worker.isRunning():
+            QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
+            return
+        title, accepted = QInputDialog.getText(self, 'Neues Qwen-Projekt', 'Projektname:')
+        if not accepted or not title.strip():
+            return
+        cid = self.store.create_chat(title=title.strip(), kind='project')
+        self.reload_chats()
+        self.select_chat(cid)
 
     def select_chat(self,cid):
         if self.worker and self.worker.isRunning() and cid!=self.chat_id:
             QMessageBox.information(self,'Auftrag läuft','Während der Ausführung kann der Chat nicht gewechselt werden.')
             return
-        self.chat_id=cid
         current=next((c for c in self.store.chats() if c['id']==cid),None)
-        self.chat_heading.setText(current['title'] if current else 'Chat')
+        if current is None:
+            return
+        self.chat_id=cid
+        project = current['kind'] == 'project'
+        selected_mode = self.store.chat_model_mode(cid)
+        self.model_mode.blockSignals(True)
+        self.model_mode.setCurrentIndex(max(0, self.model_mode.findData(selected_mode)))
+        self.model_mode.setEnabled(not project)
+        self.model_mode.blockSignals(False)
+        self.config['model_mode'] = selected_mode
+        self.model_name.setText(select_chat_model('', self._chat_runtime_config())[0])
+        self.chat_breadcrumb.setText('WORKSPACE  /  QWEN-PROJEKT' if project
+                                     else 'WORKSPACE  /  SCHNELLCHAT')
+        self.chat_heading.setText(current['title'])
         self.reload_chats();self.clear_bubbles()
         messages = self.store.messages(cid)
         if not messages:
@@ -1535,8 +1602,12 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():return
         if QMessageBox.question(self,'Chat löschen','Diesen Chat mit allen Nachrichten wirklich löschen?')!=QMessageBox.Yes:return
         self.store.delete_chat(self.chat_id);self.chat_id=None;self.reload_chats()
-        if self.chatlist.count():self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
-        else:self.create_chat()
+        if self.chatlist.count():
+            self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
+        elif self.projectlist.count():
+            self.select_chat(self.projectlist.item(0).data(Qt.UserRole))
+        else:
+            self.create_chat()
 
     def clear_bubbles(self):
         self.empty_widget = None
@@ -1618,7 +1689,7 @@ class MainWindow(QMainWindow):
             hours=max(.02,min(float(duration.group(1).replace(',','.')),24.0))
             mode='timed'
         if re.search(r'\bbis (?:es |alles )?fertig\b',txt.lower()):mode='until_done'
-        selected, _route = select_chat_model(txt, self.config, mode)
+        selected, _route = select_chat_model(txt, self._chat_runtime_config(), mode)
         self.model_name.setText(selected)
         self.start_worker(mode,hours)
 
@@ -1703,7 +1774,7 @@ class MainWindow(QMainWindow):
         else:
             self.voice_muted.set()
         self._agent_last_status='Auftrag gestartet; noch kein konkreter Fortschritt gemeldet.'
-        self.worker=Worker(self.store,self.chat_id,self.config.copy(),mode,hours,task_id)
+        self.worker=Worker(self.store,self.chat_id,self._chat_runtime_config(),mode,hours,task_id)
         self.worker.log_line.connect(self.log)
         self.worker.approval_request.connect(self.handle_approval)
         self.worker.completed.connect(self.worker_done)
@@ -1979,8 +2050,8 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _preferred_status_model(self):
-        """Check the model the chat will actually use for a typical new message."""
-        return select_chat_model('', self.config)[0]
+        """Check the model saved for the selected conversation."""
+        return select_chat_model('', self._chat_runtime_config())[0]
 
     def check_model_status(self):
         """Check the selected chat model without blocking mouse/keyboard UI."""
@@ -2038,7 +2109,7 @@ class MainWindow(QMainWindow):
                 'Automatische Auswahl' if self.config.get('model_mode') == 'auto'
                 else self._preferred_status_model())
             if self.parallel_chat is not None:
-                self.parallel_chat.config = self.config.copy()
+                self.parallel_chat.config = dict(self.config, model_mode='fast')
             self.log('System','Einstellungen gespeichert.')
             self.check_model_status()
 
@@ -2174,7 +2245,7 @@ class MainWindow(QMainWindow):
     def show_parallel_chat(self):
         """Show temporary conversational context, never the agent's workspace."""
         if self.parallel_chat is None:
-            self.parallel_chat = ParallelChatDialog(self.config, self)
+            self.parallel_chat = ParallelChatDialog(dict(self.config, model_mode='fast'), self)
             self.parallel_chat.answer_ready.connect(self._parallel_answer_ready)
             self.parallel_chat.control_requested.connect(self.handle_work_control)
             self.parallel_chat.status_requested.connect(self.report_agent_status)
