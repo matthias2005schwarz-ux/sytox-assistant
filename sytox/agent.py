@@ -35,6 +35,13 @@ Bei längeren Aufgaben: Plan -> Aktion -> Test -> Verbesserung. Keine beschäfti
 Bei neuen Programmieraufträgen zuerst toolchain_inspect mit dem konkreten Ziel verwenden:
 bestehende Projektdateien berücksichtigen, dann die Sprache und vorhandenen Compiler beurteilen.
 Fehlende Werkzeuge ausschließlich über toolchain_install mit gesonderter Nutzerfreigabe einrichten.
+Wenn der Benutzer einen Fehler beim Starten oder Ausführen von Windows, Spielen oder Programmen meldet, ist dies Windows-Fehlerdiagnose, NICHT automatisch ein Programmierauftrag.
+Bei Fehlercodes, DLL-Fehlern, Abstürzen und Startproblemen: zuerst windows_error_diagnose mit dem tatsächlichen Fehlertext aufrufen; falls ein Bildschirmtext vom lokalen Bildmodell vorliegt, ihn zur Diagnose heranziehen.
+Unterscheide beobachtete Tatsachen von Vermutungen. Bei unklaren Fehlern weitere Diagnose anbieten, nicht auf Verdacht Komponenten installieren.
+Für klar passende unterstützte Reparaturen windows_repair mit exakt einer dokumentierten fix_id verwenden.
+SYTOX lädt dabei die konkrete freigegebene Microsoft-Komponente selbst herunter, installiert sie und überprüft den Paketstatus. Keine DLL von unbekannten Webseiten, keine Registry-Hacks, keine unkontrollierten Downloads.
+Jede systemverändernde Reparatur braucht die spezielle Freigabe des Benutzers. Administrator-UAC darf nicht umgangen werden. Bei Ablehnung keine weitere Reparatur ausführen.
+Ein erfolgreicher Installer-Ausgang bedeutet noch nicht, dass das betroffene Programm wieder läuft. Wenn möglich erneut starten und kontrollieren, ansonsten ehrlich um einen Laufzeittest bitten.
 Bei verweigerter Installation keine Umgehung versuchen, sondern blockieren oder ohne Installation weiterarbeiten.
 Nach Installationen erneut toolchain_inspect aufrufen, da PATH/Neustart nötig sein können.
 Code schreiben, dann mit run_command nach Freigabe bauen und testen. Bei unterstützten Einzelprojekten project_build_plan und project_build verwenden: C, C++, Python, C# , Go, Rust erzeugen EXEs; Java/Kotlin JVM-Artefakte; JavaScript/TypeScript/PHP/Lua geprüfte Skripte oder Bytecode. Für native EXE-Aufträge zählt NUR eine echte verifizierte Windows-PE-Datei; ein Skript/JAR ist keine EXE.
@@ -325,7 +332,8 @@ class Agent:
                         # Verification must come after the LAST file edit, not before.
                         if name in ('run_command', 'selfdev_validate', 'project_build') and toolkit.passed_checks > before_checks:
                             validated_writes = previous_writes + toolkit.writes
-                        private_pc = name in ('pc_find_apps', 'pc_list_windows', 'pc_select_window', 'pc_inspect_window')
+                        private_pc = name in ('pc_find_apps', 'pc_list_windows', 'pc_select_window', 'pc_inspect_window',
+                                              'windows_error_diagnose')
                         safe_res = (f'{len(res)} Zeichen; Fensterinhalte nicht protokolliert'
                                     if private_pc else res[:1800])
                         self.logger('Aktion', f'{name}: {safe_res[:180]}')
