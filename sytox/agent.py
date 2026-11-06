@@ -83,27 +83,32 @@ class OllamaClient:
 
     @staticmethod
     def _abort_response(response):
-        """Interrupt a blocked urllib3 read before closing the response.
+        """Wake the NDJSON reader by shutting down its underlying socket.
 
-        Response.close alone can wait for a socket read's buffer lock. Requests
-        has no public cancellation API; socket shutdown is best effort, with the
-        normal read timeout as fallback if a transport has no exposed socket.
+        Calling requests.Response.close() from the cancellation thread can
+        deadlock with iter_lines(): urllib3's buffered reader owns a lock while
+        waiting on the network. Do not close the response here. The owner
+        thread closes it itself when leaving the 'with requests.post' block.
         """
         raw = getattr(response, 'raw', None)
+        candidates = []
         connection = getattr(raw, '_connection', None)
-        sock = getattr(connection, 'sock', None)
-        if sock is None:
-            fp = getattr(getattr(raw, '_fp', None), 'fp', None)
-            sock = getattr(getattr(fp, 'raw', None), '_sock', None)
-        try:
-            if sock is not None:
+        candidates.append(getattr(connection, 'sock', None))
+        for source in (getattr(raw, '_fp', None),
+                       getattr(raw, '_original_response', None)):
+            reader = getattr(source, 'fp', None)
+            stream = getattr(reader, 'raw', None)
+            candidates.append(getattr(stream, '_sock', None))
+        for sock in candidates:
+            if sock is None:
+                continue
+            try:
                 sock.shutdown(socket.SHUT_RDWR)
-        except (OSError, AttributeError):
-            pass
-        try:
-            response.close()
-        except (OSError, ValueError, AttributeError):
-            pass
+                return  # Do NOT call response.close() from this watcher thread.
+            except (OSError, AttributeError):
+                continue
+        # When urllib3 does not expose a socket, rely on the configured read
+        # timeout; never block the cancellation watcher on close()'s read lock.
 
     @staticmethod
     def _duration(chunk, field):
