@@ -35,6 +35,7 @@ from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama,
 from .screen_vision import (DEFAULT_VISION_MODEL, screen_intent, screen_followup_intent,
                             analyze_screenshot, MAX_SCREENSHOT_BYTES)
 from .performance_monitor import measure_performance, format_performance
+from .model_benchmark import run_local_benchmark, format_benchmark
 from .model_autotune import (probe_hardware, describe_recommendation,
                              read_local_model_size_gb)
 
@@ -587,6 +588,29 @@ class PerformanceWorker(QThread):
             self.measured.emit({})
 
 
+# Keep benchmarks alive even if their settings dialogs close during model loading.
+_ACTIVE_BENCHMARK_WORKERS = set()
+
+
+class ModelBenchmarkWorker(QThread):
+    measured = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, url, model, context_tokens=0):
+        super().__init__()
+        self.url, self.model, self.context_tokens = url, model, context_tokens
+        self.cancel_event = threading.Event()
+
+    def run(self):
+        try:
+            self.measured.emit(run_local_benchmark(
+                self.url, self.model, context_tokens=self.context_tokens,
+                cancel=self.cancel_event))
+        except Exception as exc:
+            if not self.cancel_event.is_set():
+                self.failed.emit(type(exc).__name__ + ': ' + str(exc)[:350])
+
+
 class OllamaProbe(QThread):
     """Avoid freezing the Qt event loop while checking a local model server."""
     checked = Signal(object)
@@ -850,8 +874,76 @@ class SettingsDialog(QDialog):
         form.addRow('Gmail OAuth-Desktop-Client JSON',self.gmail)
         check=QPushButton('Ollama-Verbindung testen')
         check.clicked.connect(self.check_ollama);form.addRow('',check)
+        self.benchmark_worker = None
+        self.benchmark_button = QPushButton('Lokalen KI-Benchmark starten')
+        self.benchmark_button.setToolTip('Zwei kurze Aufgaben · lokales Ollama · kein Download oder Chat-Limit')
+        self.benchmark_button.clicked.connect(self.start_benchmark)
+        self.benchmark_cancel_button = QPushButton('Abbrechen')
+        self.benchmark_cancel_button.setEnabled(False)
+        self.benchmark_cancel_button.clicked.connect(self.cancel_benchmark)
+        bench_row = QHBoxLayout()
+        bench_row.addWidget(self.benchmark_button)
+        bench_row.addWidget(self.benchmark_cancel_button)
+        form.addRow('Modellgeschwindigkeit', bench_row)
+        self.benchmark_status = QLabel('Noch nicht gemessen · Benchmark läuft nur auf deinem PC')
+        self.benchmark_status.setWordWrap(True)
+        self.benchmark_status.setObjectName('panelDescription')
+        form.addRow('', self.benchmark_status)
         save=QPushButton('Speichern');save.setObjectName('primary')
         save.clicked.connect(self.validate_and_save);form.addRow('',save)
+
+    def start_benchmark(self):
+        if any(worker.isRunning() for worker in tuple(_ACTIVE_BENCHMARK_WORKERS)):
+            self.benchmark_status.setText('Ein lokaler Benchmark läuft bereits.')
+            return
+        worker = ModelBenchmarkWorker(self.url.text().strip(),
+                                      self.model.text().strip(),
+                                      self.model_context.currentData())
+        self.benchmark_worker = worker
+        _ACTIVE_BENCHMARK_WORKERS.add(worker)
+        worker.measured.connect(self._benchmark_measured)
+        worker.failed.connect(self._benchmark_failed)
+        worker.finished.connect(self._benchmark_finished)
+        worker.finished.connect(lambda: _ACTIVE_BENCHMARK_WORKERS.discard(worker))
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(worker.cancel_event.set)
+        self.benchmark_button.setEnabled(False)
+        self.benchmark_cancel_button.setEnabled(True)
+        self.benchmark_status.setText('Lokaler Benchmark läuft – zwei kurze Testaufgaben …')
+        worker.start()
+
+    def cancel_benchmark(self):
+        if self.benchmark_worker is not None:
+            self.benchmark_worker.cancel_event.set()
+            self.benchmark_cancel_button.setEnabled(False)
+            self.benchmark_status.setText('Abbruch angefordert. Laufende Anfrage kann noch auslaufen.')
+
+    def _benchmark_measured(self, report):
+        speed = report.get('median_tokens_per_second')
+        ttft = report.get('median_first_token_seconds')
+        self.benchmark_status.setText(
+            'Gemessen: ' + (str(speed) if speed is not None else 'n/a') +
+            ' Token/s · Antwortbeginn ' + (str(ttft) if ttft is not None else 'n/a') + ' s')
+        if self.isVisible():
+            QMessageBox.information(self, 'SYTOX · Lokaler KI-Benchmark',
+                                    format_benchmark(report))
+
+    def _benchmark_failed(self, message):
+        self.benchmark_status.setText('Benchmark fehlgeschlagen: ' + message[:230])
+
+    def _benchmark_finished(self):
+        self.benchmark_button.setEnabled(True)
+        self.benchmark_cancel_button.setEnabled(False)
+        self.benchmark_worker = None
+
+    def reject(self):
+        self.cancel_benchmark()
+        super().reject()
+
+    def closeEvent(self, event):
+        self.cancel_benchmark()
+        super().closeEvent(event)
 
     def _update_hardware_preview(self, *_args):
         self.hardware_preview.setText(describe_recommendation(
@@ -869,6 +961,7 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self,'Piper',
                                 'Bitte eine existierende Piper-EXE und ein Stimmenmodell (.onnx) auswählen.')
             return
+        self.cancel_benchmark()
         self.accept()
 
     def browse_workspace(self):
