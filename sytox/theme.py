@@ -47,9 +47,9 @@ QLabel#sectionTitle {{ color: #E7DBDE; font-size: 10px; font-weight: 800; }}
 QPushButton#sectionToggle {{ text-align: left; color: #E7DBDE; font-size: 10px;
     font-weight: 800; padding: 7px 2px; border: none; background: transparent; }}
 QPushButton#sectionToggle:hover {{ color: #F1717A; }}
-QPushButton#copyReplyButton {{ background: transparent; border: none;
+QPushButton#copyReplyButton, QPushButton#copyCodeButton {{ background: transparent; border: none;
     color: #A89CA0; font-size: 11px; padding: 4px 8px; }}
-QPushButton#copyReplyButton:hover {{ color: #F1717A; }}
+QPushButton#copyReplyButton:hover, QPushButton#copyCodeButton:hover {{ color: #F1717A; }}
 QLabel#panelDescription {{ color: #A89CA0; font-size: 12px; }}
 QLabel#muted {{ color: {MUTED}; }}
 QLabel#heroEyebrow {{ color: #F39299; font-size: 11px; font-weight: 800; }}

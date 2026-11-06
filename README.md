@@ -10,6 +10,7 @@ Die Steuerzentrale zeigt Sprachoptionen und technische Aktivitäten zunächst
 eingeklappt. Mikrofonstatus und gespeicherte Erinnerungen bleiben direkt erreichbar;
 Fortschrittsdetails erscheinen nur bei einem laufenden Agentenauftrag.
 Antworten lassen sich über „Kopieren“ unverändert in die Zwischenablage übernehmen.
+Für vollständig empfangene Codeblöcke gibt es zusätzlich einzelne Kopierbuttons ohne Markdown-Zäune.
 Mit `Strg+L` gelangt der Tastaturfokus direkt ins Nachrichtenfeld.
 Ungesendete Entwürfe bleiben während der laufenden Sitzung pro Chat erhalten.
 Der Aufklappzustand von Sprachoptionen und Aktivitäten wird auch über Neustarts gespeichert.

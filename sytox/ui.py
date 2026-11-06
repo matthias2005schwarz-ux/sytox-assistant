@@ -29,6 +29,7 @@ from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
 from .parallel_chat import ParallelChatDialog, ParallelReplyWorker
+from .chat_content import MessageLabel, fenced_code_blocks
 from .updater import (check_for_update, download_verified_installer,
                       download_verified_portable, is_installed_app,
                       schedule_installer, schedule_portable_update, RELEASES_PAGE)
@@ -1721,12 +1722,44 @@ class MainWindow(QMainWindow):
             copy_button.clicked.connect(lambda _checked=False: QApplication.clipboard().setText(label.text()))
             heading.addWidget(copy_button)
         b.addLayout(heading)
-        label = QLabel(message)
+        label = QLabel(message) if mine else MessageLabel(message)
         label.setObjectName('bubbleContent')
         label.setTextFormat(Qt.PlainText)
         label.setWordWrap(True)
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         b.addWidget(label)
+        if not mine:
+            code_actions = QWidget(body)
+            code_layout = QVBoxLayout(code_actions)
+            code_layout.setContentsMargins(0, 0, 0, 0)
+            code_layout.setSpacing(3)
+            code_actions.hide()
+            code_actions._blocks = []
+
+            def update_code_actions(text):
+                blocks = fenced_code_blocks(text)
+                if blocks == code_actions._blocks:
+                    return
+                code_actions._blocks = blocks
+                while code_layout.count():
+                    old = code_layout.takeAt(0).widget()
+                    old.hide()
+                    old.setParent(None)
+                    old.deleteLater()
+                for number, block in enumerate(blocks, 1):
+                    language = block['language'][:30]
+                    caption = f'Codeblock {number} kopieren' + (f' ({language})' if language else '')
+                    button = QPushButton(caption)
+                    button.setObjectName('copyCodeButton')
+                    button.setAccessibleName(f'Codeblock {number} kopieren')
+                    button.clicked.connect(lambda _checked=False, code=block['code']:
+                                           QApplication.clipboard().setText(code))
+                    code_layout.addWidget(button)
+                code_actions.setVisible(bool(blocks))
+
+            label.text_changed.connect(update_code_actions)
+            update_code_actions(message)
+            b.addWidget(code_actions)
         body.setMaximumWidth(790)
         row = QWidget()
         row.setObjectName('messageRow')

@@ -111,6 +111,25 @@ class ControlPanelTests(unittest.TestCase):
         self.window.add_bubble('user', 'Meine Nachricht')
         self.assertEqual(self.window.findChildren(QPushButton, 'copyReplyButton'), [])
 
+    def test_code_blocks_are_copied_individually_without_fences_or_explanation(self):
+        self.window.add_bubble('assistant', 'Erklärung\n```python\nprint("Grüße")\n```\n'
+                               'Dazwischen\n~~~js\nconsole.log(1);\n~~~')
+        buttons = self.window.findChildren(QPushButton, 'copyCodeButton')
+        self.assertEqual(len(buttons), 2)
+        buttons[0].click()
+        self.assertEqual(self.app.clipboard().text(), 'print("Grüße")\n')
+        buttons[1].click()
+        self.assertEqual(self.app.clipboard().text(), 'console.log(1);\n')
+
+    def test_streamed_code_gets_copy_button_only_after_closing_fence(self):
+        label = self.window.add_bubble('assistant', '```python\nprint(1)')
+        self.assertEqual(self.window.findChildren(QPushButton, 'copyCodeButton'), [])
+        label.setText('```python\nprint(1)\n```')
+        button = self.window.findChild(QPushButton, 'copyCodeButton')
+        self.assertIsNotNone(button)
+        button.click()
+        self.assertEqual(self.app.clipboard().text(), 'print(1)\n')
+
     def test_opening_chat_translates_stored_task_status(self):
         task = self.window.store.create_task(self.window.chat_id, 'Code prüfen')
         self.window.store.update_task(task, 'paused')
