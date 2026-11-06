@@ -43,6 +43,14 @@ jobs:
       - name: Build EXE and smoke-test startup
         shell: powershell
         run: .\Windows_Smoke_Test.ps1 -BuildExe
+      - name: Verify direct-update Windows archive from tested EXE
+        shell: pwsh
+        run: |
+          $zip = "dist/SYTOX_Assistant_Portable_CI.zip"
+          Compress-Archive -Path "dist/SYTOX_Assistant/*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          if (!(Test-Path $zip)) { throw "Portable archive not created" }
+          & .\.venv\Scripts\python.exe -c "from pathlib import Path; import zipfile; from sytox.updater import _valid_archive_entry; p=Path('dist/SYTOX_Assistant_Portable_CI.zip'); z=zipfile.ZipFile(p); files=[i.filename for i in z.infolist()]; [_valid_archive_entry(i) for i in z.infolist()]; assert 'SYTOX_Assistant.exe' in files and any(f.startswith('_internal/') for f in files); print('Verified direct-update archive:',p.stat().st_size,'bytes')"
+          if ($LASTEXITCODE -ne 0) { throw "Portable archive validation failed" }
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
