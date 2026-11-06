@@ -21,9 +21,9 @@ _SCREEN_ACTION = re.compile(
     r"kannst\s+du\s+(?:sehen|lesen|erkennen))\b", re.IGNORECASE
 )
 _LIVE_SCREEN_REFERENCE = re.compile(
-    r"\\b(?:mein(?:en|em|e|es)?|dein(?:en|em|e|es)?|den|dem|"
-    r"dies(?:em|en|e)|aktuellen)\\b(?:\\W+\\w+){0,3}\\W+"
-    r"(?:bildschirm|screen|desktop|monitor|fensterinhalt)\\b",
+    r"\b(?:mein(?:en|em|e|es)?|dein(?:en|em|e|es)?|den|dem|"
+    r"dies(?:em|en|e)|aktuellen)\b(?:\W+\w+){0,3}\W+"
+    r"(?:bildschirm|screen|desktop|monitor|fensterinhalt)\b",
     re.IGNORECASE,
 )
 _SCREEN_NEGATION = re.compile(
