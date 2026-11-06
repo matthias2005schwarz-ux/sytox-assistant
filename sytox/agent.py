@@ -200,8 +200,7 @@ class Agent:
             system += ('Bei Programmieraufträgen kannst du record_progress verwenden. '
                        'Wenn du eine begründete Anzahl offener Arbeitsschritte kennst, '
                        'gib remaining_steps von 1 bis 100 als vorsichtige Schätzung an. '
-                       'Wenn sie unbekannt ist, lass das Feld weg; erfinde keine Restzeit. '\
-                       '\n')
+                       'Wenn sie unbekannt ist, lass das Feld weg; erfinde keine Restzeit. \n')
         if mode != 'once':
             system += ('Du sollst über mehrere Schritte arbeiten und Fortschritt im Projektordner speichern. '
                        '„Fertig“ im Fließtext beendet den Auftrag NICHT. Nur complete_task bestätigt Ergebnisse. '
