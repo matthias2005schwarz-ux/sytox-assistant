@@ -1,10 +1,13 @@
 """Capture the foreground desktop only for an explicit user question."""
 from PySide6.QtCore import QBuffer, QIODevice, Qt
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QApplication
 
 
 def screenshot_png():
-    screen = QApplication.primaryScreen()
+    # Use the monitor under the pointer, not always the primary display.
+    # Never combine or persist captures from multiple monitors.
+    screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
     if screen is None:
         raise RuntimeError('Kein Monitor erkannt.')
     picture = screen.grabWindow(0)
