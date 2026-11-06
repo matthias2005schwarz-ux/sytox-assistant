@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from .agent import OllamaClient
+from .ram_saver import keep_alive_for_config
 from .work_intents import work_intent
 from .web_search import should_search, search_web, format_results
 
@@ -48,7 +49,8 @@ class ParallelReplyWorker(QThread):
     def run(self):
         try:
             client = OllamaClient(
-                self.config['ollama_url'], self.config['model']
+                self.config['ollama_url'], self.config['model'],
+                keep_alive=keep_alive_for_config(self.config)
             )
             messages = [{'role': 'system', 'content': SYSTEM_PROMPT}] + self.history
             question = next((entry['content'] for entry in reversed(self.history)

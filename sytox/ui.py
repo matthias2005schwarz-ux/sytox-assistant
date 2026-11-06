@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
+from .ram_saver import keep_alive_for_config, normalized_keep_alive_seconds
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
@@ -139,7 +140,8 @@ class Worker(QThread):
         try:
             a=Agent(self.store,self.settings['model'],self.settings['ollama_url'],
                     self.settings['workspace'],self.request_approval,self.log_line.emit,self.stop_event,
-                    self.settings.get('gmail_client_secrets',''))
+                    self.settings.get('gmail_client_secrets',''),
+                    ram_keep_alive=keep_alive_for_config(self.settings))
             result=a.run(self.chat_id,self.mode,self.hours,self.task_id)
             self.completed.emit(result)
         except Exception as e:
@@ -775,6 +777,17 @@ class SettingsDialog(QDialog):
         self.edge_consent.setChecked(settings.get('edge_consent',False))
         self.auto_updates=QCheckBox('Automatisch nach neuen SYTOX-Versionen suchen (keine Installation ohne Zustimmung)')
         self.auto_updates.setChecked(settings.get('auto_check_updates', True))
+        self.ram_saver=QCheckBox('RAM-Sparmodus: ungenutzte Ollama-Modelle entladen')
+        self.ram_saver.setChecked(settings.get('ram_saver_enabled', True))
+        self.ram_delay=QSpinBox()
+        self.ram_delay.setRange(0, 3600)
+        self.ram_delay.setSuffix(' Sekunden')
+        self.ram_delay.setSpecialValueText('Sofort nach Antwort')
+        self.ram_delay.setToolTip('Ab der fertigen Antwort. 60 Sekunden Standard; während der Antwort wird nichts entladen.')
+        self.ram_delay.setValue(normalized_keep_alive_seconds(
+            settings.get('ram_keep_alive_seconds', 60)))
+        self.ram_delay.setEnabled(self.ram_saver.isChecked())
+        self.ram_saver.toggled.connect(self.ram_delay.setEnabled)
         self.auto_voice=QCheckBox('Beim App-Start automatisch auf „Hey Sytox“ hören (Mikrofon aktiv)')
         self.auto_voice.setChecked(settings.get('voice_auto_start', False))
         self.interruption=QCheckBox('Sprachausgabe durch „Hey Sytox“ oder „Stopp“ unterbrechen')
@@ -787,6 +800,8 @@ class SettingsDialog(QDialog):
         self.follow_up.setValue(int(settings.get('voice_followup_seconds',25)))
         form.addRow('Ollama-Modell',self.model)
         form.addRow('Ollama-Adresse',self.url)
+        form.addRow('',self.ram_saver)
+        form.addRow('Modell nach Inaktivität entladen',self.ram_delay)
         form.addRow('Projektordner',row)
         form.addRow('Vosk-Modellordner (Deutsch)',self.vosk)
         form.addRow('Piper EXE (optional)',self.piperexe)
@@ -845,6 +860,8 @@ class SettingsDialog(QDialog):
                 'voice_no_wake':self.no_wake.isChecked(),
                 'voice_auto_start':self.auto_voice.isChecked(),
                 'auto_check_updates':self.auto_updates.isChecked(),
+                'ram_saver_enabled':self.ram_saver.isChecked(),
+                'ram_keep_alive_seconds':self.ram_delay.value(),
                 'voice_interruptible':self.interruption.isChecked(),
                 'voice_followup_seconds':self.follow_up.value(),
                 'gmail_client_secrets':self.gmail.text().strip()}
@@ -906,6 +923,7 @@ class MainWindow(QMainWindow):
                   'edge_consent':False,'voice_no_wake':False,'voice_followup_seconds':25,
                   'voice_auto_start':False,'voice_interruptible':True,
                   'auto_check_updates':True,
+                  'ram_saver_enabled':True,'ram_keep_alive_seconds':60,
                   'gmail_client_secrets':''}
         default_model=base/'models'/'vosk-model-small-de-0.15'
         if default_model.is_dir(): settings['vosk_model']=str(default_model)
@@ -1859,6 +1877,8 @@ class MainWindow(QMainWindow):
             self.config=dialog.values()
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
             self.model_name.setText(self.config['model'])
+            if self.parallel_chat is not None:
+                self.parallel_chat.config = self.config.copy()
             self.log('System','Einstellungen gespeichert.')
             self.check_model_status()
 

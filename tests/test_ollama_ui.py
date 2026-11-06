@@ -36,6 +36,20 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.environ.stop()
         self.home.cleanup()
 
+    def test_ram_saver_defaults_and_settings_are_persistable(self):
+        from sytox.ui import SettingsDialog
+        self.assertTrue(self.window.config['ram_saver_enabled'])
+        self.assertEqual(self.window.config['ram_keep_alive_seconds'], 60)
+        dialog = SettingsDialog(self.window.config, self.window)
+        self.assertTrue(dialog.ram_saver.isChecked())
+        self.assertEqual(dialog.ram_delay.value(), 60)
+        dialog.ram_delay.setValue(300)
+        self.assertEqual(dialog.values()['ram_keep_alive_seconds'], 300)
+        dialog.ram_saver.setChecked(False)
+        self.assertFalse(dialog.ram_delay.isEnabled())
+        self.assertFalse(dialog.values()['ram_saver_enabled'])
+        dialog.close()
+
     def test_offline_does_not_claim_ki_ready(self):
         self.window._model_status_checked(OllamaStatus('offline', 'Ollama nicht erreichbar',
                                                       'Bitte Ollama starten'))

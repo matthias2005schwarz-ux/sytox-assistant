@@ -12,6 +12,7 @@ import requests
 from .actions import Toolkit, tool_schema, Cancelled
 from .web_search import should_search, search_web, format_results
 from .program_build import needs_compiled_artifact
+from .ram_saver import keep_alive_for_config
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
 Stil: freundlich, klar und direkt. Sprich Hochdeutsch ohne Dialekt.
@@ -53,9 +54,11 @@ class OllamaError(RuntimeError):
 
 
 class OllamaClient:
-    def __init__(self, url='http://localhost:11434', model='qwen2.5-coder:7b'):
+    def __init__(self, url='http://localhost:11434', model='qwen2.5-coder:7b',
+                 keep_alive=None):
         self.url = url.rstrip('/')
         self.model = model
+        self.keep_alive = keep_alive
 
     def installed(self):
         resp = requests.get(self.url + '/api/tags', timeout=6)
@@ -67,6 +70,8 @@ class OllamaClient:
                    'options': {'temperature': 0.3, 'num_ctx': 8192, 'num_predict': 1600}}
         if tools:
             payload['tools'] = tools
+        if self.keep_alive is not None:
+            payload['keep_alive'] = self.keep_alive
         try:
             with requests.post(self.url + '/api/chat', json=payload, stream=True,
                                timeout=(8, 600)) as response:
@@ -127,9 +132,9 @@ CONTROL_TOOLS = [
 class Agent:
     RETRY_DELAYS = (1, 2, 4)  # Seconds; configurable in unit tests.
     MAX_STEPS = 10000  # Additional guard for unattended runs.
-    def __init__(self, store, model, base_url, workspace, approve, logger, stop_event=None, gmail_client_secrets=''):
+    def __init__(self, store, model, base_url, workspace, approve, logger, stop_event=None, gmail_client_secrets='', ram_keep_alive=None):
         self.store = store
-        self.client = OllamaClient(base_url, model)
+        self.client = OllamaClient(base_url, model, keep_alive=ram_keep_alive)
         self.workspace = workspace
         self.approve = approve
         self.logger = logger
