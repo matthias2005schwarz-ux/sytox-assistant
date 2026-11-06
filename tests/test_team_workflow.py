@@ -54,7 +54,11 @@ class TeamStateTests(unittest.TestCase):
             project.mkdir()
             (root / "secret.py").write_text("PRIVATE")
             (project / "main.py").write_text("print(2)\n")
-            (project / "link.py").symlink_to(root / "secret.py")
+            try:
+                (project / "link.py").symlink_to(root / "secret.py")
+            except OSError:
+                # Windows CI may not grant symlink creation to the test account.
+                pass
             msg = reviewer_request("Change", "Tests", project,
                                    {"main.py", "link.py", "../secret.py"})
             self.assertIn("print(2)", msg[1]["content"])
