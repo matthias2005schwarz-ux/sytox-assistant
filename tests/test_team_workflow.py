@@ -100,6 +100,7 @@ class TeamIntegrationTests(unittest.TestCase):
         self.assertIn("Softwarearchitekt", str(agent.client.chat.call_args_list[1].args[0]))
         self.assertIsNone(agent.client.chat.call_args_list[5].kwargs["tools"])
         self.assertIn("unabhängige", str(agent.client.chat.call_args_list[5].args[0]))
+        self.assertIn("Reviewer: okay", str(agent.client.chat.call_args_list[6].args[0]))
         checkpoint = json.loads(self.store.tasks(self.cid)[0]["checkpoint"])
         self.assertTrue(checkpoint["coding_team"]["active"])
         self.assertEqual(checkpoint["coding_team"]["phase"], "reviewed")
