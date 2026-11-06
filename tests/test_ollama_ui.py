@@ -96,6 +96,8 @@ class OllamaQtOnboardingTests(unittest.TestCase):
             dialog.close()
 
     def test_performance_panel_reports_auto_model_recommendation(self):
+        # RAM warning specifically concerns the large Qwen-Coder 30B project.
+        self.window.create_chat('project')
         self.window.config["model_context_tokens"] = 0
         self.window._performance_measured({
             "ram_total_gb": 16, "ram_used_gb": 8,
