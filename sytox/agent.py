@@ -551,11 +551,15 @@ class Agent:
                             'pc_inspect_window', 'read_file', 'read_file_lines',
                             'search_project', 'project_context_bundle',
                         )
-                        safe_res = (f'{len(res)} Zeichen; private Datei-/Fensterinhalte '
-                                    'nicht protokolliert' if private_result else res[:1800])
+                        failed_test_result = failed_coding_tool(name, res)
+                        safe_res = (
+                            f'{len(res)} Zeichen; private Datei-/Fensterinhalte nicht protokolliert'
+                            if private_result else
+                            f'{len(res)} Zeichen; fehlgeschlagener Test/Build, Details nur im lokalen Kontext'
+                            if failed_test_result else res[:1800])
                         self.logger('Aktion', f'{name}: {safe_res[:180]}')
                         messages.append({'role': 'tool', 'tool_name': name, 'content': res})
-                        if failed_coding_tool(name, res):
+                        if failed_test_result:
                             repair_state, repeated = update_failure_state(
                                 repair_state, name, res)
                             if repeated:
