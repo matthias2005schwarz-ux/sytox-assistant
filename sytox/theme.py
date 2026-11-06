@@ -31,8 +31,9 @@ QFrame#sidebar {{ background-color: #101013; border-right: 1px solid {EDGE}; }}
 QFrame#right {{ background-color: #101013; border-left: 1px solid {EDGE}; }}
 QFrame#topbar {{ background-color: #111014; border-bottom: 1px solid {EDGE}; }}
 QFrame#composePanel {{ background-color: #0D0C0F; border-top: 1px solid #242024; }}
-QFrame#inputCard {{ background-color: #1A171B;
-    border: 1px solid #453039; border-radius: 17px; }}
+QFrame#inputCard {{ background-color: #161419;
+    border: 1px solid #49313A; border-radius: 18px; }}
+QFrame#inputCard:hover {{ border-color: #68404A; }}
 QFrame#utilityCard {{ background-color: #19171B;
     border: 1px solid #31282D; border-radius: 15px; }}
 QFrame#hero {{
@@ -73,6 +74,16 @@ QPushButton#ghost:hover {{ background: #211A1E;
 QPushButton#subtle {{ background: #241B20; border-color: #402C34;
     color: #EEDDE0; }}
 QPushButton#subtle:hover {{ background: #372128; border-color: #8A3945; }}
+QPushButton#micButton {{
+    background: #251C23; border: 1px solid #69404C;
+    border-radius: 14px; padding: 0; min-height: 0;
+}}
+QPushButton#micButton:hover {{ background: #40212B; border-color: #D25966; }}
+QPushButton#micButton:pressed, QPushButton#micButton:checked {{
+    background: #69202E; border: 1px solid #FF6171;
+}}
+QPushButton#micButton:disabled {{ background: #231C21; border-color: #4A3038; }}
+QPushButton#micButton:focus {{ border-color: #FC8290; }}
 QPushButton#suggestion {{ background: #23191F; border: 1px solid #57303A;
     color: #EBD5D9; border-radius: 12px; text-align: left; padding: 10px 14px; }}
 QPushButton#suggestion:hover {{ background: #3A1D26; border-color: #C14A56; }}
