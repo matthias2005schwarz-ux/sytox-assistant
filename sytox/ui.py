@@ -1242,6 +1242,26 @@ class MainWindow(QMainWindow):
             inner.setSpacing(9)
             return card, inner
 
+        def collapsible_section(title, layout):
+            toggle = QPushButton('▸ ' + title)
+            toggle.setObjectName('sectionToggle')
+            toggle.setCheckable(True)
+            toggle.setAccessibleName(title)
+            toggle.setToolTip('Bereich ein- oder ausklappen')
+            layout.addWidget(toggle)
+            body = QWidget()
+            contents = QVBoxLayout(body)
+            contents.setContentsMargins(0, 3, 0, 0)
+            contents.setSpacing(9)
+            body.hide()
+
+            def expand(expanded):
+                body.setVisible(expanded)
+                toggle.setText(('▾ ' if expanded else '▸ ') + title)
+
+            toggle.toggled.connect(expand)
+            return toggle, body, contents
+
         ollama_card, ollama = new_card()
         ollama_title = QLabel('●  KI-VERBINDUNG')
         ollama_title.setObjectName('sectionTitle')
@@ -1275,14 +1295,17 @@ class MainWindow(QMainWindow):
         self.task_meter.setValue(0)
         self.task_meter.setTextVisible(False)
         self.task_meter.setAccessibleName('Live-Arbeitsfortschritt')
+        self.task_meter.hide()
         task.addWidget(self.task_meter)
         self.task_details = QLabel('Noch keine Arbeitsschritte protokolliert.')
         self.task_details.setObjectName('panelDescription')
         self.task_details.setWordWrap(True)
+        self.task_details.hide()
         task.addWidget(self.task_details)
         self.task_next = QLabel('')
         self.task_next.setObjectName('panelDescription')
         self.task_next.setWordWrap(True)
+        self.task_next.hide()
         task.addWidget(self.task_next)
         self.stopbtn = QPushButton('Aufgabe stoppen')
         self.stopbtn.setEnabled(False)
@@ -1304,39 +1327,39 @@ class MainWindow(QMainWindow):
         r.addWidget(task_card)
 
         voice_card, voice = new_card()
-        voice_heading = QLabel('SPRACHE & MIKROFON')
-        voice_heading.setObjectName('sectionTitle')
-        voice.addWidget(voice_heading)
+        self.voice_panel_toggle, self.voice_panel_body, voice_controls = collapsible_section(
+            'SPRACHE & MIKROFON', voice)
         self.voice_state = QLabel('Mikrofon aus')
         self.voice_state.setObjectName('panelDescription')
         voice.addWidget(self.voice_state)
         self.wakebtn = QPushButton('Gesprächsmodus starten')
         self.wakebtn.setObjectName('subtle')
         self.wakebtn.clicked.connect(self.toggle_listener)
-        voice.addWidget(self.wakebtn)
+        voice_controls.addWidget(self.wakebtn)
         model_button = QPushButton('Sprachmodell laden')
         model_button.clicked.connect(self.install_voice_model)
-        voice.addWidget(model_button)
+        voice_controls.addWidget(model_button)
         self.stopvoicebtn = QPushButton('Sprache stoppen')
         self.stopvoicebtn.clicked.connect(self.stop_speech)
         self.stopvoicebtn.setEnabled(False)
-        voice.addWidget(self.stopvoicebtn)
+        voice_controls.addWidget(self.stopvoicebtn)
         diagnostics_button = QPushButton('Mikrofon / Unterbrechung')
         diagnostics_button.setToolTip('Mikrofon und Unterbrechung testen')
         diagnostics_button.clicked.connect(self.open_voice_diagnostics)
-        voice.addWidget(diagnostics_button)
+        voice_controls.addWidget(diagnostics_button)
+        voice.addWidget(self.voice_panel_body)
         r.addWidget(voice_card)
 
         activity_card, activity = new_card()
-        logs_title = QLabel('AKTIVITÄTEN')
-        logs_title.setObjectName('sectionTitle')
-        activity.addWidget(logs_title)
+        self.activity_panel_toggle, self.activity_panel_body, activity_controls = collapsible_section(
+            'AKTIVITÄTEN', activity)
         self.logs = QPlainTextEdit()
         self.logs.setObjectName('activityLog')
         self.logs.setReadOnly(True)
         self.logs.setMaximumBlockCount(250)
         self.logs.setMinimumHeight(125)
-        activity.addWidget(self.logs)
+        activity_controls.addWidget(self.logs)
+        activity.addWidget(self.activity_panel_body)
         memory = QPushButton('Gespeicherte Erinnerungen')
         memory.setObjectName('ghost')
         memory.clicked.connect(self.show_memories)
@@ -1753,6 +1776,7 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self._quick_finished)
         self.send_btn.setEnabled(False)
         self.stopbtn.setEnabled(True)
+        self.stopbtn.setText('Antwort abbrechen')
         self.model_mode.setEnabled(False)
         self.state.setText('SYTOX antwortet …')
         self.task_state.setText('Gespräch · kein Programmierauftrag')
@@ -1811,6 +1835,7 @@ class MainWindow(QMainWindow):
         if worker is not None:
             worker.deleteLater()
         self.stopbtn.setEnabled(False)
+        self.stopbtn.setText('Aufgabe stoppen')
         self.send_btn.setEnabled(True)
         self.model_mode.setEnabled(self.store.chat_kind(self.chat_id) != 'project')
         if self._exit_after_quick:
@@ -1860,8 +1885,15 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'task_meter') or not self.chat_id:
             return
         active = bool(self.worker and self.worker.isRunning())
+        for widget in (self.task_meter, self.task_details, self.task_next):
+            widget.setVisible(active)
         entries = self.store.tasks(self.chat_id)
         task = next((item for item in entries if item['status'] == 'running'), None)
+        if active and task is None:
+            self.task_meter.setRange(0, 0)
+            self.task_details.setText('Auftrag wird vorbereitet …')
+            self.task_next.setText('')
+            return
         if active and task:
             try:
                 cp = json.loads(task.get('checkpoint') or '{}')
@@ -1882,9 +1914,10 @@ class MainWindow(QMainWindow):
                     recent = str((notes[-1] if notes and isinstance(notes[-1], dict)
                                   else {}).get('next_step') or '')[:135]
             eta = task_eta(task)
-            label = ('Restzeit: ca. ' + str(eta['low_minutes']) + '–'
-                     + str(eta['high_minutes']) + ' Minuten. ')
-            if eta['state'] != 'estimated':
+            if eta['state'] == 'estimated':
+                label = ('Restzeit: ca. ' + str(eta['low_minutes']) + '–'
+                         + str(eta['high_minutes']) + ' Minuten. ')
+            else:
                 label = 'Restzeit noch nicht zuverlässig abschätzbar. '
             self.task_next.setText(label + ('Zuletzt: ' + recent if recent else ''))
         else:
@@ -1914,7 +1947,14 @@ class MainWindow(QMainWindow):
         self.stopbtn.setEnabled(True)
         # Sending during work routes to the separate, tool-free conversation.
         self.send_btn.setEnabled(True)
-        self.task_state.setText('Läuft: '+(mode if mode!='timed' else f'{hours:g} h'))
+        self.task_state.setText('Aufgabe läuft' if mode == 'once' else
+                               'Arbeitet bis zum Abschluss' if mode == 'until_done' else
+                               f'Arbeitet bis zu {hours:g} Stunden')
+        self.task_meter.setRange(0, 0)
+        self.task_details.setText('Auftrag wird vorbereitet …')
+        self.task_next.setText('')
+        for widget in (self.task_meter, self.task_details, self.task_next):
+            widget.show()
         self.worker.start()
 
     def stop_work(self):
@@ -2003,7 +2043,12 @@ class MainWindow(QMainWindow):
 
     def worker_done(self,result):
         self.stopbtn.setEnabled(False);self.send_btn.setEnabled(True)
-        self.task_state.setText(result.get('status','unknown'))
+        self.task_state.setText({
+            'done': 'Aufgabe abgeschlossen', 'paused': 'Aufgabe pausiert',
+            'failed': 'Aufgabe fehlgeschlagen', 'time_elapsed': 'Arbeitszeit beendet',
+        }.get(result.get('status'), 'Aufgabe beendet'))
+        for widget in (self.task_meter, self.task_details, self.task_next):
+            widget.hide()
         answer = result.get('content','')
         self.add_bubble('assistant',answer)
         self.log('Status','Aufgabe: '+result.get('status','unbekannt'))

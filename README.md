@@ -6,6 +6,10 @@ direkt lokal beantwortet. Details zu Abbruch, Modellwahl, RAM und überprüfbare
 Zeitmessungen: [Schnellchat und Leistung](docs/quickchat-performance.md).
 Noch kein neuer Installer oder Release; echte Ollama-/Windows-Praxistests bleiben offen.
 
+Die Steuerzentrale zeigt Sprachoptionen und technische Aktivitäten zunächst
+eingeklappt. Mikrofonstatus und gespeicherte Erinnerungen bleiben direkt erreichbar;
+Fortschrittsdetails erscheinen nur bei einem laufenden Agentenauftrag.
+
 ## Direkt-Updates innerhalb von SYTOX (ab Version 0.3.9)
 
 Unter **Nach Updates suchen** erkennt die installierte Windows-App offizielle GitHub Releases.
