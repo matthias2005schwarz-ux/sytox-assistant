@@ -2124,6 +2124,7 @@ class MainWindow(QMainWindow):
 
     def toggle_memo(self):
         if self.listener and self.listener.isRunning():
+            self.mic_btn.setChecked(False)
             QMessageBox.information(self,'Mikrofon belegt','Bitte Gesprächsmodus zuerst stoppen.')
             return
         if self.recorder and self.recorder.isRunning():
