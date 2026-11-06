@@ -22,6 +22,7 @@ from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED
 from .agent import Agent,OllamaClient
 from .ram_saver import keep_alive_for_config, normalized_keep_alive_seconds
 from .task_eta import task_eta
+from .task_queue import is_change_request
 from .model_router import select_chat_model, wants_screen
 from .screen_vision import describe_screen
 from .storage import Store,default_data_dir
@@ -933,6 +934,10 @@ class MainWindow(QMainWindow):
         if self.chatlist.count()==0:self.create_chat()
         else:self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
         self.log('System','Bereit. Lokale Daten: '+str(default_data_dir()))
+        self._progress_refresh = QTimer(self)
+        self._progress_refresh.setInterval(1400)
+        self._progress_refresh.timeout.connect(self.refresh_live_progress)
+        self._progress_refresh.start()
         QTimer.singleShot(700, self.check_model_status)
         if self.config.get('auto_check_updates', True):
             QTimer.singleShot(2200, self.check_for_updates)
@@ -1227,6 +1232,21 @@ class MainWindow(QMainWindow):
         self.task_state.setObjectName('panelDescription')
         self.task_state.setWordWrap(True)
         task.addWidget(self.task_state)
+        self.task_meter = QProgressBar()
+        self.task_meter.setObjectName('taskProgressMeter')
+        self.task_meter.setRange(0, 100)
+        self.task_meter.setValue(0)
+        self.task_meter.setTextVisible(False)
+        self.task_meter.setAccessibleName('Live-Arbeitsfortschritt')
+        task.addWidget(self.task_meter)
+        self.task_details = QLabel('Noch keine Arbeitsschritte protokolliert.')
+        self.task_details.setObjectName('panelDescription')
+        self.task_details.setWordWrap(True)
+        task.addWidget(self.task_details)
+        self.task_next = QLabel('')
+        self.task_next.setObjectName('panelDescription')
+        self.task_next.setWordWrap(True)
+        task.addWidget(self.task_next)
         self.stopbtn = QPushButton('Aufgabe stoppen')
         self.stopbtn.setEnabled(False)
         self.stopbtn.clicked.connect(self.stop_work)
@@ -1577,6 +1597,8 @@ class MainWindow(QMainWindow):
             self.input.clear()
             if agent_status_intent(txt):
                 self.report_agent_status(txt, spoken=False)
+            elif is_change_request(txt):
+                self.queue_project_change(txt, spoken=False)
             else:
                 self.ask_parallel(txt, spoken=False)
             return
@@ -1599,6 +1621,79 @@ class MainWindow(QMainWindow):
         selected, _route = select_chat_model(txt, self.config, mode)
         self.model_name.setText(selected)
         self.start_worker(mode,hours)
+
+    def queue_project_change(self, instruction, spoken=False):
+        """Accept a new project instruction without stopping or sending a build."""
+        if not (self.worker and self.worker.isRunning()):
+            return False
+        try:
+            change_id = self.store.add_task_change(self.chat_id, instruction)
+        except (ValueError, RuntimeError) as exc:
+            message = 'Änderung konnte nicht vorgemerkt werden: ' + str(exc)
+            self.log('Status', message)
+            if spoken:
+                self.start_speech(message)
+            else:
+                self.add_bubble('assistant', message)
+            return False
+        # Only the queue table is written. Never change the original task goal.
+        self.add_bubble('user', instruction)
+        message = ('Zusatzwunsch ' + str(change_id) +
+                   ' vorgemerkt. Ich schließe zuerst die laufende Arbeit ab, '
+                   'ergänze danach dein Projekt und melde erst dann fertig.')
+        self.log('Status', message)
+        if self.parallel_chat is not None and self.parallel_chat.isVisible():
+            self.parallel_chat.transcript.appendPlainText(
+                'DU: ' + instruction + '\\nSYTOX: ' + message + '\\n')
+        else:
+            self.add_bubble('assistant', message)
+        self.refresh_live_progress()
+        if spoken:
+            self.start_speech(message)
+        return True
+
+    def refresh_live_progress(self):
+        """Read live task checkpoints; never ask the busy coding model."""
+        if not hasattr(self, 'task_meter') or not self.chat_id:
+            return
+        active = bool(self.worker and self.worker.isRunning())
+        entries = self.store.tasks(self.chat_id)
+        task = next((item for item in entries if item['status'] == 'running'), None)
+        if active and task:
+            try:
+                cp = json.loads(task.get('checkpoint') or '{}')
+            except (ValueError, TypeError):
+                cp = {}
+            steps = max(0, int(cp.get('steps', 0)))
+            writes = max(0, int(cp.get('writes', 0)))
+            checks = max(0, int(cp.get('passed_checks', 0)))
+            changes = self.store.task_changes(task['id'])
+            self.task_meter.setRange(0, 0)  # Activity, not a fictitious percent.
+            self.task_details.setText(
+                f'{steps} Schritte · {writes} Dateiänderungen · '
+                f'{checks} Prüfungen · {len(changes)} vorgemerkte Änderungen')
+            recent = str(cp.get('last_result') or '')[:135]
+            if not recent:
+                notes = cp.get('progress_notes', [])
+                if isinstance(notes, list):
+                    recent = str((notes[-1] if notes and isinstance(notes[-1], dict)
+                                  else {}).get('next_step') or '')[:135]
+            eta = task_eta(task)
+            label = ('Restzeit: ca. ' + str(eta['low_minutes']) + '–'
+                     + str(eta['high_minutes']) + ' Minuten. ')
+            if eta['state'] != 'estimated':
+                label = 'Restzeit noch nicht zuverlässig abschätzbar. '
+            self.task_next.setText(label + ('Zuletzt: ' + recent if recent else ''))
+        else:
+            self.task_meter.setRange(0, 100)
+            self.task_meter.setValue(0)
+            if entries and entries[0]['status'] == 'done':
+                self.task_details.setText('Aufgabe abgeschlossen.')
+            elif entries and entries[0]['status'] == 'paused':
+                self.task_details.setText('Aufgabe pausiert; gespeicherter Stand verfügbar.')
+            else:
+                self.task_details.setText('Kein laufender Programmierauftrag.')
+            self.task_next.setText('')
 
     def start_worker(self,mode='once',hours=1.0,task_id=None):
         # The Agent runs in its own thread. Listening for follow-up questions
@@ -2083,6 +2178,7 @@ class MainWindow(QMainWindow):
             self.parallel_chat.answer_ready.connect(self._parallel_answer_ready)
             self.parallel_chat.control_requested.connect(self.handle_work_control)
             self.parallel_chat.status_requested.connect(self.report_agent_status)
+            self.parallel_chat.change_requested.connect(self.queue_project_change)
             # Reuse the same explicit, user-visible approval dialog as the Agent.
             self.parallel_chat.approval_request.connect(self.handle_approval)
         self.parallel_chat.show()
@@ -2234,7 +2330,10 @@ class MainWindow(QMainWindow):
             self._conversation_ready()
             return
         if self.worker and self.worker.isRunning():
-            self.ask_parallel(text, spoken=True)
+            if is_change_request(text):
+                self.queue_project_change(text, spoken=True)
+            else:
+                self.ask_parallel(text, spoken=True)
             return
         self.input.setPlainText(text)
         self.send()
