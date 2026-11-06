@@ -60,6 +60,14 @@ class Store:
               id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, goal TEXT NOT NULL, mode TEXT NOT NULL,
               deadline TEXT, status TEXT NOT NULL, checkpoint TEXT NOT NULL DEFAULT '{}',
               created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS task_changes(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              chat_id TEXT NOT NULL, task_id TEXT,
+              instruction TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              FOREIGN KEY(chat_id) REFERENCES chats(id));
+            CREATE INDEX IF NOT EXISTS idx_task_changes_active
+              ON task_changes(chat_id,status,id);
             CREATE TABLE IF NOT EXISTS journal(
               id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, event TEXT NOT NULL,
               details TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -100,6 +108,7 @@ class Store:
             db.execute('DELETE FROM message_search WHERE chat_id=?', (cid,)) if self._fts_available(db,'message_search') else None
             db.execute('DELETE FROM memory_facts WHERE source_chat_id=?',(cid,))
             db.execute('DELETE FROM messages WHERE chat_id=?',(cid,))
+            db.execute('DELETE FROM task_changes WHERE chat_id=?',(cid,))
             db.execute('DELETE FROM tasks WHERE chat_id=?',(cid,))
             db.execute('DELETE FROM chats WHERE id=?',(cid,))
 
@@ -296,6 +305,77 @@ class Store:
             if cid: rows=db.execute('SELECT * FROM tasks WHERE chat_id=? ORDER BY created_at DESC',(cid,))
             else: rows=db.execute('SELECT * FROM tasks ORDER BY created_at DESC')
             return [dict(r) for r in rows]
+
+    def add_task_change(self, cid, instruction):
+        """Atomically enqueue work only while a coding task is active."""
+        instruction = str(instruction or '').strip()
+        if not instruction or len(instruction) > 2000:
+            raise ValueError('Änderungswunsch muss 1 bis 2000 Zeichen haben.')
+        with self._lock, self._connect() as db:
+            active = db.execute(
+                "SELECT id FROM tasks WHERE chat_id=? AND status='running' "
+                "ORDER BY created_at DESC LIMIT 1", (cid,)
+            ).fetchone()
+            if not active:
+                # The agent creates the task shortly after the UI starts its
+                # thread. The UI must retry rather than orphan a change.
+                raise RuntimeError('Noch kein laufender Auftrag zum Vormerken.')
+            cursor = db.execute(
+                'INSERT INTO task_changes(chat_id,task_id,instruction,status,created_at,updated_at) '
+                "VALUES(?,?,?,'queued',?,?)",
+                (cid, active['id'], instruction, now(), now()),
+            )
+            return cursor.lastrowid
+
+    def task_changes(self, tid, include_applied=False):
+        """Chronological, persistent amendments for exactly one task."""
+        with self._connect() as db:
+            query = ('SELECT id, chat_id, task_id, instruction, status '
+                     'FROM task_changes WHERE task_id=?')
+            if not include_applied:
+                query += " AND status IN ('queued','in_progress')"
+            query += ' ORDER BY id'
+            return [dict(r) for r in db.execute(query, (tid,))]
+
+    def claim_next_change(self, tid):
+        """Claim one queued amendment; resume an in-progress amendment first."""
+        with self._lock, self._connect() as db:
+            record = db.execute(
+                "SELECT * FROM task_changes WHERE task_id=? "
+                "AND status IN ('queued','in_progress') "
+                'ORDER BY id LIMIT 1', (tid,)
+            ).fetchone()
+            if not record:
+                return None
+            if record['status'] == 'queued':
+                db.execute(
+                    "UPDATE task_changes SET status='in_progress',updated_at=? WHERE id=?",
+                    (now(), record['id']),
+                )
+            return {**dict(record), 'status': 'in_progress'}
+
+    def finish_change(self, tid, change_id):
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE task_changes SET status='applied',updated_at=? "
+                "WHERE task_id=? AND id=? AND status='in_progress'",
+                (now(), tid, change_id),
+            )
+
+    def complete_task_if_queue_empty(self, tid, checkpoint):
+        """Prevents a new amendment racing with final user-facing completion."""
+        with self._lock, self._connect() as db:
+            if db.execute(
+                "SELECT id FROM task_changes WHERE task_id=? "
+                "AND status IN ('queued','in_progress') LIMIT 1", (tid,)
+            ).fetchone():
+                return False
+            db.execute(
+                "UPDATE tasks SET status='done',checkpoint=?,updated_at=? "
+                "WHERE id=? AND status='running'",
+                (json.dumps(checkpoint, ensure_ascii=False), now(), tid),
+            )
+            return True
 
     def interrupted_tasks(self):
         with self._lock,self._connect() as db:
