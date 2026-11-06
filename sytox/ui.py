@@ -54,6 +54,23 @@ class BrandMark(QWidget):
         p.end()
 
 
+def microphone_icon():
+    """Crisp native painted microphone; avoids platform-specific emoji rendering."""
+    pixmap = QPixmap(28, 28)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QPen(QColor('#F8EBEF'), 2.0, Qt.SolidLine,
+                        Qt.RoundCap, Qt.RoundJoin))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawRoundedRect(11, 4, 6, 13, 3, 3)
+    painter.drawArc(7, 7, 14, 14, 180 * 16, 180 * 16)
+    painter.drawLine(14, 21, 14, 25)
+    painter.drawLine(10, 25, 18, 25)
+    painter.end()
+    return QIcon(pixmap)
+
+
 def subtle_glow(widget, color='#92303E', radius=23, opacity=135):
     """Create restrained red illumination, never a blocking animation."""
     effect = QGraphicsDropShadowEffect(widget)
@@ -912,7 +929,7 @@ class MainWindow(QMainWindow):
         title = QLabel('SYTOX')
         title.setObjectName('brandName')
         names.addWidget(title)
-        subtitle = QLabel('DESKTOP AI')
+        subtitle = QLabel('LOCAL WORKSPACE')
         subtitle.setObjectName('brandSubtitle')
         names.addWidget(subtitle)
         identity.addLayout(names)
@@ -1048,19 +1065,29 @@ class MainWindow(QMainWindow):
         self.input.setFixedHeight(76)
         self.input.send.connect(self.send)
         card_row.addWidget(self.input, 1)
-        right_buttons = QVBoxLayout()
-        right_buttons.setSpacing(7)
+        # One horizontal composer toolbar: microphone directly beside Send.
+        right_buttons = QHBoxLayout()
+        right_buttons.setSpacing(8)
+        self.mic_btn = QPushButton()
+        self.mic_btn.setObjectName('micButton')
+        self.mic_btn.setIcon(microphone_icon())
+        self.mic_btn.setIconSize(QSize(26, 26))
+        self.mic_btn.setFixedSize(46, 46)
+        self.mic_btn.setCheckable(True)
+        self.mic_btn.setAccessibleName('Sprachaufnahme starten oder stoppen')
+        self.mic_btn.setToolTip('Sprachaufnahme starten')
+        self.mic_btn.clicked.connect(self.toggle_memo)
+        right_buttons.addWidget(self.mic_btn)
         self.send_btn = QPushButton('Senden')
         self.send_btn.setObjectName('primary')
         self.send_btn.clicked.connect(self.send)
         self.send_btn.setMinimumWidth(106)
+        self.send_btn.setMinimumHeight(46)
         right_buttons.addWidget(self.send_btn)
-        self.mic_btn = QPushButton('Memo')
-        self.mic_btn.setObjectName('subtle')
-        self.mic_btn.clicked.connect(self.toggle_memo)
-        right_buttons.addWidget(self.mic_btn)
         card_row.addLayout(right_buttons)
         cbox.addWidget(input_card)
+        # Animate only the initial appearance, not the typing experience.
+        QTimer.singleShot(70, lambda: self._animate_appearance(input_card, 220))
         hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   KI LÄUFT LOKAL')
         hint.setObjectName('version')
         hint.setWordWrap(True)
@@ -2101,16 +2128,20 @@ class MainWindow(QMainWindow):
             return
         if self.recorder and self.recorder.isRunning():
             self.recorder.stop_event.set();self.mic_btn.setEnabled(False)
+            self.mic_btn.setToolTip('Aufnahme wird verarbeitet …')
             self.log('Sprache','Aufnahme wird gespeichert/transkribiert …')
             return
         self.recorder=VoiceRecorder(self.config.get('vosk_model',''))
         self.recorder.finished_note.connect(self.memo_ready)
         self.recorder.start()
-        self.mic_btn.setText('■ Aufnahme stoppen')
+        self.mic_btn.setChecked(True)
+        self.mic_btn.setToolTip('Aufnahme stoppen')
         self.log('Sprache','Aufnahme gestartet (Mikrofon).')
 
     def memo_ready(self,path,text):
-        self.mic_btn.setText('🎙 Memo');self.mic_btn.setEnabled(True)
+        self.mic_btn.setChecked(False)
+        self.mic_btn.setToolTip('Sprachaufnahme starten')
+        self.mic_btn.setEnabled(True)
         if not path:
             QMessageBox.warning(self,'Mikrofon',text);return
         if text.startswith('[Spracherkennung fehlgeschlagen'):
