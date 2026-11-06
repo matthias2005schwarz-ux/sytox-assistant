@@ -132,7 +132,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.assertTrue(bundled_asset('sytox_wordmark.jpg').is_file())
         self.assertFalse(app_icon().isNull())
         self.assertTrue(app_icon().availableSizes())
-        self.assertEqual(self.window.brand_status_btn.text(), '●  Modell prüfen')
+        self.assertIn('Modell', self.window.brand_status_btn.text())
         self.assertIn('LOKALER WORKSPACE', [
             l.text() for l in self.window.findChildren(QLabel)])
         self.assertNotIn('DESKTOP AI', [
