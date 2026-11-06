@@ -37,6 +37,15 @@ from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
 
+
+def task_status_text(status):
+    return {
+        'running': 'Aufgabe läuft', 'done': 'Aufgabe abgeschlossen',
+        'paused': 'Aufgabe pausiert', 'failed': 'Aufgabe fehlgeschlagen',
+        'time_elapsed': 'Arbeitszeit beendet', 'cancelled': 'Aufgabe abgebrochen',
+    }.get(status, 'Aufgabe beendet')
+
+
 def brand_asset(filename):
     """Resolve bundled artwork both in development and in the frozen Windows app."""
     return Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1])) / 'assets' / filename
@@ -1207,7 +1216,7 @@ class MainWindow(QMainWindow):
         cbox.addWidget(input_card)
         # Animate only the initial appearance, not the typing experience.
         QTimer.singleShot(70, self, lambda: self._animate_appearance(input_card, 220))
-        hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   KI LÄUFT LOKAL')
+        hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   STRG + L EINGABE')
         hint.setObjectName('version')
         hint.setWordWrap(True)
         cbox.addWidget(hint)
@@ -1377,6 +1386,8 @@ class MainWindow(QMainWindow):
         self._search_shortcut.activated.connect(self.search.setFocus)
         self._new_chat_shortcut = QShortcut(QKeySequence('Ctrl+N'), self)
         self._new_chat_shortcut.activated.connect(self.create_chat)
+        self._input_shortcut = QShortcut(QKeySequence('Ctrl+L'), self)
+        self._input_shortcut.activated.connect(self.input.setFocus)
         self.input.setFocus()
 
     def _chat_runtime_config(self):
@@ -1638,7 +1649,7 @@ class MainWindow(QMainWindow):
             finally:
                 self._rendering_history = False
         tasks=self.store.tasks(cid)
-        self.task_state.setText((tasks[0]['status']+': '+tasks[0]['goal'][:85]) if tasks else 'Keine aktive Aufgabe')
+        self.task_state.setText((task_status_text(tasks[0]['status'])+': '+tasks[0]['goal'][:85]) if tasks else 'Keine aktive Aufgabe')
 
     def rename_chat(self):
         if not self.chat_id:return
@@ -1678,7 +1689,17 @@ class MainWindow(QMainWindow):
         b.setSpacing(10)
         header = QLabel('DU' if mine else 'SYTOX AI')
         header.setObjectName('bubbleHeadingUser' if mine else 'bubbleHeadingAssistant')
-        b.addWidget(header)
+        heading = QHBoxLayout()
+        heading.addWidget(header)
+        heading.addStretch(1)
+        if not mine:
+            copy_button = QPushButton('Kopieren')
+            copy_button.setObjectName('copyReplyButton')
+            copy_button.setAccessibleName('Antwort kopieren')
+            copy_button.setToolTip('Sichtbaren Antworttext unverändert kopieren')
+            copy_button.clicked.connect(lambda _checked=False: QApplication.clipboard().setText(label.text()))
+            heading.addWidget(copy_button)
+        b.addLayout(heading)
         label = QLabel(message)
         label.setObjectName('bubbleContent')
         label.setTextFormat(Qt.PlainText)
@@ -2043,10 +2064,7 @@ class MainWindow(QMainWindow):
 
     def worker_done(self,result):
         self.stopbtn.setEnabled(False);self.send_btn.setEnabled(True)
-        self.task_state.setText({
-            'done': 'Aufgabe abgeschlossen', 'paused': 'Aufgabe pausiert',
-            'failed': 'Aufgabe fehlgeschlagen', 'time_elapsed': 'Arbeitszeit beendet',
-        }.get(result.get('status'), 'Aufgabe beendet'))
+        self.task_state.setText(task_status_text(result.get('status')))
         for widget in (self.task_meter, self.task_details, self.task_next):
             widget.hide()
         answer = result.get('content','')

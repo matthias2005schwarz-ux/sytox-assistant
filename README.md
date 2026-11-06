@@ -9,6 +9,8 @@ Noch kein neuer Installer oder Release; echte Ollama-/Windows-Praxistests bleibe
 Die Steuerzentrale zeigt Sprachoptionen und technische Aktivitäten zunächst
 eingeklappt. Mikrofonstatus und gespeicherte Erinnerungen bleiben direkt erreichbar;
 Fortschrittsdetails erscheinen nur bei einem laufenden Agentenauftrag.
+Antworten lassen sich über „Kopieren“ unverändert in die Zwischenablage übernehmen.
+Mit `Strg+L` gelangt der Tastaturfokus direkt ins Nachrichtenfeld.
 
 ## Direkt-Updates innerhalb von SYTOX (ab Version 0.3.9)
 

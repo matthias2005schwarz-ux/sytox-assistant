@@ -94,6 +94,31 @@ class ControlPanelTests(unittest.TestCase):
             self.assertTrue(control.isHidden())
         self.assertFalse(self.window.stopbtn.isEnabled())
 
+    def test_copy_reply_preserves_code_unicode_and_current_streamed_text(self):
+        text = '```python\nprint("Grüße 👋")\n```\n<script>Nur Text</script>'
+        label = self.window.add_bubble('assistant', text)
+        button = self.window.findChild(QPushButton, 'copyReplyButton')
+        self.assertIsNotNone(button)
+        self.assertEqual(button.accessibleName(), 'Antwort kopieren')
+        button.click()
+        self.assertEqual(self.app.clipboard().text(), text)
+        updated = text + '\nNoch ein gestreamter Satz.'
+        label.setText(updated)
+        button.click()
+        self.assertEqual(self.app.clipboard().text(), updated)
+
+    def test_user_bubble_has_no_reply_copy_button(self):
+        self.window.add_bubble('user', 'Meine Nachricht')
+        self.assertEqual(self.window.findChildren(QPushButton, 'copyReplyButton'), [])
+
+    def test_opening_chat_translates_stored_task_status(self):
+        task = self.window.store.create_task(self.window.chat_id, 'Code prüfen')
+        self.window.store.update_task(task, 'paused')
+        self.window.select_chat(self.window.chat_id)
+        self.assertIn('Aufgabe pausiert', self.window.task_state.text())
+        self.assertNotIn('paused', self.window.task_state.text())
+        self.assertEqual(self.window.store.tasks(self.window.chat_id)[0]['status'], 'paused')
+
 
 if __name__ == '__main__':
     unittest.main()
