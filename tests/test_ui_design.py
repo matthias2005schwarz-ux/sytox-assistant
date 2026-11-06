@@ -70,8 +70,9 @@ class BlackCrimsonDesignTests(unittest.TestCase):
     def test_ui_version_label_matches_package(self):
         ui = (ROOT / 'sytox/ui.py').read_text(encoding='utf-8')
         version = (ROOT / 'sytox/__init__.py').read_text(encoding='utf-8')
-        self.assertIn("__version__='0.3.8'", version)
-        self.assertIn('VERSION 0.3.8', ui)
+        from sytox import __version__
+        self.assertIn(f"__version__='{__version__}'", version)
+        self.assertIn(f'VERSION {__version__}', ui)
 
 
 if __name__ == '__main__':
