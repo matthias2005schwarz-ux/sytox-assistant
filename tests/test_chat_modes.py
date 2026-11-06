@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 import tempfile
 import threading
 import unittest
@@ -21,11 +22,12 @@ class ChatModeStorageTests(unittest.TestCase):
     def test_additive_migration_of_preexisting_sqlite_chats(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'assistant.db'
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db:
                 db.execute("""CREATE TABLE chats(
                     id TEXT PRIMARY KEY, title TEXT NOT NULL,
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
                 db.execute("INSERT INTO chats VALUES('old','Alter Qwen-Chat','a','b')")
+                db.commit()
             store = Store(path)
             self.assertEqual(store.chat_mode('old'), PROJECT)
             self.assertEqual(store.chats()[0]['title'], 'Alter Qwen-Chat')
