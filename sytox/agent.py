@@ -14,6 +14,7 @@ from .actions import Toolkit, tool_schema, Cancelled
 from .web_search import should_search, search_web, format_results
 from .coding_research import (coding_research_allowed, coding_uncertain,
                               failed_coding_tool, public_coding_query)
+from .coding_repair import update_failure_state, repair_instruction
 from .program_build import needs_compiled_artifact
 from .project_memory import lookup_project_memory, update_project_memory
 from .context_planner import project_focus_map
@@ -244,6 +245,9 @@ class Agent:
         if not isinstance(coding_plan, dict) or not isinstance(coding_plan.get('steps'), list):
             coding_plan = {}
         validated_writes = int(checkpoint.get('validated_writes', 0))
+        repair_state = checkpoint.get('repair_state', {})
+        if not isinstance(repair_state, dict):
+            repair_state = {}
         research_queries = checkpoint.get('coding_research_queries', [])
         if not isinstance(research_queries, list):
             research_queries = []
@@ -374,7 +378,8 @@ class Agent:
                         'progress_notes': progress_notes[-8:],
                         'coding_plan': coding_plan,
                         'modified_paths': sorted(toolkit.modified_paths),
-                        'coding_research_queries': research_queries[-2:]}
+                        'coding_research_queries': research_queries[-2:],
+                        'repair_state': repair_state}
                     self.store.update_task(task_id, 'running', checkpoint)
                     if model_failures >= len(self.RETRY_DELAYS):
                         status, result = ('paused', 'Lokales Modell nach mehreren Versuchen nicht erreichbar: '
@@ -551,9 +556,24 @@ class Agent:
                         self.logger('Aktion', f'{name}: {safe_res[:180]}')
                         messages.append({'role': 'tool', 'tool_name': name, 'content': res})
                         if failed_coding_tool(name, res):
-                            research = research_when_stuck(res)
-                            if research is not None:
-                                messages.append({'role': 'user', 'content': research})
+                            repair_state, repeated = update_failure_state(
+                                repair_state, name, res)
+                            if repeated:
+                                status, result = ('paused',
+                                    'Derselbe lokale Test-/Buildfehler ist wiederholt '
+                                    'aufgetreten. Keine weitere automatische Änderung '
+                                    'ohne erneute Fehleranalyse. Checkpoint gespeichert; '
+                                    'bitte Testprotokoll und betroffene Dateien prüfen.')
+                                finished = True
+                            else:
+                                messages.append({'role': 'user', 'content':
+                                    repair_instruction(name, res, repair_state)})
+                                research = research_when_stuck(res)
+                                if research is not None:
+                                    messages.append({'role': 'user', 'content': research})
+                        elif (name in ('run_command', 'selfdev_validate', 'project_build')
+                              and toolkit.passed_checks > before_checks):
+                            repair_state = {}
                         checkpoint = {'steps': steps, 'last_result': f'{name}: {safe_res}',
                                       'tool_actions': toolkit.action_count + previous_actions,
                                       'writes': toolkit.writes + previous_writes,
@@ -563,7 +583,8 @@ class Agent:
                         'progress_notes': progress_notes[-8:],
                         'coding_plan': coding_plan,
                         'modified_paths': sorted(toolkit.modified_paths),
-                        'coding_research_queries': research_queries[-2:]}
+                        'coding_research_queries': research_queries[-2:],
+                        'repair_state': repair_state}
                         self.store.update_task(task_id, 'running', checkpoint)
                         if res.startswith('FEHLER Denied:'):
                             status, result = ('paused', 'Erforderliche Freigabe wurde nicht erteilt. '
@@ -594,7 +615,8 @@ class Agent:
                         'progress_notes': progress_notes[-8:],
                         'coding_plan': coding_plan,
                         'modified_paths': sorted(toolkit.modified_paths),
-                        'coding_research_queries': research_queries[-2:]}
+                        'coding_research_queries': research_queries[-2:],
+                        'repair_state': repair_state}
                 self.store.update_task(task_id, 'running', checkpoint)
                 if mode == 'once':
                     if auto_search and sourced_results and not any(
@@ -607,6 +629,13 @@ class Agent:
                         status, result = ('paused', (text or 'Unvollständige Programmierantwort.')
                              + '\nDer letzte Werkzeugaufruf war fehlerhaft und wurde nicht '
                                'ausgeführt. Keine erfolgreiche Programmierung nachgewiesen.')
+                    elif coding_task and toolkit.unvalidated_paths:
+                        status, result = ('paused', (text or 'Dateien wurden geändert.')
+                            + '\nProgrammierauftrag noch nicht abgeschlossen: '
+                              'Folgende Dateien wurden seit der letzten Änderung '
+                              'nicht erfolgreich getestet: '
+                            + ', '.join(sorted(toolkit.unvalidated_paths)[:12])
+                            + '. Tests ausführen und danach fortsetzen.')
                     elif artifact_need and not (artifact_need == 'exe' and toolkit.verified_exe_builds()):
                         status, result = ('paused', (text or 'Kein Build-Ergebnis.')
                              + '\nAbschluss nicht bestätigt: Die angeforderte EXE bzw. '
@@ -647,7 +676,8 @@ class Agent:
                         'progress_notes': progress_notes[-8:],
                         'coding_plan': coding_plan,
                         'modified_paths': sorted(toolkit.modified_paths),
-                        'coding_research_queries': research_queries[-2:]}
+                        'coding_research_queries': research_queries[-2:],
+                        'repair_state': repair_state}
         self.store.update_task(task_id, status, checkpoint)
         self.store.add_message(chat_id, 'assistant', result)
         self.logger('Status', f'Auftrag: {status} – {steps} Schritte')
