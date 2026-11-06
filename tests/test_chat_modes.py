@@ -113,14 +113,14 @@ class QuickCodingAgentTests(unittest.TestCase):
                 return {'role': 'assistant', 'content': '', 'tool_calls': [
                     {'function': {'name': name, 'arguments': kwargs}}]}
             agent.client.chat = MagicMock(side_effect=[
-                tool('write_file', path='hello.py', content='print(42)\\n'),
+                tool('write_file', path='hello.py', content='print(42)\n'),
                 tool('run_command', command='python -m compileall hello.py'),
                 {'role': 'assistant', 'content': 'Kleines Skript geschrieben und getestet.'},
             ])
             result = agent.run(chat, 'once')
             self.assertEqual(result['status'], 'done', result['content'])
             self.assertEqual((root / 'project' / 'hello.py').read_text(encoding='utf-8'),
-                             'print(42)\\n')
+                             'print(42)\n')
             self.assertEqual(agent.client.chat.call_count, 3)
             for call in agent.client.chat.call_args_list:
                 self.assertIs(call.kwargs.get('think'), False)
