@@ -584,13 +584,14 @@ class Agent:
                                                    + '\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
                                     finished = True
                                     break
-                            res = ('Abschluss abgelehnt: kein ausreichender Nachweis. '
-                                   'Für Programmieraufgaben ist mindestens eine gespeicherte Datei und '
-                                   'eine erfolgreiche Test-/Syntaxprüfung NACH der letzten Änderung nötig. '
-                                   'Bei gewünschter EXE ist zusätzlich eine tatsächlich gebaute und '
-                                   'per project_build verifizierte Windows-Datei erforderlich. '
-                                   'Ein Installer ist damit noch NICHT abgedeckt. '
-                                   'Andernfalls Blockade melden oder weitermachen.')
+                            else:
+                                res = ('Abschluss abgelehnt: kein ausreichender Nachweis. '
+                                       'Für Programmieraufgaben ist mindestens eine gespeicherte Datei und '
+                                       'eine erfolgreiche Test-/Syntaxprüfung NACH der letzten Änderung nötig. '
+                                       'Bei gewünschter EXE ist zusätzlich eine tatsächlich gebaute und '
+                                       'per project_build verifizierte Windows-Datei erforderlich. '
+                                       'Ein Installer ist damit noch NICHT abgedeckt. '
+                                       'Andernfalls Blockade melden oder weitermachen.')
                         elif name not in ('record_progress', 'report_blocker', 'set_coding_plan', 'review_coding_changes', 'consult_specialist', 'start_coding_team'):
                             before_checks = toolkit.passed_checks
                             before_writes = toolkit.writes
