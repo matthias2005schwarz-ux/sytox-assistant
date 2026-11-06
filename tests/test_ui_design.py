@@ -50,11 +50,29 @@ class BlackCrimsonDesignTests(unittest.TestCase):
         self.assertIn('QPushButton#panelToggle:checked', theme)
         self.assertIn('QLineEdit#chatSearch:focus', theme)
 
+    def test_compact_microphone_is_beside_send_without_memo_text(self):
+        ui = (ROOT / 'sytox/ui.py').read_text(encoding='utf-8')
+        theme = (ROOT / 'sytox/theme.py').read_text(encoding='utf-8')
+        composer = ui[ui.index('        # One horizontal composer toolbar:'):
+                      ui.index('        card_row.addLayout(right_buttons)', ui.index('        # One horizontal composer toolbar:'))]
+        self.assertIn('right_buttons = QHBoxLayout()', composer)
+        self.assertLess(composer.index('right_buttons.addWidget(self.mic_btn)'),
+                        composer.index('right_buttons.addWidget(self.send_btn)'))
+        self.assertIn("self.mic_btn.setIcon(microphone_icon())", composer)
+        self.assertIn("setAccessibleName('Sprachaufnahme starten oder stoppen')", composer)
+        self.assertNotIn("QPushButton('Memo')", ui)
+        self.assertIn("self.mic_btn.setChecked(True)", ui)
+        self.assertIn("self.mic_btn.setChecked(False)", ui)
+        self.assertIn("QPushButton#micButton:checked", theme)
+        self.assertIn("LOCAL WORKSPACE", ui)
+        self.assertNotIn("DESKTOP AI", ui)
+
     def test_ui_version_label_matches_package(self):
         ui = (ROOT / 'sytox/ui.py').read_text(encoding='utf-8')
         version = (ROOT / 'sytox/__init__.py').read_text(encoding='utf-8')
-        self.assertIn("__version__='0.3.8'", version)
-        self.assertIn('VERSION 0.3.8', ui)
+        from sytox import __version__
+        self.assertIn(f"__version__='{__version__}'", version)
+        self.assertIn(f'VERSION {__version__}', ui)
 
 
 if __name__ == '__main__':

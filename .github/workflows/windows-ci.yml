@@ -37,12 +37,32 @@ jobs:
       - name: Upload visual workspace preview
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-ui-preview-0.3.8
+          name: sytox-ui-preview-0.3.9
           path: preview/sytox-black-crimson.png
           if-no-files-found: error
       - name: Build EXE and smoke-test startup
         shell: powershell
         run: .\Windows_Smoke_Test.ps1 -BuildExe
+      - name: Verify direct-update Windows archive from tested EXE
+        shell: pwsh
+        run: |
+          $zip = "dist/SYTOX_Assistant_Portable_CI.zip"
+          Compress-Archive -Path "dist/SYTOX_Assistant/*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          if (!(Test-Path $zip)) { throw "Portable archive not created" }
+          & .\.venv\Scripts\python.exe -c "from pathlib import Path; import zipfile; from sytox.updater import _valid_archive_entry; p=Path('dist/SYTOX_Assistant_Portable_CI.zip'); z=zipfile.ZipFile(p); files=[i.filename for i in z.infolist()]; [_valid_archive_entry(i) for i in z.infolist()]; assert 'SYTOX_Assistant.exe' in files and any(f.startswith('_internal/') for f in files); print('Verified direct-update archive:',p.stat().st_size,'bytes')"
+          if ($LASTEXITCODE -ne 0) { throw "Portable archive validation failed" }
+      - name: Verify actual direct update, launch and rollback on Windows
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          & .\.venv\Scripts\python.exe -m tools.windows_portable_update_integration
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows direct-update + rollback test failed.' }
+      - name: Archive portable update package (CI artifact only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sytox-windows-portable-0.3.9
+          path: dist/SYTOX_Assistant_Portable_CI.zip
+          if-no-files-found: error
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -90,7 +110,7 @@ jobs:
         shell: powershell
         run: |
           .\Build_Installer.ps1 -SkipExeBuild
-          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.8.exe')) { throw 'Installer was not built' }
+          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.9.exe')) { throw 'Installer was not built' }
       - name: Install, launch, uninstall and verify user data on Windows runner
         shell: powershell
         run: .\Installer_Install_Smoke_Test.ps1
@@ -98,39 +118,44 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            'installer/SYTOX_Assistant_Setup_0.3.8.exe',
+            'installer/SYTOX_Assistant_Setup_0.3.9.exe',
             'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
           )
           foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
       - name: Archive Windows standalone app (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-app-0.3.8
+          name: sytox-windows-app-0.3.9
           path: dist/SYTOX_Assistant/
           if-no-files-found: error
       - name: Archive Windows installer (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.8
-          path: installer/SYTOX_Assistant_Setup_0.3.8.exe
+          name: sytox-windows-setup-0.3.9
+          path: installer/SYTOX_Assistant_Setup_0.3.9.exe
           if-no-files-found: error
 
-  publish-verified-038:
-    name: Publish SYTOX 0.3.8 after verified Windows install
+  publish-verified-039:
+    name: Publish SYTOX 0.3.9 after verified Windows upgrade and rollback
     needs: windows-smoke
-    # Only the tested default-branch commit can publish an official release.
+    # Never publish a development-branch build or a failed Windows test.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Download the tested installer artifact
+      - name: Download verified Windows setup
         uses: actions/download-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.8
+          name: sytox-windows-setup-0.3.9
           path: release
-      - name: Check exact release version and existing official release
+      - name: Download verified portable Windows package
+        uses: actions/download-artifact@v4
+        with:
+          name: sytox-windows-portable-0.3.9
+          path: release
+      - name: Verify release version and no existing publication
         id: gate
         shell: bash
         env:
@@ -138,17 +163,18 @@ jobs:
         run: |
           set -euo pipefail
           version=$(python -c 'from sytox import __version__; print(__version__)')
-          if [ "$version" != "0.3.8" ]; then
+          if [ "$version" != "0.3.9" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if gh release view v0.3.8 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view v0.3.9 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          test -f release/SYTOX_Assistant_Setup_0.3.8.exe
+          test -f release/SYTOX_Assistant_Setup_0.3.9.exe
+          test -f release/SYTOX_Assistant_Portable_CI.zip
           echo "publish=true" >> "$GITHUB_OUTPUT"
-      - name: Checksum and publish tested installer with verified tag
+      - name: Publish installer and direct update with SHA-256 sidecars
         if: steps.gate.outputs.publish == 'true'
         shell: bash
         env:
@@ -156,10 +182,14 @@ jobs:
         run: |
           set -euo pipefail
           cd release
-          sha256sum SYTOX_Assistant_Setup_0.3.8.exe > SYTOX_Assistant_Setup_0.3.8.exe.sha256
-          gh release create v0.3.8 \
-            SYTOX_Assistant_Setup_0.3.8.exe \
-            SYTOX_Assistant_Setup_0.3.8.exe.sha256 \
+          mv SYTOX_Assistant_Portable_CI.zip SYTOX_Assistant_Portable_0.3.9.zip
+          sha256sum SYTOX_Assistant_Setup_0.3.9.exe > SYTOX_Assistant_Setup_0.3.9.exe.sha256
+          sha256sum SYTOX_Assistant_Portable_0.3.9.zip > SYTOX_Assistant_Portable_0.3.9.zip.sha256
+          gh release create v0.3.9 \
+            SYTOX_Assistant_Setup_0.3.9.exe \
+            SYTOX_Assistant_Setup_0.3.9.exe.sha256 \
+            SYTOX_Assistant_Portable_0.3.9.zip \
+            SYTOX_Assistant_Portable_0.3.9.zip.sha256 \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "SYTOX Assistant 0.3.8" \
-            --notes "Version 0.3.8: lokales Langzeitgedaechtnis mit Auto-Erinnerungen, Aktualisierung, Loeschen, Opt-out und Projektverlauf. Bestehende Windows-Komponenten-, Build-, Installer- und 12-Sprachen-Tests erfolgreich. Windows-Tests, EXE-Start, Installation und Deinstallation wurden im CI-Lauf vor Veröffentlichung bestanden. Installer mit SHA-256-Datei."
+            --title "SYTOX Assistant 0.3.9" \
+            --notes "Erstes SYTOX Release mit direktem In-App-Update und automatischer Wiederherstellung bei Startfehlern. Alte 0.3.8 Installationen nutzen einmalig den eingebauten Installer-Updatepfad. Ab 0.3.9 werden vollständige, SHA-256-geprüfte App-Pakete automatisch innerhalb der App installiert und neu gestartet. Enthält Qwen-Projekte, Schnellchat, Bildschirmsehen, RAM-Sparmodus und UI-Verbesserungen. Automatisierte Windows-Tests, echte EXE- und Rollback-Integrationstests wurden vor Veröffentlichung bestanden."

@@ -36,6 +36,50 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.environ.stop()
         self.home.cleanup()
 
+    def test_model_picker_does_not_create_a_separate_vision_chat(self):
+        from sytox.ui import SettingsDialog
+        self.assertEqual([self.window.model_mode.itemData(i) for i in range(3)],
+                         ['auto', 'fast', 'project'])
+        self.assertEqual(self.window.config['fast_model'], 'qwen3:4b')
+        self.assertEqual(self.window.config['project_model'], 'qwen3-coder:30b')
+        settings = SettingsDialog(self.window.config, self.window)
+        self.assertEqual(settings.vision_model.text(), 'qwen3-vl:4b')
+        settings.close()
+        self.window.model_mode.setCurrentIndex(2)
+        self.assertEqual(self.window.config['model_mode'], 'project')
+
+    def test_screen_request_reaches_agent_without_a_visible_vision_tab(self):
+        from sytox.ui import Worker
+        self.window.store.add_message(
+            self.window.chat_id, 'user', 'Schau auf meinen Bildschirm')
+        settings = self.window.config.copy()
+        settings['model_mode'] = 'fast'
+        worker = Worker(self.window.store, self.window.chat_id, settings)
+        received = []
+        worker.completed.connect(received.append)
+        with patch('sytox.ui.describe_screen', return_value='Datei-Explorer geöffnet') as vision, \
+             patch('sytox.ui.Agent') as agent:
+            agent.return_value.run.return_value = {'status': 'done', 'content': 'Explorer'}
+            worker.run()
+            self.assertEqual(agent.call_args.kwargs['screen_context'], 'Datei-Explorer geöffnet')
+            self.assertEqual(agent.call_args.args[1], 'qwen3:4b')
+            vision.assert_called_once()
+        self.assertEqual(received[0]['status'], 'done')
+
+    def test_ram_saver_defaults_and_settings_are_persistable(self):
+        from sytox.ui import SettingsDialog
+        self.assertTrue(self.window.config['ram_saver_enabled'])
+        self.assertEqual(self.window.config['ram_keep_alive_seconds'], 60)
+        dialog = SettingsDialog(self.window.config, self.window)
+        self.assertTrue(dialog.ram_saver.isChecked())
+        self.assertEqual(dialog.ram_delay.value(), 60)
+        dialog.ram_delay.setValue(300)
+        self.assertEqual(dialog.values()['ram_keep_alive_seconds'], 300)
+        dialog.ram_saver.setChecked(False)
+        self.assertFalse(dialog.ram_delay.isEnabled())
+        self.assertFalse(dialog.values()['ram_saver_enabled'])
+        dialog.close()
+
     def test_offline_does_not_claim_ki_ready(self):
         self.window._model_status_checked(OllamaStatus('offline', 'Ollama nicht erreichbar',
                                                       'Bitte Ollama starten'))
@@ -116,6 +160,55 @@ class OllamaQtOnboardingTests(unittest.TestCase):
             with patch.object(self.window, 'ask_parallel') as side:
                 self.window.received_voice_command('Erzähl mir etwas über Python')
             side.assert_called_once_with('Erzähl mir etwas über Python', spoken=True)
+            self.assertFalse(running.stop_event.is_set())
+        finally:
+            self.window.worker = None
+
+    def test_eta_question_uses_checkpoint_without_stopping_coding(self):
+        import threading
+        import json
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        task_id = self.window.store.create_task(
+            self.window.chat_id, 'Programmiere ein Spiel', 'until_done')
+        self.window.store.update_task(task_id, 'running', {
+            'steps': 5, 'remaining_steps': 4, 'remaining_steps_at': 5,
+            'step_durations': [
+                {'step': 1, 'seconds': 45}, {'step': 2, 'seconds': 55},
+                {'step': 3, 'seconds': 65}],
+            'progress_notes': [{'next_step': 'Projekt testen',
+                                'completed': 'Quellcode erstellt',
+                                'evidence': 'Test grün'}],
+        })
+        try:
+            with patch.object(self.window, 'show_parallel_chat') as dialog, \
+                 patch.object(self.window, '_conversation_ready'):
+                reply = self.window.report_agent_status(
+                    'Wie lange brauchst du noch?', spoken=False)
+            self.assertIn('Grob geschätzt', reply)
+            self.assertIn('Projekt testen', reply)
+            self.assertFalse(running.stop_event.is_set())
+            self.assertTrue(dialog.called)
+            self.assertIn('SYTOX', dialog.return_value.transcript.appendPlainText.call_args.args[0])
+        finally:
+            self.window.worker = None
+
+    def test_eta_spoken_question_is_not_sent_to_coding_agent(self):
+        import threading
+        from unittest.mock import MagicMock
+        running = MagicMock()
+        running.isRunning.return_value = True
+        running.stop_event = threading.Event()
+        self.window.worker = running
+        try:
+            with patch.object(self.window, 'report_agent_status') as status, \
+                 patch.object(self.window, 'ask_parallel') as side:
+                self.window.received_voice_command('Wie lange dauert das noch?')
+            status.assert_called_once_with('Wie lange dauert das noch?', spoken=True)
+            side.assert_not_called()
             self.assertFalse(running.stop_event.is_set())
         finally:
             self.window.worker = None

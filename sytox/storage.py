@@ -48,7 +48,8 @@ class Store:
         with self._connect() as db:
             db.executescript('''
             CREATE TABLE IF NOT EXISTS chats(
-              id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+              id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              kind TEXT NOT NULL DEFAULT 'chat', model_mode TEXT NOT NULL DEFAULT 'fast');
             CREATE TABLE IF NOT EXISTS messages(
               id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, role TEXT NOT NULL,
               content TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -60,6 +61,14 @@ class Store:
               id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, goal TEXT NOT NULL, mode TEXT NOT NULL,
               deadline TEXT, status TEXT NOT NULL, checkpoint TEXT NOT NULL DEFAULT '{}',
               created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS task_changes(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              chat_id TEXT NOT NULL, task_id TEXT,
+              instruction TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              FOREIGN KEY(chat_id) REFERENCES chats(id));
+            CREATE INDEX IF NOT EXISTS idx_task_changes_active
+              ON task_changes(chat_id,status,id);
             CREATE TABLE IF NOT EXISTS journal(
               id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT, event TEXT NOT NULL,
               details TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -75,17 +84,51 @@ class Store:
             CREATE TABLE IF NOT EXISTS preferences(
               key TEXT PRIMARY KEY, value TEXT NOT NULL);
             ''')
+            # Non-destructive migration: old user databases keep every chat/message.
+            fields = {row['name'] for row in db.execute('PRAGMA table_info(chats)')}
+            if 'kind' not in fields:
+                db.execute("ALTER TABLE chats ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'")
+            if 'model_mode' not in fields:
+                db.execute("ALTER TABLE chats ADD COLUMN model_mode TEXT NOT NULL DEFAULT 'fast'")
             try:
                 db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(content, chat_id UNINDEXED)')
                 db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5(content, memory_id UNINDEXED)')
             except sqlite3.OperationalError:
                 pass  # old Python builds may lack FTS5
 
-    def create_chat(self, title='Neuer Chat'):
+    def create_chat(self, title='Neuer Chat', kind='chat', model_mode=None):
+        if kind not in ('chat', 'project'):
+            raise ValueError('Unbekannter Chattyp')
+        if model_mode is None:
+            model_mode = 'project' if kind == 'project' else 'fast'
+        if model_mode not in ('auto', 'fast', 'project'):
+            raise ValueError('Unbekannter Modellmodus')
         cid = uuid.uuid4().hex
         with self._lock, self._connect() as db:
-            db.execute('INSERT INTO chats VALUES(?,?,?,?)', (cid,title,now(),now()))
+            db.execute('''INSERT INTO chats(id,title,created_at,updated_at,kind,model_mode)
+                          VALUES(?,?,?,?,?,?)''',
+                       (cid, title[:100], now(), now(), kind, model_mode))
         return cid
+
+    def chat_kind(self, cid):
+        with self._connect() as db:
+            row = db.execute('SELECT kind FROM chats WHERE id=?', (cid,)).fetchone()
+        return row['kind'] if row else None
+
+    def chat_model_mode(self, cid):
+        with self._connect() as db:
+            row = db.execute('SELECT kind,model_mode FROM chats WHERE id=?', (cid,)).fetchone()
+        if row is None:
+            return None
+        return 'project' if row['kind'] == 'project' else row['model_mode']
+
+    def set_chat_model_mode(self, cid, model_mode):
+        if model_mode not in ('auto', 'fast', 'project'):
+            raise ValueError('Unbekannter Modellmodus')
+        with self._lock, self._connect() as db:
+            db.execute('''UPDATE chats SET model_mode=?,updated_at=?
+                          WHERE id=? AND kind='chat' ''',
+                       (model_mode, now(), cid))
 
     def chats(self):
         with self._connect() as db:
@@ -100,6 +143,7 @@ class Store:
             db.execute('DELETE FROM message_search WHERE chat_id=?', (cid,)) if self._fts_available(db,'message_search') else None
             db.execute('DELETE FROM memory_facts WHERE source_chat_id=?',(cid,))
             db.execute('DELETE FROM messages WHERE chat_id=?',(cid,))
+            db.execute('DELETE FROM task_changes WHERE chat_id=?',(cid,))
             db.execute('DELETE FROM tasks WHERE chat_id=?',(cid,))
             db.execute('DELETE FROM chats WHERE id=?',(cid,))
 
@@ -275,7 +319,18 @@ class Store:
         with self._lock,self._connect() as db:
             db.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?)',
                        (tid,cid,goal,mode,deadline,'running','{}',now(),now()))
+            # Attach requests given between starting the worker and task creation.
+            db.execute('UPDATE task_changes SET task_id=?,updated_at=? '
+                       'WHERE chat_id=? AND task_id IS NULL AND status=\'queued\'',
+                       (tid, now(), cid))
         return tid
+
+    def set_task_mode(self, tid, mode):
+        if mode not in ('once', 'until_done', 'timed'):
+            raise ValueError('Unbekannter Arbeitsmodus.')
+        with self._lock, self._connect() as db:
+            db.execute('UPDATE tasks SET mode=?, updated_at=? WHERE id=?',
+                       (mode, now(), tid))
 
     def extend_task(self, tid, deadline):
         """Extend a timed task when resuming a session whose prior time expired."""
@@ -296,6 +351,79 @@ class Store:
             if cid: rows=db.execute('SELECT * FROM tasks WHERE chat_id=? ORDER BY created_at DESC',(cid,))
             else: rows=db.execute('SELECT * FROM tasks ORDER BY created_at DESC')
             return [dict(r) for r in rows]
+
+    def add_task_change(self, cid, instruction):
+        """Atomically enqueue work only while a coding task is active."""
+        instruction = str(instruction or '').strip()
+        if not instruction or len(instruction) > 2000:
+            raise ValueError('Änderungswunsch muss 1 bis 2000 Zeichen haben.')
+        with self._lock, self._connect() as db:
+            active = db.execute(
+                "SELECT id FROM tasks WHERE chat_id=? AND status='running' "
+                "ORDER BY created_at DESC LIMIT 1", (cid,)
+            ).fetchone()
+            if not active:
+                # The worker may have started but not yet inserted its task.
+                # Store temporarily unattached; create_task binds it atomically.
+                task_id = None
+            else:
+                task_id = active['id']
+            cursor = db.execute(
+                'INSERT INTO task_changes(chat_id,task_id,instruction,status,created_at,updated_at) '
+                "VALUES(?,?,?,'queued',?,?)",
+                (cid, task_id, instruction, now(), now()),
+            )
+            return cursor.lastrowid
+
+    def task_changes(self, tid, include_applied=False):
+        """Chronological, persistent amendments for exactly one task."""
+        with self._connect() as db:
+            query = ('SELECT id, chat_id, task_id, instruction, status '
+                     'FROM task_changes WHERE task_id=?')
+            if not include_applied:
+                query += " AND status IN ('queued','in_progress')"
+            query += ' ORDER BY id'
+            return [dict(r) for r in db.execute(query, (tid,))]
+
+    def claim_next_change(self, tid):
+        """Claim one queued amendment; resume an in-progress amendment first."""
+        with self._lock, self._connect() as db:
+            record = db.execute(
+                "SELECT * FROM task_changes WHERE task_id=? "
+                "AND status IN ('queued','in_progress') "
+                'ORDER BY id LIMIT 1', (tid,)
+            ).fetchone()
+            if not record:
+                return None
+            if record['status'] == 'queued':
+                db.execute(
+                    "UPDATE task_changes SET status='in_progress',updated_at=? WHERE id=?",
+                    (now(), record['id']),
+                )
+            return {**dict(record), 'status': 'in_progress'}
+
+    def finish_change(self, tid, change_id):
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE task_changes SET status='applied',updated_at=? "
+                "WHERE task_id=? AND id=? AND status='in_progress'",
+                (now(), tid, change_id),
+            )
+
+    def complete_task_if_queue_empty(self, tid, checkpoint):
+        """Prevents a new amendment racing with final user-facing completion."""
+        with self._lock, self._connect() as db:
+            if db.execute(
+                "SELECT id FROM task_changes WHERE task_id=? "
+                "AND status IN ('queued','in_progress') LIMIT 1", (tid,)
+            ).fetchone():
+                return False
+            db.execute(
+                "UPDATE tasks SET status='done',checkpoint=?,updated_at=? "
+                "WHERE id=? AND status='running'",
+                (json.dumps(checkpoint, ensure_ascii=False), now(), tid),
+            )
+            return True
 
     def interrupted_tasks(self):
         with self._lock,self._connect() as db:

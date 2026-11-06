@@ -9,6 +9,11 @@ def main():
         # Deliberately run without QApplication, agent, microphone or app mutex.
         from sytox.updater import run_update_helper
         return run_update_helper(args[1], args[2])
+    if len(args) == 4 and args[0] == '--apply-portable-update':
+        # New verified onedir EXE is launched from the staging directory.
+        # Never start Qt, the chat agent or a microphone in this helper.
+        from sytox.portable_update import run_portable_helper
+        return run_portable_helper(args[1], args[2], args[3])
     valid = ([], ['--background'], ['--smoke-test'], ['--smoke-test', '--background'])
     if args not in valid:
         raise SystemExit('Unbekanntes Argument. Erlaubt: --background, --smoke-test.')

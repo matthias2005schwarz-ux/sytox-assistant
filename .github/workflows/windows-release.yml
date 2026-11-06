@@ -60,6 +60,19 @@ jobs:
           if (-not (Test-Path $exe)) { throw "Installer missing: $exe" }
           $checksum = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
           "$checksum  $(Split-Path -Leaf $exe)" | Set-Content -Path "$exe.sha256" -Encoding ascii
+      - name: Package complete Windows app for direct in-app updates
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $app = "dist/SYTOX_Assistant"
+          if (-not (Test-Path "$app/SYTOX_Assistant.exe")) { throw 'Tested portable EXE not found' }
+          $zip = "installer/SYTOX_Assistant_Portable_$version.zip"
+          Compress-Archive -Path "$app/*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          if (-not (Test-Path $zip)) { throw 'Portable ZIP was not produced.' }
+          $checksum = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          "$checksum  $(Split-Path -Leaf $zip)" | Set-Content -Path "$zip.sha256" -Encoding ascii
+          & .\.venv\Scripts\python.exe -c "from pathlib import Path; from sytox.updater import _valid_archive_entry; import zipfile; p=Path('$zip'); z=zipfile.ZipFile(p); names=[i.filename for i in z.infolist()]; [_valid_archive_entry(i) for i in z.infolist()]; assert 'SYTOX_Assistant.exe' in names and any(n.startswith('_internal/') for n in names), 'Incomplete release ZIP'; print('Direct-update archive verified:',p)"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable package verification failed.' }
       - name: Publish verified release assets
         shell: pwsh
         env:
@@ -67,4 +80,6 @@ jobs:
         run: |
           $version = $env:GITHUB_REF_NAME.Substring(1)
           $exe = "installer/SYTOX_Assistant_Setup_$version.exe"
-          gh release create $env:GITHUB_REF_NAME $exe "$exe.sha256" --verify-tag --title "SYTOX Assistant $version" --notes "SYTOX Windows Installer mit SHA-256-Pruefdatei. Updates werden nur nach Bestätigung installiert."
+          $zip = "installer/SYTOX_Assistant_Portable_$version.zip"
+          gh release create $env:GITHUB_REF_NAME $exe "$exe.sha256" $zip "$zip.sha256" --verify-tag --title "SYTOX Assistant $version" --notes "Windows-App mit geprueftem Direkt-Update und automatischer Wiederherstellung der alten Version; Installer nur fuer Erstinstallation oder Legacy-Upgrade."
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publication failed.' }

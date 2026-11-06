@@ -22,6 +22,8 @@ from .extensions import Registry
 from .gmail import GmailClient
 from .pc_control import WindowsDesktop
 from .web_search import search_web, format_results
+from .windows_repair import diagnose_windows, repair_windows, KNOWN_FIX_IDS
+from .project_backup import create_snapshot, list_snapshots, restore_snapshot
 
 
 TOOLS = [
@@ -31,6 +33,9 @@ TOOLS = [
      {'path':('string','Relative file path'),'content':('string','Complete file contents')},['path','content']),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
+    ('project_backups', 'List verified local source snapshots for this project, newest first.', {}, []),
+    ('project_restore', 'Restore a chosen project snapshot after explicit user approval; a recovery snapshot is created first.',
+     {'name': ('string', 'Existing snapshot filename from project_backups')}, ['name']),
     ('project_build_plan','Read-only: show deterministic Windows project build command, expected artifact and runtime dependencies.',{},[]),
     ('project_build','Build a supported project with explicit approval; verify a native EXE, JVM artifact or checked script and SHA256, without launching it.',{},[]),
     ('toolchain_inspect','Read-only: recommend a language for a task, inspect project files and check installed developer tools. Never installs anything.',
@@ -48,6 +53,12 @@ TOOLS = [
      {'selector':('string','CSS selector')},['selector']),
     ('browser_type','Enter text into a page element via CSS selector. Does not submit forms.',
      {'selector':('string','CSS selector'),'text':('string','Text to type')},['selector','text']),
+    ('windows_error_diagnose',
+     'Read-only Windows diagnostic: interpret ANY Windows or app error text, list recent Windows Application failures. Never automatically installs or changes software.',
+     {'error_text':('string','Exact visible Windows error code, window text or message; may be empty')},[]),
+    ('windows_repair',
+     'Repair one identified Windows problem using an explicitly approved, reviewed fix ID. Supports known VC++/.NET runtimes and built-in SFC/DISM repairs; download and silent install through winget when appropriate. Never use without evidence, never assume successful repair without verification.',
+     {'fix_id':('string','One of: '+', '.join(KNOWN_FIX_IDS))},['fix_id']),
     ('pc_find_apps','Find installed Windows Start Menu/Desktop shortcuts by name; returns absolute paths.',
      {'query':('string','Part of application name, e.g. Notepad')},['query']),
     ('pc_list_windows','List visible Windows desktop windows with ID, title and bounds. Does not change anything.',{},[]),
@@ -121,6 +132,7 @@ class Toolkit:
         self.gmail=GmailClient(gmail_client_secrets)
         self.pc=WindowsDesktop()
         self.selfdev=SelfDevelopment(self.workspace, self._request, self.stop_event)
+        self.backup_root=self.store.path.parent/'project_backups'/str(self.chat_id or 'anonymous')
         self._pc_selected=None
         self._pc_controls={}
         self.writes=0
@@ -169,7 +181,7 @@ class Toolkit:
             return f'Unbekanntes Werkzeug {name}'
         # Never print Gmail bodies, OAuth data, typed passwords or full file contents
         # to the activity log; project file paths and lengths are enough for progress.
-        safe_args = {key: (f'<{len(str(value))} Zeichen>' if key in ('content','text','body')
+        safe_args = {key: (f'<{len(str(value))} Zeichen>' if key in ('content','text','body','error_text')
                             else str(value)[:120]) for key, value in args.items()}
         request_line = f'{name}: {safe_args}'
         self.logger('Werkzeug', request_line[:190])
@@ -190,7 +202,7 @@ class Toolkit:
                 'pc_inspect_window', 'pc_click_control',
                 'pc_type_text', 'pc_hotkey', 'pc_click', 'selfdev_prepare',
                 'selfdev_validate', 'selfdev_stage',
-                'extension_install', 'toolchain_install', 'project_build', 'gmail_search', 'gmail_read', 'gmail_draft',
+                'extension_install', 'toolchain_install', 'project_build', 'project_restore', 'windows_repair', 'gmail_search', 'gmail_read', 'gmail_draft',
                 'gmail_send',
             }
             ok_command = name == 'run_command' and outcome.startswith('Exit code: 0\n')
@@ -214,8 +226,9 @@ class Toolkit:
                 self.unvalidated_paths = {f for f in self.unvalidated_paths
                                           if not f.replace('\\', '/').startswith('assistant_source/')}
             # Desktop titles/accessibility content can contain private data. Do not save it in logs.
-            logged = (f'{len(outcome)} Zeichen (Inhalt nicht protokolliert)'
-                      if name in ('pc_find_apps', 'pc_list_windows', 'pc_select_window', 'pc_inspect_window') else outcome[:2000])
+            logged = (f'{len(outcome)} Zeichen (Privatinhalte nicht protokolliert)'
+                      if name in ('pc_find_apps', 'pc_list_windows', 'pc_select_window', 'pc_inspect_window',
+                                  'windows_error_diagnose') else outcome[:2000])
             self.store.log('tool_result', f'{name}: {logged}',self.chat_id)
             return outcome
         except Cancelled: raise
@@ -340,6 +353,20 @@ class Toolkit:
                 return False
         return False
 
+
+    def action_project_backups(self):
+        return json.dumps(list_snapshots(self.backup_root), ensure_ascii=False)
+
+    def action_project_restore(self, name):
+        def approved(label, description):
+            self._request(label, description)
+            return True
+        outcome = restore_snapshot(self.workspace, self.backup_root, name, approved)
+        if outcome['status'] == 'restored':
+            # A rollback invalidates all previous compilation receipts.
+            self.built_artifacts.clear()
+            self.unvalidated_paths.add('.')
+        return json.dumps(outcome, ensure_ascii=False)
 
     def action_project_build_plan(self):
         return json.dumps(build_plan(self.workspace), ensure_ascii=False)
@@ -565,6 +592,21 @@ class Toolkit:
         if len(text)>8000: raise ValueError('Text zu lang')
         page.locator(selector).first.fill(text,timeout=10000)
         return f'{len(text)} Zeichen in {selector} eingegeben (nicht abgesendet).'
+
+    def action_windows_error_diagnose(self, error_text=''):
+        """Local, read-only application event log and generic error-code analysis."""
+        result = diagnose_windows(error_text, recent_events=True, stop_event=self.stop_event)
+        return json.dumps(result, ensure_ascii=False)
+
+    def action_windows_repair(self, fix_id):
+        """Run approved, allowlisted Windows repairs; never a model-defined command."""
+        result = repair_windows(fix_id, approve=self._request_approval_for_repair,
+                                stop_event=self.stop_event)
+        return json.dumps(result, ensure_ascii=False)
+
+    def _request_approval_for_repair(self, label, description):
+        self._request(label, description)
+        return True
 
     def action_pc_find_apps(self,query):
         return json.dumps(self.pc.find_apps(query),ensure_ascii=False)

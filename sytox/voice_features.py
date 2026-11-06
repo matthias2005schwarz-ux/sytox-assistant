@@ -149,6 +149,22 @@ def desktop_voice_intent(phrase):
 def agent_status_intent(phrase):
     """Only informational requests; no project actions or cancellation."""
     text = ' '.join(str(phrase or '').lower().strip().split()).strip(' ,.!?')
+    text = re.sub(r'^(?:hey\s+|hallo\s+)?sytox[,\s]+', '', text).strip()
+    if re.fullmatch(
+        r'(?:wie lange (?:brauchst du|dauert (?:das|es|der auftrag|die programmierung))'
+        r'(?: noch)?(?: ungefähr| etwa)?|'
+        r'wie (?:viel|lange) zeit brauchst du noch(?: ungefähr)?|'
+        r'wie lange noch|wann bist du(?: ungefähr| etwa)? fertig|'
+        r'wann wird (?:das|es|der auftrag|die programmierung)(?: ungefähr)? fertig|'
+        r'wie viel (?:zeit|stunden|minuten) (?:dauert das|brauchst du)(?: noch)?|'
+        r'was ist die (?:restzeit|geschätzte restzeit|geschätzte dauer)|'
+        r'wie lange dauert die arbeit noch|'
+        r'wie lange brauchst du ungefähr noch|'
+        r'weißt du ungefähr wie lange du noch brauchst|'
+        r'kannst du ungefähr sagen wie lange du noch brauchst)',
+        text,
+    ):
+        return 'eta'
     if re.fullmatch(
         r'(?:wie weit bist du|was machst du(?: gerade)?|'
         r'arbeitest du noch|läuft (?:der |mein )?(?:auftrag|job|programmierung) noch|'

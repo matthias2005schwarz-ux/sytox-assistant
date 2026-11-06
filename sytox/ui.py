@@ -20,38 +20,75 @@ from PySide6.QtWidgets import (
 )
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
+from .ram_saver import keep_alive_for_config, normalized_keep_alive_seconds
+from .task_eta import task_eta
+from .task_queue import is_change_request
+from .model_router import select_chat_model, wants_screen
+from .screen_vision import describe_screen
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
 from .parallel_chat import ParallelChatDialog
-from .updater import (check_for_update, download_verified_installer, is_installed_app,
-                      schedule_installer, RELEASES_PAGE)
+from .updater import (check_for_update, download_verified_installer,
+                      download_verified_portable, is_installed_app,
+                      schedule_installer, schedule_portable_update, RELEASES_PAGE)
 from .work_intents import work_intent
 from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
 
+def brand_asset(filename):
+    """Resolve bundled artwork both in development and in the frozen Windows app."""
+    return Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1])) / 'assets' / filename
+
+
 class BrandMark(QWidget):
-    """Vector-drawn SYTOX monogram; no external image or web UI required."""
+    """Use the supplied metallic SYTOX application icon inside the sidebar."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(50, 50)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self._pixmap = QPixmap(str(brand_asset('sytox-app.png')))
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        gradient = QLinearGradient(2, 1, 48, 49)
-        gradient.setColorAt(0, QColor('#E44B56'))
-        gradient.setColorAt(.56, QColor('#A62535'))
-        gradient.setColorAt(1, QColor('#641E2B'))
-        p.setBrush(gradient)
-        p.setPen(QPen(QColor('#FF6D78'), 1))
-        p.drawRoundedRect(3, 3, 44, 44, 13, 13)
-        p.setPen(QColor('#FFFFFF'))
-        p.setFont(QFont('Segoe UI', 25, QFont.Black))
-        p.drawText(self.rect(), Qt.AlignCenter, 'S')
-        p.end()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        if not self._pixmap.isNull():
+            painter.drawPixmap(self.rect(), self._pixmap)
+        else:
+            painter.setPen(QColor('#E0525A'))
+            painter.drawText(self.rect(), Qt.AlignCenter, 'SYTOX')
+        painter.end()
+
+
+def brand_banner(width=220):
+    """Display the supplied SYTOX KI wordmark, retaining its original aspect ratio."""
+    banner = QPixmap(str(brand_asset('sytox-banner.png')))
+    if banner.isNull():
+        return None
+    label = QLabel()
+    label.setObjectName('brandBanner')
+    label.setPixmap(banner.scaledToWidth(width, Qt.SmoothTransformation))
+    label.setAlignment(Qt.AlignCenter)
+    label.setAccessibleName('SYTOX KI Logo')
+    return label
+
+
+def microphone_icon():
+    """Crisp native painted microphone; avoids platform-specific emoji rendering."""
+    pixmap = QPixmap(28, 28)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QPen(QColor('#F8EBEF'), 2.0, Qt.SolidLine,
+                        Qt.RoundCap, Qt.RoundJoin))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawRoundedRect(11, 4, 6, 13, 3, 3)
+    painter.drawArc(7, 7, 14, 14, 180 * 16, 180 * 16)
+    painter.drawLine(14, 21, 14, 25)
+    painter.drawLine(10, 25, 18, 25)
+    painter.end()
+    return QIcon(pixmap)
 
 
 def subtle_glow(widget, color='#92303E', radius=23, opacity=135):
@@ -65,10 +102,11 @@ def subtle_glow(widget, color='#92303E', radius=23, opacity=135):
 
 
 def app_icon():
-    resources = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
-    icon_file = resources / 'assets' / 'sytox.ico'
-    if icon_file.exists():
-        return QIcon(str(icon_file))
+    # The supplied icon is the first choice for window chrome and system tray.
+    for filename in ('sytox-app.png', 'sytox.ico'):
+        icon_file = brand_asset(filename)
+        if icon_file.exists():
+            return QIcon(str(icon_file))
     pix=QPixmap(64,64);pix.fill(Qt.transparent)
     p=QPainter(pix);p.setRenderHint(QPainter.Antialiasing)
     p.setBrush(QColor(178,37,52));p.setPen(Qt.NoPen);p.drawRoundedRect(3,3,58,58,15,15)
@@ -105,9 +143,21 @@ class Worker(QThread):
 
     def run(self):
         try:
-            a=Agent(self.store,self.settings['model'],self.settings['ollama_url'],
+            messages = self.store.messages(self.chat_id, limit=24)
+            question = next((item['content'] for item in reversed(messages)
+                             if item['role'] == 'user'), '')
+            model, route = select_chat_model(question, self.settings, self.mode)
+            self.log_line.emit('System', 'Verwendetes Modell: ' + model
+                               + (' (Projekt)' if route == 'project' else ' (Schnellchat)'))
+            screen_context = ''
+            if wants_screen(question):
+                self.log_line.emit('Status', 'Bildschirm wird auf Wunsch analysiert …')
+                screen_context = describe_screen(question, self.settings, self.stop_event)
+            a=Agent(self.store,model,self.settings['ollama_url'],
                     self.settings['workspace'],self.request_approval,self.log_line.emit,self.stop_event,
-                    self.settings.get('gmail_client_secrets',''))
+                    self.settings.get('gmail_client_secrets',''),
+                    ram_keep_alive=keep_alive_for_config(self.settings),
+                    screen_context=screen_context)
             result=a.run(self.chat_id,self.mode,self.hours,self.task_id)
             self.completed.emit(result)
         except Exception as e:
@@ -134,7 +184,10 @@ class UpdateDownloadWorker(QThread):
 
     def run(self):
         try:
-            path = download_verified_installer(self.update, self.progress.emit)
+            if self.update.has_portable:
+                path = download_verified_portable(self.update, self.progress.emit)
+            else:
+                path = download_verified_installer(self.update, self.progress.emit)
             self.result_ready.emit(str(path), '')
         except Exception as exc:
             self.result_ready.emit('', str(exc))
@@ -716,6 +769,10 @@ class SettingsDialog(QDialog):
         self.original=settings.copy()
         form=QFormLayout(self)
         self.model=QLineEdit(settings['model'])
+        self.fast_model=QLineEdit(settings.get('fast_model') or settings['model'])
+        self.project_model=QLineEdit(settings.get('project_model') or settings['model'])
+        self.vision_model=QLineEdit(settings.get('vision_model') or 'qwen3-vl:4b')
+        self.vision_model.setToolTip('Internes Bildmodell, verwendet in jedem Chat bei ausdrücklicher Bildschirm-Anfrage.')
         self.url=QLineEdit(settings['ollama_url'])
         self.folder=QLineEdit(settings['workspace'])
         choose=QPushButton('…');choose.setMaximumWidth(38)
@@ -743,6 +800,17 @@ class SettingsDialog(QDialog):
         self.edge_consent.setChecked(settings.get('edge_consent',False))
         self.auto_updates=QCheckBox('Automatisch nach neuen SYTOX-Versionen suchen (keine Installation ohne Zustimmung)')
         self.auto_updates.setChecked(settings.get('auto_check_updates', True))
+        self.ram_saver=QCheckBox('RAM-Sparmodus: ungenutzte Ollama-Modelle entladen')
+        self.ram_saver.setChecked(settings.get('ram_saver_enabled', True))
+        self.ram_delay=QSpinBox()
+        self.ram_delay.setRange(0, 3600)
+        self.ram_delay.setSuffix(' Sekunden')
+        self.ram_delay.setSpecialValueText('Sofort nach Antwort')
+        self.ram_delay.setToolTip('Ab der fertigen Antwort. 60 Sekunden Standard; während der Antwort wird nichts entladen.')
+        self.ram_delay.setValue(normalized_keep_alive_seconds(
+            settings.get('ram_keep_alive_seconds', 60)))
+        self.ram_delay.setEnabled(self.ram_saver.isChecked())
+        self.ram_saver.toggled.connect(self.ram_delay.setEnabled)
         self.auto_voice=QCheckBox('Beim App-Start automatisch auf „Hey Sytox“ hören (Mikrofon aktiv)')
         self.auto_voice.setChecked(settings.get('voice_auto_start', False))
         self.interruption=QCheckBox('Sprachausgabe durch „Hey Sytox“ oder „Stopp“ unterbrechen')
@@ -753,8 +821,13 @@ class SettingsDialog(QDialog):
         self.follow_up.setRange(5,90)
         self.follow_up.setSuffix(' Sekunden')
         self.follow_up.setValue(int(settings.get('voice_followup_seconds',25)))
-        form.addRow('Ollama-Modell',self.model)
+        form.addRow('Ollama-Fallback-Modell',self.model)
+        form.addRow('Schnellchat-Modell',self.fast_model)
+        form.addRow('Projekt-/Coding-Modell',self.project_model)
+        form.addRow('Bildmodell (in beiden Chats)',self.vision_model)
         form.addRow('Ollama-Adresse',self.url)
+        form.addRow('',self.ram_saver)
+        form.addRow('Modell nach Inaktivität entladen',self.ram_delay)
         form.addRow('Projektordner',row)
         form.addRow('Vosk-Modellordner (Deutsch)',self.vosk)
         form.addRow('Piper EXE (optional)',self.piperexe)
@@ -803,6 +876,10 @@ class SettingsDialog(QDialog):
 
     def values(self):
         return {'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
+                'fast_model':self.fast_model.text().strip(),
+                'project_model':self.project_model.text().strip(),
+                'vision_model':self.vision_model.text().strip(),
+                'model_mode':self.original.get('model_mode', 'auto'),
                 'workspace':self.folder.text().strip(), 'vosk_model':self.vosk.text().strip(),
                 'piper_exe':self.piperexe.text().strip(),'piper_model':self.pipermodel.text().strip(),
                 'voice_enabled':self.voice.isChecked(),
@@ -813,6 +890,8 @@ class SettingsDialog(QDialog):
                 'voice_no_wake':self.no_wake.isChecked(),
                 'voice_auto_start':self.auto_voice.isChecked(),
                 'auto_check_updates':self.auto_updates.isChecked(),
+                'ram_saver_enabled':self.ram_saver.isChecked(),
+                'ram_keep_alive_seconds':self.ram_delay.value(),
                 'voice_interruptible':self.interruption.isChecked(),
                 'voice_followup_seconds':self.follow_up.value(),
                 'gmail_client_secrets':self.gmail.text().strip()}
@@ -856,9 +935,20 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
         self.build_ui();self.setup_tray();self.reload_chats()
-        if self.chatlist.count()==0:self.create_chat()
-        else:self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
+        if not (self.chatlist.count() or self.projectlist.count()):
+            self.create_chat()
+        elif self.chatlist.count():
+            self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
+        else:
+            self.select_chat(self.projectlist.item(0).data(Qt.UserRole))
         self.log('System','Bereit. Lokale Daten: '+str(default_data_dir()))
+        self._progress_refresh = QTimer(self)
+        self._progress_refresh.setInterval(1400)
+        self._progress_refresh.timeout.connect(self.refresh_live_progress)
+        self._progress_refresh.start()
+        # A failed swap reopens the previous EXE; show its rollback reason once.
+        QTimer.singleShot(1500, self._show_pending_update_result)
+        QTimer.singleShot(10000, self._show_pending_update_result)
         QTimer.singleShot(700, self.check_model_status)
         if self.config.get('auto_check_updates', True):
             QTimer.singleShot(2200, self.check_for_updates)
@@ -874,6 +964,9 @@ class MainWindow(QMainWindow):
                   'edge_consent':False,'voice_no_wake':False,'voice_followup_seconds':25,
                   'voice_auto_start':False,'voice_interruptible':True,
                   'auto_check_updates':True,
+                  'model_mode':'auto','fast_model':'qwen3:4b',
+                  'project_model':'qwen3-coder:30b','vision_model':'qwen3-vl:4b',
+                  'ram_saver_enabled':True,'ram_keep_alive_seconds':60,
                   'gmail_client_secrets':''}
         default_model=base/'models'/'vosk-model-small-de-0.15'
         if default_model.is_dir(): settings['vosk_model']=str(default_model)
@@ -912,7 +1005,7 @@ class MainWindow(QMainWindow):
         title = QLabel('SYTOX')
         title.setObjectName('brandName')
         names.addWidget(title)
-        subtitle = QLabel('DESKTOP AI')
+        subtitle = QLabel('LOCAL WORKSPACE')
         subtitle.setObjectName('brandSubtitle')
         names.addWidget(subtitle)
         identity.addLayout(names)
@@ -924,6 +1017,13 @@ class MainWindow(QMainWindow):
         btn_new.clicked.connect(self.create_chat)
         btn_new.setMinimumHeight(44)
         l.addWidget(btn_new)
+        btn_project = QPushButton('◆  Neues Qwen-Projekt')
+        btn_project.setObjectName('subtle')
+        btn_project.setMinimumHeight(42)
+        btn_project.setToolTip('Dauerhaftes Coding-Projekt mit dem großen Qwen-Modell starten')
+        btn_project.clicked.connect(self.create_project)
+        self.new_project_btn = btn_project
+        l.addWidget(btn_project)
         l.addSpacing(7)
         self.search = QLineEdit()
         self.search.setObjectName('chatSearch')
@@ -933,13 +1033,24 @@ class MainWindow(QMainWindow):
         self.search.textChanged.connect(self.reload_chats)
         l.addWidget(self.search)
         l.addSpacing(3)
+        projects_heading = QLabel('QWEN-PROJEKTE')
+        projects_heading.setObjectName('sectionTitle')
+        l.addWidget(projects_heading)
+        self.projectlist = QListWidget()
+        self.projectlist.setObjectName('projectList')
+        self.projectlist.setAccessibleName('Gespeicherte Qwen-Projekte')
+        self.projectlist.setSpacing(2)
+        self.projectlist.itemClicked.connect(lambda it: self.select_chat(it.data(Qt.UserRole)))
+        l.addWidget(self.projectlist, 1)
         recent = QLabel('DEINE GESPRÄCHE')
         recent.setObjectName('sectionTitle')
         l.addWidget(recent)
         self.chatlist = QListWidget()
+        self.chatlist.setObjectName('chatList')
+        self.chatlist.setAccessibleName('Schnelle Gespräche')
         self.chatlist.setSpacing(2)
         self.chatlist.itemClicked.connect(lambda it: self.select_chat(it.data(Qt.UserRole)))
-        l.addWidget(self.chatlist, 1)
+        l.addWidget(self.chatlist, 2)
         rename = QPushButton('Chat umbenennen')
         rename.setObjectName('ghost')
         rename.clicked.connect(self.rename_chat)
@@ -957,7 +1068,7 @@ class MainWindow(QMainWindow):
         update_button.clicked.connect(lambda: self.check_for_updates(manual=True))
         l.addWidget(update_button)
         self.update_button = update_button
-        version = QLabel('SYTOX  /  VERSION 0.3.8')
+        version = QLabel('SYTOX  /  VERSION 0.3.9')
         version.setObjectName('version')
         version.setAlignment(Qt.AlignCenter)
         l.addSpacing(7)
@@ -978,12 +1089,17 @@ class MainWindow(QMainWindow):
         titles.setSpacing(2)
         breadcrumb = QLabel('WORKSPACE  /  KONVERSATION')
         breadcrumb.setObjectName('sectionTitle')
+        self.chat_breadcrumb = breadcrumb
         titles.addWidget(breadcrumb)
         self.chat_heading = QLabel('Neuer Chat')
         self.chat_heading.setObjectName('chatTitle')
         titles.addWidget(self.chat_heading)
         th.addLayout(titles)
         th.addStretch(1)
+        header_brand = brand_banner(168)
+        if header_brand is not None:
+            th.addWidget(header_brand, 0, Qt.AlignVCenter)
+            th.addSpacing(12)
         self.focus_btn = QPushButton('Fokusmodus')
         self.focus_btn.setObjectName('panelToggle')
         self.focus_btn.setAccessibleName('Steuerzentrale ein- oder ausblenden')
@@ -994,7 +1110,8 @@ class MainWindow(QMainWindow):
         th.addSpacing(14)
         connection = QVBoxLayout()
         connection.setSpacing(4)
-        self.model_name = QLabel(self.config['model'])
+        self.model_name = QLabel('Automatische Auswahl' if self.config.get('model_mode','auto') == 'auto'
+                                 else select_chat_model('', self.config)[0])
         self.model_name.setObjectName('muted')
         self.model_name.setAlignment(Qt.AlignRight)
         connection.addWidget(self.model_name)
@@ -1027,6 +1144,18 @@ class MainWindow(QMainWindow):
         cbox.setSpacing(12)
         upper = QHBoxLayout()
         upper.setSpacing(12)
+        self.model_mode = QComboBox()
+        self.model_mode.setObjectName('modelMode')
+        self.model_mode.addItem('Automatisch', 'auto')
+        self.model_mode.addItem('⚡ Schnellchat', 'fast')
+        self.model_mode.addItem('◆ Projekt', 'project')
+        self.model_mode.setToolTip('Modell automatisch wählen oder manuell festlegen. Bildschirmsehen ist in jedem Modus möglich.')
+        self.model_mode.setAccessibleName('Chat-Modell wählen')
+        self.model_mode.setMaximumWidth(165)
+        selected = self.model_mode.findData(self.config.get('model_mode', 'auto'))
+        self.model_mode.setCurrentIndex(max(0, selected))
+        self.model_mode.currentIndexChanged.connect(self._model_mode_changed)
+        upper.addWidget(self.model_mode)
         self.mode = QComboBox()
         self.mode.addItems(['Einmal', '1 Stunde arbeiten', '3 Stunden arbeiten', 'Bis fertig'])
         self.mode.setMaximumWidth(192)
@@ -1048,19 +1177,29 @@ class MainWindow(QMainWindow):
         self.input.setFixedHeight(76)
         self.input.send.connect(self.send)
         card_row.addWidget(self.input, 1)
-        right_buttons = QVBoxLayout()
-        right_buttons.setSpacing(7)
+        # One horizontal composer toolbar: microphone directly beside Send.
+        right_buttons = QHBoxLayout()
+        right_buttons.setSpacing(8)
+        self.mic_btn = QPushButton()
+        self.mic_btn.setObjectName('micButton')
+        self.mic_btn.setIcon(microphone_icon())
+        self.mic_btn.setIconSize(QSize(26, 26))
+        self.mic_btn.setFixedSize(46, 46)
+        self.mic_btn.setCheckable(True)
+        self.mic_btn.setAccessibleName('Sprachaufnahme starten oder stoppen')
+        self.mic_btn.setToolTip('Sprachaufnahme starten')
+        self.mic_btn.clicked.connect(self.toggle_memo)
+        right_buttons.addWidget(self.mic_btn)
         self.send_btn = QPushButton('Senden')
         self.send_btn.setObjectName('primary')
         self.send_btn.clicked.connect(self.send)
         self.send_btn.setMinimumWidth(106)
+        self.send_btn.setMinimumHeight(46)
         right_buttons.addWidget(self.send_btn)
-        self.mic_btn = QPushButton('Memo')
-        self.mic_btn.setObjectName('subtle')
-        self.mic_btn.clicked.connect(self.toggle_memo)
-        right_buttons.addWidget(self.mic_btn)
         card_row.addLayout(right_buttons)
         cbox.addWidget(input_card)
+        # Animate only the initial appearance, not the typing experience.
+        QTimer.singleShot(70, lambda: self._animate_appearance(input_card, 220))
         hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   KI LÄUFT LOKAL')
         hint.setObjectName('version')
         hint.setWordWrap(True)
@@ -1123,6 +1262,21 @@ class MainWindow(QMainWindow):
         self.task_state.setObjectName('panelDescription')
         self.task_state.setWordWrap(True)
         task.addWidget(self.task_state)
+        self.task_meter = QProgressBar()
+        self.task_meter.setObjectName('taskProgressMeter')
+        self.task_meter.setRange(0, 100)
+        self.task_meter.setValue(0)
+        self.task_meter.setTextVisible(False)
+        self.task_meter.setAccessibleName('Live-Arbeitsfortschritt')
+        task.addWidget(self.task_meter)
+        self.task_details = QLabel('Noch keine Arbeitsschritte protokolliert.')
+        self.task_details.setObjectName('panelDescription')
+        self.task_details.setWordWrap(True)
+        task.addWidget(self.task_details)
+        self.task_next = QLabel('')
+        self.task_next.setObjectName('panelDescription')
+        self.task_next.setWordWrap(True)
+        task.addWidget(self.task_next)
         self.stopbtn = QPushButton('Aufgabe stoppen')
         self.stopbtn.setEnabled(False)
         self.stopbtn.clicked.connect(self.stop_work)
@@ -1195,6 +1349,31 @@ class MainWindow(QMainWindow):
         self._new_chat_shortcut.activated.connect(self.create_chat)
         self.input.setFocus()
 
+    def _chat_runtime_config(self):
+        """Apply the saved model choice of this chat, never the last-used other chat."""
+        settings = self.config.copy()
+        if self.chat_id:
+            settings['model_mode'] = self.store.chat_model_mode(self.chat_id) or 'fast'
+        return settings
+
+    def _model_mode_changed(self, _index=None):
+        """Persist manual selection for normal chats; Qwen projects stay Qwen."""
+        if self.chat_id and self.store.chat_kind(self.chat_id) == 'project':
+            return
+        route = self.model_mode.currentData()
+        if self.chat_id:
+            self.store.set_chat_model_mode(self.chat_id, route)
+        self.config['model_mode'] = route
+        self.config_path.write_text(
+            json.dumps(self.config, ensure_ascii=False, indent=2), encoding='utf-8')
+        if self.parallel_chat is not None:
+            self.parallel_chat.config = dict(self.config, model_mode='fast')
+        label = (self.config.get('project_model') if route == 'project'
+                 else self.config.get('fast_model') if route == 'fast'
+                 else 'Automatische Modellauswahl')
+        self.model_name.setText(label or self.config['model'])
+        self.check_model_status()
+
     def toggle_focus_mode(self, checked=None):
         """Give the conversation more room without stopping AI, voice or agent tasks."""
         if checked is None:
@@ -1240,6 +1419,10 @@ class MainWindow(QMainWindow):
         box = QVBoxLayout(hero)
         box.setContentsMargins(32, 30, 32, 30)
         box.setSpacing(13)
+        hero_logo = brand_banner(560)
+        if hero_logo is not None:
+            box.addWidget(hero_logo)
+            box.addSpacing(7)
         eyebrow = QLabel('DEIN PERSÖNLICHER KI-WORKSPACE')
         eyebrow.setObjectName('heroEyebrow')
         box.addWidget(eyebrow)
@@ -1345,28 +1528,62 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def reload_chats(self,*args):
-        if not hasattr(self,'chatlist'):return
-        search=(self.search.text() if hasattr(self,'search') else '').lower()
+        if not hasattr(self, 'chatlist') or not hasattr(self, 'projectlist'):
+            return
+        search = (self.search.text() if hasattr(self, 'search') else '').lower()
         self.chatlist.clear()
+        self.projectlist.clear()
         for chat in self.store.chats():
-            if search not in chat['title'].lower():continue
-            it=QListWidgetItem(chat['title']);it.setData(Qt.UserRole,chat['id'])
-            self.chatlist.addItem(it)
-            if chat['id']==self.chat_id:self.chatlist.setCurrentItem(it)
+            if search not in chat['title'].lower():
+                continue
+            project = chat['kind'] == 'project'
+            widget = self.projectlist if project else self.chatlist
+            item = QListWidgetItem(('◆  ' if project else '') + chat['title'])
+            item.setData(Qt.UserRole, chat['id'])
+            widget.addItem(item)
+            if chat['id'] == self.chat_id:
+                widget.setCurrentItem(item)
 
     def create_chat(self):
         if self.worker and self.worker.isRunning():
-            QMessageBox.information(self,'Auftrag läuft','Bitte erst den laufenden Auftrag stoppen.')
+            QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
             return
-        cid=self.store.create_chat();self.reload_chats();self.select_chat(cid)
+        cid = self.store.create_chat(kind='chat')
+        self.reload_chats()
+        self.select_chat(cid)
+
+    def create_project(self):
+        """Create a named, permanent large-model conversation in the sidebar."""
+        if self.worker and self.worker.isRunning():
+            QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
+            return
+        title, accepted = QInputDialog.getText(self, 'Neues Qwen-Projekt', 'Projektname:')
+        if not accepted or not title.strip():
+            return
+        cid = self.store.create_chat(title=title.strip(), kind='project')
+        self.search.clear()  # Ensure the new project is visible even after a search.
+        self.reload_chats()
+        self.select_chat(cid)
 
     def select_chat(self,cid):
         if self.worker and self.worker.isRunning() and cid!=self.chat_id:
             QMessageBox.information(self,'Auftrag läuft','Während der Ausführung kann der Chat nicht gewechselt werden.')
             return
-        self.chat_id=cid
         current=next((c for c in self.store.chats() if c['id']==cid),None)
-        self.chat_heading.setText(current['title'] if current else 'Chat')
+        if current is None:
+            return
+        self.chat_id=cid
+        project = current['kind'] == 'project'
+        selected_mode = self.store.chat_model_mode(cid)
+        self.model_mode.blockSignals(True)
+        self.model_mode.setCurrentIndex(max(0, self.model_mode.findData(selected_mode)))
+        self.model_mode.setEnabled(not project)
+        self.model_mode.blockSignals(False)
+        self.config['model_mode'] = selected_mode
+        self.model_name.setText(select_chat_model('', self._chat_runtime_config())[0])
+        self.chat_breadcrumb.setText('WORKSPACE  /  QWEN-PROJEKT' if project
+                                     else 'WORKSPACE  /  SCHNELLCHAT')
+        self.chat_heading.setText(current['title'])
         self.reload_chats();self.clear_bubbles()
         messages = self.store.messages(cid)
         if not messages:
@@ -1393,8 +1610,12 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():return
         if QMessageBox.question(self,'Chat löschen','Diesen Chat mit allen Nachrichten wirklich löschen?')!=QMessageBox.Yes:return
         self.store.delete_chat(self.chat_id);self.chat_id=None;self.reload_chats()
-        if self.chatlist.count():self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
-        else:self.create_chat()
+        if self.chatlist.count():
+            self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
+        elif self.projectlist.count():
+            self.select_chat(self.projectlist.item(0).data(Qt.UserRole))
+        else:
+            self.create_chat()
 
     def clear_bubbles(self):
         self.empty_widget = None
@@ -1455,6 +1676,8 @@ class MainWindow(QMainWindow):
             self.input.clear()
             if agent_status_intent(txt):
                 self.report_agent_status(txt, spoken=False)
+            elif is_change_request(txt):
+                self.queue_project_change(txt, spoken=False)
             else:
                 self.ask_parallel(txt, spoken=False)
             return
@@ -1464,7 +1687,8 @@ class MainWindow(QMainWindow):
         self.add_bubble('user',txt)
         self.input.clear()
         messages=self.store.messages(self.chat_id)
-        if len([m for m in messages if m['role']=='user'])==1:
+        if (self.store.chat_kind(self.chat_id) != 'project' and
+                len([m for m in messages if m['role']=='user']) == 1):
             self.store.rename_chat(self.chat_id,txt[:46]+'…' if len(txt)>46 else txt[:46]);self.reload_chats()
             self.chat_heading.setText(txt[:46])
         mode={'Einmal':'once','1 Stunde arbeiten':'timed','3 Stunden arbeiten':'timed','Bis fertig':'until_done'}[self.mode.currentText()]
@@ -1474,7 +1698,82 @@ class MainWindow(QMainWindow):
             hours=max(.02,min(float(duration.group(1).replace(',','.')),24.0))
             mode='timed'
         if re.search(r'\bbis (?:es |alles )?fertig\b',txt.lower()):mode='until_done'
+        selected, _route = select_chat_model(txt, self._chat_runtime_config(), mode)
+        self.model_name.setText(selected)
         self.start_worker(mode,hours)
+
+    def queue_project_change(self, instruction, spoken=False):
+        """Accept a new project instruction without stopping or sending a build."""
+        if not (self.worker and self.worker.isRunning()):
+            return False
+        try:
+            change_id = self.store.add_task_change(self.chat_id, instruction)
+        except (ValueError, RuntimeError) as exc:
+            message = 'Änderung konnte nicht vorgemerkt werden: ' + str(exc)
+            self.log('Status', message)
+            if spoken:
+                self.start_speech(message)
+            else:
+                self.add_bubble('assistant', message)
+            return False
+        # Only the queue table is written. Never change the original task goal.
+        self.add_bubble('user', instruction)
+        message = ('Zusatzwunsch ' + str(change_id) +
+                   ' vorgemerkt. Ich schließe zuerst die laufende Arbeit ab, '
+                   'ergänze danach dein Projekt und melde erst dann fertig.')
+        self.log('Status', message)
+        if self.parallel_chat is not None and self.parallel_chat.isVisible():
+            self.parallel_chat.transcript.appendPlainText(
+                'DU: ' + instruction + '\\nSYTOX: ' + message + '\\n')
+        else:
+            self.add_bubble('assistant', message)
+        self.refresh_live_progress()
+        if spoken:
+            self.start_speech(message)
+        return True
+
+    def refresh_live_progress(self):
+        """Read live task checkpoints; never ask the busy coding model."""
+        if not hasattr(self, 'task_meter') or not self.chat_id:
+            return
+        active = bool(self.worker and self.worker.isRunning())
+        entries = self.store.tasks(self.chat_id)
+        task = next((item for item in entries if item['status'] == 'running'), None)
+        if active and task:
+            try:
+                cp = json.loads(task.get('checkpoint') or '{}')
+            except (ValueError, TypeError):
+                cp = {}
+            steps = max(0, int(cp.get('steps', 0)))
+            writes = max(0, int(cp.get('writes', 0)))
+            checks = max(0, int(cp.get('passed_checks', 0)))
+            changes = self.store.task_changes(task['id'])
+            self.task_meter.setRange(0, 0)  # Activity, not a fictitious percent.
+            self.task_details.setText(
+                f'{steps} Schritte · {writes} Dateiänderungen · '
+                f'{checks} Prüfungen · {len(changes)} vorgemerkte Änderungen')
+            recent = str(cp.get('last_result') or '')[:135]
+            if not recent:
+                notes = cp.get('progress_notes', [])
+                if isinstance(notes, list):
+                    recent = str((notes[-1] if notes and isinstance(notes[-1], dict)
+                                  else {}).get('next_step') or '')[:135]
+            eta = task_eta(task)
+            label = ('Restzeit: ca. ' + str(eta['low_minutes']) + '–'
+                     + str(eta['high_minutes']) + ' Minuten. ')
+            if eta['state'] != 'estimated':
+                label = 'Restzeit noch nicht zuverlässig abschätzbar. '
+            self.task_next.setText(label + ('Zuletzt: ' + recent if recent else ''))
+        else:
+            self.task_meter.setRange(0, 100)
+            self.task_meter.setValue(0)
+            if entries and entries[0]['status'] == 'done':
+                self.task_details.setText('Aufgabe abgeschlossen.')
+            elif entries and entries[0]['status'] == 'paused':
+                self.task_details.setText('Aufgabe pausiert; gespeicherter Stand verfügbar.')
+            else:
+                self.task_details.setText('Kein laufender Programmierauftrag.')
+            self.task_next.setText('')
 
     def start_worker(self,mode='once',hours=1.0,task_id=None):
         # The Agent runs in its own thread. Listening for follow-up questions
@@ -1484,7 +1783,7 @@ class MainWindow(QMainWindow):
         else:
             self.voice_muted.set()
         self._agent_last_status='Auftrag gestartet; noch kein konkreter Fortschritt gemeldet.'
-        self.worker=Worker(self.store,self.chat_id,self.config.copy(),mode,hours,task_id)
+        self.worker=Worker(self.store,self.chat_id,self._chat_runtime_config(),mode,hours,task_id)
         self.worker.log_line.connect(self.log)
         self.worker.approval_request.connect(self.handle_approval)
         self.worker.completed.connect(self.worker_done)
@@ -1759,21 +2058,25 @@ class MainWindow(QMainWindow):
         lay.addLayout(row)
         dialog.exec()
 
+    def _preferred_status_model(self):
+        """Check the model saved for the selected conversation."""
+        return select_chat_model('', self._chat_runtime_config())[0]
+
     def check_model_status(self):
-        """Check the configured Ollama model without blocking mouse/keyboard UI."""
+        """Check the selected chat model without blocking mouse/keyboard UI."""
         if self.ollama_probe and self.ollama_probe.isRunning():
             self._probe_again = True
             return
         self.status_chip.setText('KI wird geprüft')
         self.model_status_label.setText('Verbindung wird geprüft …')
-        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.config['model'])
+        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self._preferred_status_model())
         self.ollama_probe.checked.connect(self._model_status_checked)
         self.ollama_probe.finished.connect(self._model_probe_finished)
         self.ollama_probe.start()
 
     def _model_status_checked(self, status: OllamaStatus):
         if self.ollama_probe and (self.ollama_probe.url != self.config['ollama_url'] or
-                                  self.ollama_probe.model != self.config['model']):
+                                  self.ollama_probe.model != self._preferred_status_model()):
             self._probe_again = True
         else:
             self.ollama_status = status
@@ -1794,23 +2097,54 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.check_model_status)
 
     def show_model_help(self):
-        dialog = OllamaHelpDialog(self.config['model'], self.ollama_status, self)
+        dialog = OllamaHelpDialog(self._preferred_status_model(), self.ollama_status, self)
         if dialog.exec() == QDialog.Accepted and dialog.installed_model:
-            self.config['model'] = dialog.installed_model
+            key = ('project_model' if self.config.get('model_mode') == 'project'
+                   else 'fast_model')
+            self.config[key] = dialog.installed_model
             self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2),
                                         encoding='utf-8')
-            self.model_name.setText(self.config['model'])
-            self.log('System', 'Ollama eingerichtet: ' + self.config['model'])
+            self.model_name.setText(self._preferred_status_model())
+            self.log('System', 'Ollama eingerichtet: ' + dialog.installed_model)
         self.check_model_status()
 
     def edit_settings(self):
         dialog=SettingsDialog(self.config,self)
         if dialog.exec()==QDialog.Accepted:
             self.config=dialog.values()
+            self.config['model_mode'] = self.model_mode.currentData()
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
-            self.model_name.setText(self.config['model'])
+            self.model_name.setText(
+                'Automatische Auswahl' if self.config.get('model_mode') == 'auto'
+                else self._preferred_status_model())
+            if self.parallel_chat is not None:
+                self.parallel_chat.config = dict(self.config, model_mode='fast')
             self.log('System','Einstellungen gespeichert.')
             self.check_model_status()
+
+    def _show_pending_update_result(self):
+        """Show a one-time update or rollback result from the detached helper."""
+        from .updater import update_cache_dir
+        result_file = update_cache_dir() / 'last_portable_update.json'
+        if not result_file.is_file():
+            return
+        try:
+            data = json.loads(result_file.read_text(encoding='utf-8'))
+            result_file.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            return
+        status = data.get('status') if isinstance(data, dict) else None
+        message = str(data.get('message') or '')[:500] if isinstance(data, dict) else ''
+        if status == 'rolled_back':
+            self.log('Update', message)
+            QMessageBox.warning(self, 'SYTOX Update wiederhergestellt',
+                                message or 'Das Update wurde zurückgesetzt.')
+        elif status == 'success':
+            self.log('Update', message or 'SYTOX wurde erfolgreich aktualisiert.')
+        elif status == 'failed':
+            self.log('Update', message)
+            QMessageBox.warning(self, 'SYTOX Update fehlgeschlagen',
+                                message or 'Das Update wurde nicht abgeschlossen.')
 
     def check_for_updates(self, manual=False):
         """Only query release metadata on a worker; never block the Qt interface."""
@@ -1848,8 +2182,10 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(
                 self, 'SYTOX Update ' + info.version,
                 'SYTOX ' + info.version + ' ist verfügbar.\n'
-                'Installer von GitHub herunterladen und per SHA-256 überprüfen?\n'
-                'Eine Installation startet erst nach deiner zweiten Bestätigung.',
+                + ('Geprüftes Direkt-Update herunterladen und danach ohne Installer aktualisieren?\n'
+                   if info.has_portable else
+                   'Geprüftes Update herunterladen? Diese ältere Release-Version benötigt noch einmal den integrierten Installer.\n')
+                + 'Die Aktualisierung startet erst nach deiner zweiten Bestätigung.',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         self.update_button.setEnabled(False)
@@ -1870,7 +2206,11 @@ class MainWindow(QMainWindow):
         if error:
             QMessageBox.warning(self, 'SYTOX Update', 'Download abgebrochen: ' + error)
             return
-        self.log('Update', 'Installer heruntergeladen und SHA-256 geprüft.')
+        package = (self._update_download_worker.update
+                   if self._update_download_worker else None)
+        direct = bool(package and package.has_portable)
+        self.log('Update', ('Direkt-Update vorbereitet' if direct else 'Installer heruntergeladen')
+                 + ' und SHA-256 geprüft.')
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self, 'Auftrag läuft',
                 'Update sicher heruntergeladen. Bitte zuerst den laufenden Auftrag '
@@ -1878,13 +2218,20 @@ class MainWindow(QMainWindow):
             return
         if QMessageBox.question(
                 self, 'SYTOX aktualisieren',
-                'Der neue Installer wurde erfolgreich überprüft.\n'
-                'SYTOX jetzt beenden und das Update installieren?\n'
-                'Deine Chats und Einstellungen bleiben gespeichert.',
+                ('Das geprüfte Direkt-Update ist vorbereitet.\n'
+                 'SYTOX jetzt beenden, automatisch aktualisieren und neu starten?\n'
+                 'Bei einem Startfehler wird die vorige Version wiederhergestellt.\n'
+                 if direct else
+                 'Das geprüfte Legacy-Update wurde heruntergeladen.\n'
+                 'SYTOX jetzt beenden und den integrierten Installer starten?\n')
+                + 'Deine Chats, Projekte und Einstellungen bleiben gespeichert.',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         try:
-            schedule_installer(path)
+            if direct:
+                schedule_portable_update(path)
+            else:
+                schedule_installer(path)
         except Exception as exc:
             QMessageBox.warning(self, 'SYTOX Update', str(exc))
             return
@@ -1944,9 +2291,13 @@ class MainWindow(QMainWindow):
     def show_parallel_chat(self):
         """Show temporary conversational context, never the agent's workspace."""
         if self.parallel_chat is None:
-            self.parallel_chat = ParallelChatDialog(self.config, self)
+            self.parallel_chat = ParallelChatDialog(dict(self.config, model_mode='fast'), self)
             self.parallel_chat.answer_ready.connect(self._parallel_answer_ready)
             self.parallel_chat.control_requested.connect(self.handle_work_control)
+            self.parallel_chat.status_requested.connect(self.report_agent_status)
+            self.parallel_chat.change_requested.connect(self.queue_project_change)
+            # Reuse the same explicit, user-visible approval dialog as the Agent.
+            self.parallel_chat.approval_request.connect(self.handle_approval)
         self.parallel_chat.show()
         self.parallel_chat.raise_()
         self.parallel_chat.activateWindow()
@@ -1968,11 +2319,17 @@ class MainWindow(QMainWindow):
             self._conversation_ready()
 
     def report_agent_status(self, question='', spoken=False):
+        """Answer status and ETA from live checkpoints without stopping the Agent."""
         active = bool(self.worker and self.worker.isRunning() and
                       not self.worker.stop_event.is_set())
         stopping = bool(self.worker and self.worker.isRunning() and
                         self.worker.stop_event.is_set())
-        if active:
+        intent = agent_status_intent(question)
+        if active and intent == 'eta':
+            task = next((t for t in self.store.tasks(self.chat_id)
+                         if t['status'] == 'running'), None)
+            message = task_eta(task)['text']
+        elif active:
             message = ('Der Programmierauftrag läuft weiter. Zuletzt gemeldet: '
                        + self._agent_last_status)
         elif stopping:
@@ -2090,27 +2447,35 @@ class MainWindow(QMainWindow):
             self._conversation_ready()
             return
         if self.worker and self.worker.isRunning():
-            self.ask_parallel(text, spoken=True)
+            if is_change_request(text):
+                self.queue_project_change(text, spoken=True)
+            else:
+                self.ask_parallel(text, spoken=True)
             return
         self.input.setPlainText(text)
         self.send()
 
     def toggle_memo(self):
         if self.listener and self.listener.isRunning():
+            self.mic_btn.setChecked(False)
             QMessageBox.information(self,'Mikrofon belegt','Bitte Gesprächsmodus zuerst stoppen.')
             return
         if self.recorder and self.recorder.isRunning():
             self.recorder.stop_event.set();self.mic_btn.setEnabled(False)
+            self.mic_btn.setToolTip('Aufnahme wird verarbeitet …')
             self.log('Sprache','Aufnahme wird gespeichert/transkribiert …')
             return
         self.recorder=VoiceRecorder(self.config.get('vosk_model',''))
         self.recorder.finished_note.connect(self.memo_ready)
         self.recorder.start()
-        self.mic_btn.setText('■ Aufnahme stoppen')
+        self.mic_btn.setChecked(True)
+        self.mic_btn.setToolTip('Aufnahme stoppen')
         self.log('Sprache','Aufnahme gestartet (Mikrofon).')
 
     def memo_ready(self,path,text):
-        self.mic_btn.setText('🎙 Memo');self.mic_btn.setEnabled(True)
+        self.mic_btn.setChecked(False)
+        self.mic_btn.setToolTip('Sprachaufnahme starten')
+        self.mic_btn.setEnabled(True)
         if not path:
             QMessageBox.warning(self,'Mikrofon',text);return
         if text.startswith('[Spracherkennung fehlgeschlagen'):
