@@ -915,6 +915,7 @@ class MainWindow(QMainWindow):
         self.config=self.load_settings()
         self.chat_id=None;self.worker=None;self.recorder=None;self.listener=None;self.speakers=[]
         self._chat_drafts = {}  # Unsent text stays in this session, outside chat history.
+        self._chat_draft_cursors = {}
         self.quick_worker = None
         self._quick_turn = None
         self._exit_after_quick = False
@@ -1663,7 +1664,16 @@ class MainWindow(QMainWindow):
         if cid != self.chat_id:
             if self.chat_id:
                 self._chat_drafts[self.chat_id] = self.input.toPlainText()
+                cursor = self.input.textCursor()
+                self._chat_draft_cursors[self.chat_id] = (cursor.position(), cursor.anchor())
             self.input.setPlainText(self._chat_drafts.get(cid, ''))
+            cursor = self.input.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            if cid in self._chat_draft_cursors:
+                position, anchor = self._chat_draft_cursors[cid]
+                cursor.setPosition(anchor)
+                cursor.setPosition(position, QTextCursor.KeepAnchor)
+            self.input.setTextCursor(cursor)
         self.chat_id=cid
         self._follow_latest = True
         project = current['kind'] == 'project'
@@ -1705,6 +1715,7 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self,'Chat löschen','Diesen Chat mit allen Nachrichten wirklich löschen?')!=QMessageBox.Yes:return
         self.store.delete_chat(self.chat_id)
         self._chat_drafts.pop(self.chat_id, None)
+        self._chat_draft_cursors.pop(self.chat_id, None)
         self.input.clear()
         self.chat_id=None;self.reload_chats()
         if self.chatlist.count():

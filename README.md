@@ -13,6 +13,7 @@ Antworten lassen sich über „Kopieren“ unverändert in die Zwischenablage ü
 Für vollständig empfangene Codeblöcke gibt es zusätzlich einzelne Kopierbuttons ohne Markdown-Zäune.
 Mit `Strg+L` gelangt der Tastaturfokus direkt ins Nachrichtenfeld.
 Ungesendete Entwürfe bleiben während der laufenden Sitzung pro Chat erhalten.
+Dabei werden auch Cursorposition und Textauswahl pro Chat wiederhergestellt.
 Der Aufklappzustand von Sprachoptionen und Aktivitäten wird auch über Neustarts gespeichert.
 Auch der Fokusmodus mit ausgeblendeter Steuerzentrale bleibt nach einem Neustart erhalten.
 Die Suche in der Seitenleiste findet Titel und gespeicherte Nachrichten in Chats und Qwen-Projekten lokal.
