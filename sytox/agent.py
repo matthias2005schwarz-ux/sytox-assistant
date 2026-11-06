@@ -95,11 +95,13 @@ class OllamaClient:
         resp.raise_for_status()
         return [entry.get('name', '') for entry in resp.json().get('models', [])]
 
-    def chat(self, messages, tools=None, stop=None, on_text=None):
+    def chat(self, messages, tools=None, stop=None, on_text=None, think=None):
         payload = {'model': self.model, 'messages': messages, 'stream': True,
                    'options': ollama_generation_options(self.model, self.effective_context_tokens)}
         if tools:
             payload['tools'] = tools
+        if think is not None:
+            payload['think'] = bool(think)  # Qwen3 quick replies: suppress slow reasoning mode.
         try:
             with requests.post(self.url + '/api/chat', json=payload, stream=True,
                                timeout=(8, 600)) as response:
