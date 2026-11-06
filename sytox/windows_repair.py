@@ -101,6 +101,62 @@ def identify_error(text: str) -> dict:
     }
 
 
+
+# Shared with the quick-conversation model: it can diagnose and safely repair
+# the same operating-system errors without switching to the larger code model.
+_WINDOWS_HELP = re.compile(
+    r"\\b(?:0x[0-9a-f]{8}|0x800[0-9a-f]{5}|\\w+\\.dll|"
+    r"fehler(?:code|meldung)?|error(?:\\s*code)?|absturz|"
+    r"stürzt\\s+ab|funktioniert\\s+nicht|startet\\s+nicht|"
+    r"reparier\\w*|beheb\\w*|fehlende\\s+datei|"
+    r"windows[- ]?problem)\\b", re.IGNORECASE
+)
+_REPAIR_WISH = re.compile(
+    r"\\b(?:beheb\\w*|reparier\\w*|fix\\w*|"
+    r"installier\\w*|lade\\s+.{0,12}herunter|"
+    r"mach\\s+(?:es|das|den\\s+fehler)\\s+(?:wieder\\s+)?(?:heil|weg|ganz)|"
+    r"bring\\s+.{0,30}zum\\s+laufen)\\b", re.IGNORECASE
+)
+_REPAIR_NEGATION = re.compile(
+    r"\\b(?:nicht|niemals|nie|ohne|keine?)\\b.{0,35}"
+    r"(?:beheb|reparier|fix|installier|lade|herunter)", re.IGNORECASE
+)
+
+
+def wants_windows_diagnosis(text: str) -> bool:
+    """Recognize a support request, without creating a second chat mode."""
+    return bool(_WINDOWS_HELP.search(str(text or "")[:6000]))
+
+
+def asks_for_repair(text: str) -> bool:
+    """A question about a fix is not permission to install something."""
+    phrase = str(text or "")[:1500]
+    if any(marker in phrase.casefold() for marker in (
+        "wie kann ich", "was bedeutet", "was würde", "wenn ich sage", "zum beispiel",
+        "wie repariert man", "erklär mir", "erkläre mir",
+    )):
+        return False
+    return bool(_REPAIR_WISH.search(phrase)) and not bool(_REPAIR_NEGATION.search(phrase))
+
+
+def choose_unambiguous_fix(error_text: str) -> str | None:
+    """Never guess architecture from a model answer or from Windows bitness.
+
+    Some 64-bit systems still run 32-bit programs. For VC++ packages, require
+    a concrete missing runtime DLL AND an explicit architecture in evidence.
+    Unknown codes and generic access violations cannot authorize a download.
+    """
+    text = str(error_text or "")[:6000].lower()
+    if not re.search(r"\\b(?:vcruntime140(?:_1)?|msvcp140|concrt140|api-ms-win-crt)[\\w.-]*\\b",
+                     text):
+        return None
+    is_x64 = bool(re.search(r"\\b(?:x64|64[ -]?bit|amd64)\\b", text))
+    is_x86 = bool(re.search(r"\\b(?:x86|32[ -]?bit|win32)\\b", text))
+    if is_x64 == is_x86:
+        return None
+    return "vc_redist_x64" if is_x64 else "vc_redist_x86"
+
+
 def _require_windows():
     if platform.system() != "Windows":
         raise WindowsRepairError("Windows-Diagnose und Reparatur sind nur auf Windows verfügbar.")
