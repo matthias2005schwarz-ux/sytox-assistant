@@ -12,6 +12,7 @@ import sys
 from urllib.parse import urlsplit
 import requests
 from .ram_saver import keep_alive_for_config
+from .model_resources import model_gate
 from .model_router import wants_screen
 
 
@@ -80,32 +81,35 @@ def describe_screen(question: str, config: dict, stop_event=None) -> str:
     if keep_alive is not None:
         payload["keep_alive"] = keep_alive
     try:
-        with requests.post(
-            url + "/api/chat", json=payload, stream=True, timeout=(8, 180),
-            allow_redirects=False,
-        ) as response:
-            if response.status_code == 404:
-                raise ScreenVisionError(
-                    f"Lokales Bildmodell „{model}“ fehlt. "
-                    f"Bitte mit 'ollama pull {model}' installieren."
-                )
-            response.raise_for_status()
-            output = []
-            for line in response.iter_lines():
-                if stop_event is not None and stop_event.is_set():
-                    raise ScreenVisionError("Bildschirmansicht abgebrochen.")
-                if not line:
-                    continue
-                item = json.loads(line)
-                if "error" in item:
-                    raise ScreenVisionError("Bildmodell: " + str(item["error"])[:180])
-                output.append(str((item.get("message") or {}).get("content") or ""))
-                if item.get("done"):
-                    break
-        text = "".join(output).strip()
-        if not text:
-            raise ScreenVisionError("Das Bildmodell hat keinen Bildschirminhalt erkannt.")
-        return text[:6500]
+        with model_gate.inference(priority='interactive', stop_event=stop_event):
+            with requests.post(
+                url + "/api/chat", json=payload, stream=True, timeout=(8, 180),
+                allow_redirects=False,
+            ) as response:
+                if response.status_code == 404:
+                    raise ScreenVisionError(
+                        f"Lokales Bildmodell „{model}“ fehlt. "
+                        f"Bitte mit 'ollama pull {model}' installieren."
+                    )
+                response.raise_for_status()
+                output = []
+                for line in response.iter_lines():
+                    if stop_event is not None and stop_event.is_set():
+                        raise ScreenVisionError("Bildschirmansicht abgebrochen.")
+                    if not line:
+                        continue
+                    item = json.loads(line)
+                    if "error" in item:
+                        raise ScreenVisionError("Bildmodell: " + str(item["error"])[:180])
+                    output.append(str((item.get("message") or {}).get("content") or ""))
+                    if item.get("done"):
+                        break
+            text = "".join(output).strip()
+            if not text:
+                raise ScreenVisionError("Das Bildmodell hat keinen Bildschirminhalt erkannt.")
+            return text[:6500]
+    except InterruptedError as exc:
+        raise ScreenVisionError('Bildschirmansicht abgebrochen.') from exc
     except requests.RequestException as exc:
         raise ScreenVisionError("Bildmodell nicht erreichbar: " + str(exc)[:180]) from exc
     except (ValueError, TypeError) as exc:
