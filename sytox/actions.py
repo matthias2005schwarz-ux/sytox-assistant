@@ -28,6 +28,7 @@ from .project_inspect import project_overview, search_project, read_project_line
 from .project_memory import update_project_memory, lookup_project_memory
 from .context_planner import build_context_bundle
 from .code_recovery import create_snapshot, snapshot_paths, restore_snapshot
+from .regression_planner import plan_regression_tests
 
 
 TOOLS = [
@@ -59,6 +60,7 @@ TOOLS = [
      {'paths':('array','Relative file paths to protect before editing')},['paths']),
     ('rollback_project_snapshot','After failed tests, restore a named snapshot of original files, only with explicit human approval; new tests are required.',
      {'snapshot_id':('string','ID returned by snapshot_project_files')},['snapshot_id']),
+    ('suggest_regression_tests','Read-only: suggest likely existing tests for changed project files and relevant syntax checks; execute nothing.',{},[]),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
     ('project_build_plan','Read-only: show deterministic Windows project build command, expected artifact and runtime dependencies.',{},[]),
@@ -300,6 +302,9 @@ class Toolkit:
         p=self._path(path)
         if p.stat().st_size > 250_000: return 'Datei ist größer als 250 KB; bitte gezielter lesen.'
         return p.read_text(encoding='utf-8',errors='replace')[:22000]
+
+    def action_suggest_regression_tests(self):
+        return plan_regression_tests(self.workspace, sorted(self.modified_paths))
 
     def action_snapshot_project_files(self,paths):
         snapshot_id, saved = create_snapshot(self.workspace, paths)
