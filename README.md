@@ -1,10 +1,25 @@
-## Schnellchat-Optimierung im Entwicklungszweig
+## SYTOX 0.3.10 – Schnellchat, Streaming und Bedienung
+
+Version 0.3.10 übernimmt die zuletzt geprüften Codex-Verbesserungen. Kurze
+Unterhaltungen werden direkt mit dem Schnellchat-Modell beantwortet, ohne
+den gesamten Aufgaben-Agenten zu starten; Antworttexte erscheinen bereits
+während der Generierung. Die Steuerzentrale ist kompakter und die App kann
+Nachrichten sowie Code kopieren, gespeicherte Unterhaltungen suchen und
+als Text exportieren. Entwürfe, Scrollposition und Fokusmodus bleiben erhalten.
+
+**Update:** In einer installierten SYTOX 0.3.9 Version auf
+**„Nach Updates suchen“** klicken. Ein offizielles GitHub Release 0.3.10
+wird nur nach vollständig erfolgreicher Windows-CI veröffentlicht.
+Das Direkt-Update wird innerhalb der Anwendung heruntergeladen, geprüft
+und nach Bestätigung installiert; Chats und Projekte bleiben erhalten.
+
+## Schnellchat-Optimierung
 
 Normale Gespräche verwenden einen eigenen, gestreamten Antwortpfad ohne
 Aufgaben-Agent. Qwen3-Thinking bleibt dabei aus; allgemeine Definitionen werden
 direkt lokal beantwortet. Details zu Abbruch, Modellwahl, RAM und überprüfbaren
 Zeitmessungen: [Schnellchat und Leistung](docs/quickchat-performance.md).
-Noch kein neuer Installer oder Release; echte Ollama-/Windows-Praxistests bleiben offen.
+Der lokale Ollama-Praxistest auf dem eigenen PC bleibt unabhängig von den automatisierten Windows-Tests erforderlich.
 
 Die Steuerzentrale zeigt Sprachoptionen und technische Aktivitäten zunächst
 eingeklappt. Mikrofonstatus und gespeicherte Erinnerungen bleiben direkt erreichbar;
