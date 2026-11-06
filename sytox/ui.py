@@ -21,7 +21,11 @@ from PySide6.QtWidgets import (
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
-from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
+from .voice_features import (record_until, transcribe_wav, speak, render_speech_file,
+                             VoiceTurnRouter, VoiceCommandDeduplicator,
+                             interruption_command, fast_silence_candidate,
+                             download_german_voice_model, desktop_voice_intent,
+                             agent_status_intent)
 from .desktop_ui import DesktopControlDialog
 from .place_queries import place_from_message
 from .place_view import InstantStreetViewPanel
@@ -182,6 +186,7 @@ class WakeListener(QThread):
         self.speaking_event = speaking_event if speaking_event is not None else threading.Event()
         self.allow_interruption = bool(allow_interruption)
         self.router = VoiceTurnRouter(require_wake, follow_up_seconds)
+        self.command_guard = VoiceCommandDeduplicator()
 
     def allow_follow_up(self):
         self.router.allow_follow_up()
@@ -203,31 +208,68 @@ class WakeListener(QThread):
                 except queue.Full:
                     pass
 
+            def clear_old_audio():
+                # Anything captured during TTS or mute is stale, not a new
+                # question. In particular, never forward the assistant's own
+                # spoken response back into a Windows command.
+                while True:
+                    try:
+                        audio_queue.get_nowait()
+                    except queue.Empty:
+                        break
+
             muted_before = False
             was_speaking = False
             barge_latched = False
+            partial_stop_text = ''
+            partial_stop_hits = 0
             with sd.RawInputStream(samplerate=16000, channels=1, dtype='int16',
                                    callback=on_audio, blocksize=4000):
                 while not self.stop_event.is_set():
                     speaking = self.speaking_event.is_set()
                     if self.mute_event.is_set() and not (self.allow_interruption and speaking):
                         muted_before = True
-                        while True:
-                            try: audio_queue.get_nowait()
-                            except queue.Empty: break
+                        clear_old_audio()
                         self.stop_event.wait(.06)
                         continue
                     if muted_before or (was_speaking and not speaking):
-                        recognizer.Reset()  # no fragments from a muted/previous utterance
+                        clear_old_audio()
+                        recognizer.Reset()  # discard fragments and stale TTS audio
+                        partial_stop_text = ''
+                        partial_stop_hits = 0
                         muted_before = False
                     if not speaking:
                         barge_latched = False
+                        partial_stop_text = ''
+                        partial_stop_hits = 0
                     was_speaking = speaking
                     try:
                         audio = audio_queue.get(timeout=.25)
                     except queue.Empty:
                         continue
                     if not recognizer.AcceptWaveform(audio):
+                        # During playback, recognise an explicit "Stopp" early.
+                        # Two consecutive identical Vosk partials are required,
+                        # and no partial request is EVER forwarded as an action.
+                        if speaking and not barge_latched:
+                            try:
+                                partial = json.loads(recognizer.PartialResult()).get('partial', '').strip()
+                            except (AttributeError, ValueError, TypeError):
+                                partial = ''
+                            if fast_silence_candidate(partial):
+                                if partial.casefold() == partial_stop_text:
+                                    partial_stop_hits += 1
+                                else:
+                                    partial_stop_text = partial.casefold()
+                                    partial_stop_hits = 1
+                                if partial_stop_hits >= 2:
+                                    barge_latched = True
+                                    self.router.allow_follow_up()
+                                    self.mute_event.set()
+                                    self.interrupted.emit('')
+                            else:
+                                partial_stop_text = ''
+                                partial_stop_hits = 0
                         continue
                     phrase = json.loads(recognizer.Result()).get('text', '').strip()
                     if phrase:
@@ -242,8 +284,9 @@ class WakeListener(QThread):
                             self.interrupted.emit(next_command)
                         continue
                     command = self.router.command_for(phrase)
-                    if command:
-                        # Do not capture a second command while Qt is processing this turn.
+                    if command and self.command_guard.allow(command):
+                        # Only forward new, distinct commands. Existing tool
+                        # approval and sensitive-action rules still apply.
                         self.mute_event.set()
                         self.wake_command.emit(command)
         except Exception as e:
