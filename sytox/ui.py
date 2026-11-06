@@ -121,7 +121,8 @@ class Worker(QThread):
             a=Agent(self.store,self.settings['model'],self.settings['ollama_url'],
                     self.settings['workspace'],self.request_approval,self.log_line.emit,self.stop_event,
                     self.settings.get('gmail_client_secrets',''),
-                    self.settings.get('model_context_tokens', 0))
+                    self.settings.get('model_context_tokens', 0),
+                    quick_coding=self.settings.get('quick_coding', False))
             result=a.run(self.chat_id,self.mode,self.hours,self.task_id)
             self.completed.emit(result)
         except Exception as e:
@@ -2055,6 +2056,7 @@ class MainWindow(QMainWindow):
         worker_settings['model'] = self.current_chat_model()
         if self.current_chat_mode() == QUICK:
             worker_settings['model_context_tokens'] = 4096
+            worker_settings['quick_coding'] = True
         self.worker=Worker(self.store,self.chat_id,worker_settings,mode,hours,task_id)
         self.worker.log_line.connect(self.log)
         self.worker.approval_request.connect(self.handle_approval)
