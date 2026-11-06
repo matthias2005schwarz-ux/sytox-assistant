@@ -211,6 +211,24 @@ class ParallelReplyTests(unittest.TestCase):
             dialog.deleteLater()
             self.app.processEvents()
 
+    def test_side_chat_eta_request_does_not_send_new_llm_job(self):
+        dialog = ParallelChatDialog(
+            {'model': 'offline-model', 'ollama_url': 'http://localhost:11434'}
+        )
+        requests = []
+        dialog.status_requested.connect(lambda question, spoken:
+                                        requests.append((question, spoken)))
+        try:
+            with patch('sytox.parallel_chat.ParallelReplyWorker') as worker:
+                self.assertTrue(dialog.ask('Wie lange brauchst du noch?', spoken=True))
+                worker.assert_not_called()
+            self.assertEqual(requests, [('Wie lange brauchst du noch?', True)])
+            self.assertEqual(dialog.history, [])
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            self.app.processEvents()
+
     def test_dialog_keeps_own_unsaved_chat_context(self):
         dialog = ParallelChatDialog(
             {'model': 'offline-model', 'ollama_url': 'http://localhost:11434'}
