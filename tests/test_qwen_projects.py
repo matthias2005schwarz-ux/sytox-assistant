@@ -47,6 +47,7 @@ class ProjectStorageTests(unittest.TestCase):
             db.execute('CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL)')
             db.execute("INSERT INTO chats VALUES('legacy','Älterer Chat','2025-01-01','2025-01-01')")
             db.execute("INSERT INTO messages(chat_id,role,content,created_at) VALUES('legacy','user','Meine alte Nachricht','2025-01-01')")
+        db.close()  # Windows keeps assistant.db locked until the sqlite handle is closed.
         store = Store(self.db)
         self.assertEqual(store.chat_kind('legacy'), 'chat')
         self.assertEqual(store.chat_model_mode('legacy'), 'fast')
