@@ -31,27 +31,41 @@ from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
 
+def brand_asset(filename):
+    """Resolve bundled artwork both in development and in the frozen Windows app."""
+    return Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1])) / 'assets' / filename
+
+
 class BrandMark(QWidget):
-    """Vector-drawn SYTOX monogram; no external image or web UI required."""
+    """Use the supplied metallic SYTOX application icon inside the sidebar."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(50, 50)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self._pixmap = QPixmap(str(brand_asset('sytox-app.png')))
 
     def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        gradient = QLinearGradient(2, 1, 48, 49)
-        gradient.setColorAt(0, QColor('#E44B56'))
-        gradient.setColorAt(.56, QColor('#A62535'))
-        gradient.setColorAt(1, QColor('#641E2B'))
-        p.setBrush(gradient)
-        p.setPen(QPen(QColor('#FF6D78'), 1))
-        p.drawRoundedRect(3, 3, 44, 44, 13, 13)
-        p.setPen(QColor('#FFFFFF'))
-        p.setFont(QFont('Segoe UI', 25, QFont.Black))
-        p.drawText(self.rect(), Qt.AlignCenter, 'S')
-        p.end()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        if not self._pixmap.isNull():
+            painter.drawPixmap(self.rect(), self._pixmap)
+        else:
+            painter.setPen(QColor('#E0525A'))
+            painter.drawText(self.rect(), Qt.AlignCenter, 'SYTOX')
+        painter.end()
+
+
+def brand_banner(width=220):
+    """Display the supplied SYTOX KI wordmark, retaining its original aspect ratio."""
+    banner = QPixmap(str(brand_asset('sytox-banner.png')))
+    if banner.isNull():
+        return None
+    label = QLabel()
+    label.setObjectName('brandBanner')
+    label.setPixmap(banner.scaledToWidth(width, Qt.SmoothTransformation))
+    label.setAlignment(Qt.AlignCenter)
+    label.setAccessibleName('SYTOX KI Logo')
+    return label
 
 
 def microphone_icon():
@@ -82,10 +96,11 @@ def subtle_glow(widget, color='#92303E', radius=23, opacity=135):
 
 
 def app_icon():
-    resources = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
-    icon_file = resources / 'assets' / 'sytox.ico'
-    if icon_file.exists():
-        return QIcon(str(icon_file))
+    # The supplied icon is the first choice for window chrome and system tray.
+    for filename in ('sytox-app.png', 'sytox.ico'):
+        icon_file = brand_asset(filename)
+        if icon_file.exists():
+            return QIcon(str(icon_file))
     pix=QPixmap(64,64);pix.fill(Qt.transparent)
     p=QPainter(pix);p.setRenderHint(QPainter.Antialiasing)
     p.setBrush(QColor(178,37,52));p.setPen(Qt.NoPen);p.drawRoundedRect(3,3,58,58,15,15)
@@ -1001,6 +1016,10 @@ class MainWindow(QMainWindow):
         titles.addWidget(self.chat_heading)
         th.addLayout(titles)
         th.addStretch(1)
+        header_brand = brand_banner(168)
+        if header_brand is not None:
+            th.addWidget(header_brand, 0, Qt.AlignVCenter)
+            th.addSpacing(12)
         self.focus_btn = QPushButton('Fokusmodus')
         self.focus_btn.setObjectName('panelToggle')
         self.focus_btn.setAccessibleName('Steuerzentrale ein- oder ausblenden')
@@ -1267,6 +1286,10 @@ class MainWindow(QMainWindow):
         box = QVBoxLayout(hero)
         box.setContentsMargins(32, 30, 32, 30)
         box.setSpacing(13)
+        hero_logo = brand_banner(560)
+        if hero_logo is not None:
+            box.addWidget(hero_logo)
+            box.addSpacing(7)
         eyebrow = QLabel('DEIN PERSÖNLICHER KI-WORKSPACE')
         eyebrow.setObjectName('heroEyebrow')
         box.addWidget(eyebrow)
