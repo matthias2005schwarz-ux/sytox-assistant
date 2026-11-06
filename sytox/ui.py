@@ -1046,7 +1046,8 @@ class MainWindow(QMainWindow):
         self.search = QLineEdit()
         self.search.setObjectName('chatSearch')
         self.search.setAccessibleName('Gespräche durchsuchen')
-        self.search.setPlaceholderText('Chats durchsuchen')
+        self.search.setPlaceholderText('Titel und Nachrichten suchen')
+        self.search.setToolTip('Durchsucht gespeicherte Titel und Nachrichten lokal auf diesem PC')
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.reload_chats)
         l.addWidget(self.search)
@@ -1596,11 +1597,12 @@ class MainWindow(QMainWindow):
     def reload_chats(self,*args):
         if not hasattr(self, 'chatlist') or not hasattr(self, 'projectlist'):
             return
-        search = (self.search.text() if hasattr(self, 'search') else '').lower()
+        search = (self.search.text() if hasattr(self, 'search') else '').strip().casefold()
+        content_matches = self.store.matching_chat_ids(search) if search else set()
         self.chatlist.clear()
         self.projectlist.clear()
         for chat in self.store.chats():
-            if search not in chat['title'].lower():
+            if search not in chat['title'].casefold() and chat['id'] not in content_matches:
                 continue
             project = chat['kind'] == 'project'
             widget = self.projectlist if project else self.chatlist
@@ -1615,6 +1617,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
             return
         cid = self.store.create_chat(kind='chat')
+        self.search.clear()
         self.reload_chats()
         self.select_chat(cid)
 

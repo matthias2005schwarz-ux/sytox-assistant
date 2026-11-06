@@ -111,6 +111,25 @@ class ControlPanelTests(unittest.TestCase):
         self.window.add_bubble('user', 'Meine Nachricht')
         self.assertEqual(self.window.findChildren(QPushButton, 'copyReplyButton'), [])
 
+    def test_sidebar_search_finds_message_contents_in_chats_and_projects(self):
+        chat = self.window.store.create_chat('Alltag')
+        project = self.window.store.create_chat('Mein Projekt', kind='project')
+        self.window.store.add_message(chat, 'user', 'Mein Kometenbeobachtungsplan')
+        self.window.store.add_message(project, 'assistant', 'Kometenbeobachtung vorbereiten')
+        self.window.search.setText('kometenbeobachtung')
+        self.assertEqual(self.window.chatlist.count(), 1)
+        self.assertEqual(self.window.projectlist.count(), 1)
+        self.window.search.setText('Mein Projekt')
+        self.assertEqual(self.window.chatlist.count(), 0)
+        self.assertEqual(self.window.projectlist.count(), 1)
+
+    def test_new_chat_clears_search_so_it_is_visible(self):
+        self.window.search.setText('Kein Treffer')
+        self.assertEqual(self.window.chatlist.count(), 0)
+        self.window.create_chat()
+        self.assertEqual(self.window.search.text(), '')
+        self.assertEqual(self.window.chatlist.count(), 2)
+
     def test_code_blocks_are_copied_individually_without_fences_or_explanation(self):
         self.window.add_bubble('assistant', 'Erklärung\n```python\nprint("Grüße")\n```\n'
                                'Dazwischen\n~~~js\nconsole.log(1);\n~~~')
