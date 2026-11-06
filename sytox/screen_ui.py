@@ -6,6 +6,7 @@ from .screen_panel import ScreenPanel
 from .screen_question import ScreenQuestion
 from .screen_state import ScreenState
 from .ui import MainWindow, OllamaHelpDialog
+from .screen_vision import DEFAULT_VISION_MODEL
 
 
 class ScreenMainWindow(ScreenPanel, ScreenQuestion, ScreenState, MainWindow):
@@ -48,7 +49,7 @@ class ScreenMainWindow(ScreenPanel, ScreenQuestion, ScreenState, MainWindow):
 
     def install_screen_model(self):
         """Reuse the existing consent-based local Ollama setup dialog."""
-        dialog = OllamaHelpDialog('qwen3-vl:2b', None, self)
+        dialog = OllamaHelpDialog(self.config.get('vision_model', DEFAULT_VISION_MODEL), None, self)
         dialog.exec()
 
     def exit_app(self):
