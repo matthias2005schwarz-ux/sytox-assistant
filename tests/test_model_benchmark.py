@@ -54,6 +54,7 @@ class ModelBenchmarkTests(unittest.TestCase):
             self.assertEqual(url, "http://localhost:11434/api/chat")
             self.assertEqual(kwargs["json"]["options"]["num_predict"], 96)
             self.assertTrue(kwargs["json"]["stream"])
+            self.assertIs(kwargs["allow_redirects"], False)
             self.assertNotIn("private", json.dumps(kwargs["json"]))
         self.assertIn("40 Token/s", format_benchmark(report))
         self.assertIn("keine Chat-Nutzungsgrenze", format_benchmark(report))
