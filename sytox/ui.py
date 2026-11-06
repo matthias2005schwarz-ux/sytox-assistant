@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
 from .ram_saver import keep_alive_for_config, normalized_keep_alive_seconds
+from .task_eta import task_eta
 from .model_router import select_chat_model, wants_screen
 from .screen_vision import describe_screen
 from .storage import Store,default_data_dir
@@ -2081,6 +2082,7 @@ class MainWindow(QMainWindow):
             self.parallel_chat = ParallelChatDialog(self.config, self)
             self.parallel_chat.answer_ready.connect(self._parallel_answer_ready)
             self.parallel_chat.control_requested.connect(self.handle_work_control)
+            self.parallel_chat.status_requested.connect(self.report_agent_status)
             # Reuse the same explicit, user-visible approval dialog as the Agent.
             self.parallel_chat.approval_request.connect(self.handle_approval)
         self.parallel_chat.show()
@@ -2104,11 +2106,17 @@ class MainWindow(QMainWindow):
             self._conversation_ready()
 
     def report_agent_status(self, question='', spoken=False):
+        """Answer status and ETA from live checkpoints without stopping the Agent."""
         active = bool(self.worker and self.worker.isRunning() and
                       not self.worker.stop_event.is_set())
         stopping = bool(self.worker and self.worker.isRunning() and
                         self.worker.stop_event.is_set())
-        if active:
+        intent = agent_status_intent(question)
+        if active and intent == 'eta':
+            task = next((t for t in self.store.tasks(self.chat_id)
+                         if t['status'] == 'running'), None)
+            message = task_eta(task)['text']
+        elif active:
             message = ('Der Programmierauftrag läuft weiter. Zuletzt gemeldet: '
                        + self._agent_last_status)
         elif stopping:
