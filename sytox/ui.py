@@ -1074,7 +1074,8 @@ class MainWindow(QMainWindow):
         th.addSpacing(14)
         connection = QVBoxLayout()
         connection.setSpacing(4)
-        self.model_name = QLabel(self.config['model'])
+        self.model_name = QLabel('Automatische Auswahl' if self.config.get('model_mode','auto') == 'auto'
+                                 else select_chat_model('', self.config)[0])
         self.model_name.setObjectName('muted')
         self.model_name.setAlignment(Qt.AlignRight)
         connection.addWidget(self.model_name)
@@ -1309,6 +1310,7 @@ class MainWindow(QMainWindow):
                  else self.config.get('fast_model') if route == 'fast'
                  else 'Automatische Modellauswahl')
         self.model_name.setText(label or self.config['model'])
+        self.check_model_status()
 
     def toggle_focus_mode(self, checked=None):
         """Give the conversation more room without stopping AI, voice or agent tasks."""
@@ -1880,21 +1882,25 @@ class MainWindow(QMainWindow):
         lay.addLayout(row)
         dialog.exec()
 
+    def _preferred_status_model(self):
+        """Check the model the chat will actually use for a typical new message."""
+        return select_chat_model('', self.config)[0]
+
     def check_model_status(self):
-        """Check the configured Ollama model without blocking mouse/keyboard UI."""
+        """Check the selected chat model without blocking mouse/keyboard UI."""
         if self.ollama_probe and self.ollama_probe.isRunning():
             self._probe_again = True
             return
         self.status_chip.setText('KI wird geprüft')
         self.model_status_label.setText('Verbindung wird geprüft …')
-        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.config['model'])
+        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self._preferred_status_model())
         self.ollama_probe.checked.connect(self._model_status_checked)
         self.ollama_probe.finished.connect(self._model_probe_finished)
         self.ollama_probe.start()
 
     def _model_status_checked(self, status: OllamaStatus):
         if self.ollama_probe and (self.ollama_probe.url != self.config['ollama_url'] or
-                                  self.ollama_probe.model != self.config['model']):
+                                  self.ollama_probe.model != self._preferred_status_model()):
             self._probe_again = True
         else:
             self.ollama_status = status
@@ -1915,13 +1921,15 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.check_model_status)
 
     def show_model_help(self):
-        dialog = OllamaHelpDialog(self.config['model'], self.ollama_status, self)
+        dialog = OllamaHelpDialog(self._preferred_status_model(), self.ollama_status, self)
         if dialog.exec() == QDialog.Accepted and dialog.installed_model:
-            self.config['model'] = dialog.installed_model
+            key = ('project_model' if self.config.get('model_mode') == 'project'
+                   else 'fast_model')
+            self.config[key] = dialog.installed_model
             self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2),
                                         encoding='utf-8')
-            self.model_name.setText(self.config['model'])
-            self.log('System', 'Ollama eingerichtet: ' + self.config['model'])
+            self.model_name.setText(self._preferred_status_model())
+            self.log('System', 'Ollama eingerichtet: ' + dialog.installed_model)
         self.check_model_status()
 
     def edit_settings(self):
@@ -1930,7 +1938,9 @@ class MainWindow(QMainWindow):
             self.config=dialog.values()
             self.config['model_mode'] = self.model_mode.currentData()
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
-            self.model_name.setText(self.config['model'])
+            self.model_name.setText(
+                'Automatische Auswahl' if self.config.get('model_mode') == 'auto'
+                else self._preferred_status_model())
             if self.parallel_chat is not None:
                 self.parallel_chat.config = self.config.copy()
             self.log('System','Einstellungen gespeichert.')
