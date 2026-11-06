@@ -6,7 +6,7 @@ _PROJECT = re.compile(
     r"\b(?:programmier\w*|coding|entwickl\w*|implementier\w*|debugg\w*|"
     r"kompilier\w*|refactor\w*|quellcode|sourcecode|code|skript\w*|"
     r"software|python|javascript|typescript|java|rust|github|repository|"
-    r"repo|api|bugfix|build|exe|installer|plugin|programm|anwendung)\b",
+    r"repo|api|bugfix|build|plugin)\b",
     re.IGNORECASE,
 )
 _SCREEN_SUBJECT = re.compile(
@@ -48,7 +48,17 @@ def wants_screen(question: str) -> bool:
 
 
 def is_project_request(question: str, task_mode: str = "once") -> bool:
-    return task_mode != "once" or bool(_PROJECT.search(str(question or "")))
+    """A crashing application is not automatically a software development task."""
+    if task_mode != "once":
+        return True
+    text = str(question or "")
+    if re.search(
+        r"\b(?:erstell\w*|schreib\w*|bau\w*|entwickl\w*|programmier\w*)"
+        r".{0,60}\b(?:app|anwendung|programm|installer|exe)\b",
+        text, flags=re.IGNORECASE,
+    ):
+        return True
+    return bool(_PROJECT.search(text))
 
 
 def select_chat_model(question: str, config: dict, task_mode: str = "once") -> tuple[str, str]:
