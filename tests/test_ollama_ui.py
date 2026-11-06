@@ -122,6 +122,30 @@ class OllamaQtOnboardingTests(unittest.TestCase):
                                                       'Ollama verbunden · qwen2.5-coder:7b'))
         self.assertIn('KI bereit', self.window.status_chip.text())
 
+    def test_custom_sytox_branding_and_model_status_action(self):
+        """Supplied app icon and wide in-app artwork must really render in Qt."""
+        from pathlib import Path
+        from PySide6.QtWidgets import QLabel
+        from PySide6.QtGui import QIcon
+        from sytox.ui import bundled_asset, app_icon
+        self.assertTrue(bundled_asset('sytox.ico').is_file())
+        self.assertTrue(bundled_asset('sytox_wordmark.jpg').is_file())
+        self.assertFalse(app_icon().isNull())
+        self.assertTrue(app_icon().availableSizes())
+        self.assertEqual(self.window.brand_status_btn.text(), '●  Modell prüfen')
+        self.assertIn('LOKALER WORKSPACE', [
+            l.text() for l in self.window.findChildren(QLabel)])
+        self.assertNotIn('DESKTOP AI', [
+            l.text() for l in self.window.findChildren(QLabel)])
+        self.assertFalse(self.window.topbar_wordmark.pixmap().isNull())
+        self.assertFalse(self.window.hero_wordmark.pixmap().isNull())
+        self.window._model_status_checked(OllamaStatus(
+            'ready', 'KI bereit', 'Ollama verbunden · qwen3:4b'))
+        self.assertEqual(self.window.brand_status_btn.text(), '●  KI bereit')
+        self.window._model_status_checked(OllamaStatus(
+            'offline', 'Ollama nicht erreichbar', 'Bitte Ollama starten'))
+        self.assertEqual(self.window.brand_status_btn.text(), '●  Modell prüfen')
+
     def test_dark_red_workspace_controls_and_suggestion(self):
         from PySide6.QtWidgets import QFrame
         cards = self.window.findChildren(QFrame, 'utilityCard')
