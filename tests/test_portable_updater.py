@@ -220,9 +220,10 @@ class TransactionalUpdateTests(unittest.TestCase):
              patch.object(updater.subprocess, "Popen") as popen:
             updater.schedule_portable_update(self.stage)
             args = popen.call_args.args[0]
-            self.assertEqual(Path(args[0]), self.stage / portable_update.APP_EXE)
+            self.assertEqual(Path(args[0]).resolve(),
+                             (self.stage / portable_update.APP_EXE).resolve())
             self.assertEqual(args[1], "--apply-portable-update")
-            self.assertEqual(Path(args[3]), self.target)
+            self.assertEqual(Path(args[3]).resolve(), self.target.resolve())
             self.assertEqual(args[4], str(updater.os.getpid()))
 
 
