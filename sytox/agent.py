@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import re
 import socket
 import threading
@@ -64,6 +65,29 @@ class OllamaError(RuntimeError):
     pass
 
 
+class _NonblockingResponseCleanup:
+    """Do not hang a cancelled chat on requests' response-close reader lock."""
+
+    def __init__(self, transport, was_cancelled):
+        self.transport = transport
+        self.was_cancelled = was_cancelled
+
+    def __enter__(self):
+        return self.transport.__enter__()
+
+    def __exit__(self, exc_type, exc, traceback):
+        if self.was_cancelled():
+            def close_later():
+                try:
+                    self.transport.__exit__(exc_type, exc, traceback)
+                except Exception:
+                    pass
+            threading.Thread(target=close_later,
+                             name='sytox-ollama-close', daemon=True).start()
+            return False
+        return self.transport.__exit__(exc_type, exc, traceback)
+
+
 class OllamaClient:
     # Read inactivity, not a deadline for a whole programming task.
     INTERACTIVE_READ_TIMEOUT = 45
@@ -109,6 +133,43 @@ class OllamaClient:
                 continue
         # When urllib3 does not expose a socket, rely on the configured read
         # timeout; never block the cancellation watcher on close()'s read lock.
+
+    @staticmethod
+    def _iter_lines_interruptibly(response, stop, aborted):
+        """Read streaming bytes on a daemon while the caller checks cancellation.
+
+        Windows can keep a blocking HTTP socket read alive despite shutdown().
+        The model-calling thread MUST still return promptly on user stop or
+        first-visible-token deadline. Only the model-calling thread consumes
+        these events or sends UI tokens, so cancelled results stay discarded.
+        """
+        events = queue.Queue()
+
+        def read():
+            try:
+                for line in response.iter_lines(chunk_size=1):
+                    events.put(('line', line))
+            except Exception as exc:
+                events.put(('error', exc))
+            finally:
+                events.put(('end', None))
+
+        threading.Thread(target=read, name='sytox-ollama-reader',
+                         daemon=True).start()
+        while True:
+            if stop is not None and stop.is_set():
+                raise Cancelled('Benutzer hat die lokale Modellausführung gestoppt.')
+            if aborted:
+                raise OllamaError(aborted[0])
+            try:
+                kind, item = events.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if kind == 'end':
+                return
+            if kind == 'error':
+                raise item
+            yield item
 
     @staticmethod
     def _duration(chunk, field):
@@ -176,8 +237,11 @@ class OllamaClient:
                 request_started = time.perf_counter()
                 metrics['queue_wait_s'] = request_started - started
                 timeout = (5, self.INTERACTIVE_READ_TIMEOUT) if interactive else (8, 600)
-                with requests.post(self.url + '/api/chat', json=payload, stream=True,
-                                   timeout=timeout) as response:
+                transport = requests.post(self.url + '/api/chat', json=payload, stream=True,
+                                          timeout=timeout)
+                with _NonblockingResponseCleanup(
+                        transport, lambda: bool(aborted or (
+                            stop is not None and stop.is_set()))) as response:
                     if stop is not None and stop.is_set():
                         raise Cancelled('Benutzer hat die lokale Modellausführung gestoppt.')
                     if not response.ok:
@@ -194,7 +258,10 @@ class OllamaClient:
                     terminal = None
                     # requests otherwise waits for a 512-byte block on streams
                     # without HTTP chunking, hiding the first few short tokens.
-                    for line in response.iter_lines(chunk_size=1):
+                    lines = (self._iter_lines_interruptibly(response, stop, aborted)
+                             if stop is not None or interactive
+                             else response.iter_lines(chunk_size=1))
+                    for line in lines:
                         error = interruption()
                         if error:
                             raise error
