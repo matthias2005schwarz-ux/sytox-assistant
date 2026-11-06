@@ -196,6 +196,22 @@ class TransactionalUpdateTests(unittest.TestCase):
         launch.assert_called_once()
         self.assertIn("rolled_back", (self.cache / "last_portable_update.json").read_text())
 
+    def test_app_crashes_immediately_after_smoke_test_restores_old_version(self):
+        failed_app = MagicMock()
+        failed_app.poll.return_value = 23
+        failed_app.returncode = 23
+        with patch.object(portable_update.subprocess, "run") as smoke, \
+             patch.object(portable_update, "_start",
+                          side_effect=[failed_app, MagicMock()]) as launch:
+            smoke.return_value.returncode = 0
+            with self.assertRaisesRegex(portable_update.PortableUpdateError,
+                                        "rückgängig"):
+                portable_update.apply_staged_update(
+                    self.stage, self.target, startup_grace=0.1)
+        self.assertEqual(launch.call_count, 2)
+        self.assertEqual((self.target / portable_update.APP_EXE).read_bytes(), b"MZold")
+        self.assertIn("rolled_back", (self.cache / "last_portable_update.json").read_text())
+
     def test_copy_error_restores_old_app_without_running_new_exe(self):
         with patch.object(portable_update.shutil, "copytree",
                           side_effect=OSError("disk full")), \
