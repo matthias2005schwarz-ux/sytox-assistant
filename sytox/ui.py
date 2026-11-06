@@ -2036,7 +2036,8 @@ class MainWindow(QMainWindow):
 
     def refresh_live_progress(self):
         """Read live task checkpoints; never ask the busy coding model."""
-        if not hasattr(self, 'task_meter') or not self.chat_id:
+        if (self._is_exiting or not hasattr(self, 'task_meter')
+                or not self.chat_id):
             return
         active = bool(self.worker and self.worker.isRunning())
         for widget in (self.task_meter, self.task_details, self.task_next):
