@@ -36,6 +36,36 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.environ.stop()
         self.home.cleanup()
 
+    def test_model_picker_does_not_create_a_separate_vision_chat(self):
+        from sytox.ui import SettingsDialog
+        self.assertEqual([self.window.model_mode.itemData(i) for i in range(3)],
+                         ['auto', 'fast', 'project'])
+        self.assertEqual(self.window.config['fast_model'], 'qwen3:4b')
+        self.assertEqual(self.window.config['project_model'], 'qwen3-coder:30b')
+        settings = SettingsDialog(self.window.config, self.window)
+        self.assertEqual(settings.vision_model.text(), 'qwen3-vl:4b')
+        settings.close()
+        self.window.model_mode.setCurrentIndex(2)
+        self.assertEqual(self.window.config['model_mode'], 'project')
+
+    def test_screen_request_reaches_agent_without_a_visible_vision_tab(self):
+        from sytox.ui import Worker
+        self.window.store.add_message(
+            self.window.chat_id, 'user', 'Schau auf meinen Bildschirm')
+        settings = self.window.config.copy()
+        settings['model_mode'] = 'fast'
+        worker = Worker(self.window.store, self.window.chat_id, settings)
+        received = []
+        worker.completed.connect(received.append)
+        with patch('sytox.ui.describe_screen', return_value='Datei-Explorer geöffnet') as vision, \
+             patch('sytox.ui.Agent') as agent:
+            agent.return_value.run.return_value = {'status': 'done', 'content': 'Explorer'}
+            worker.run()
+            self.assertEqual(agent.call_args.kwargs['screen_context'], 'Datei-Explorer geöffnet')
+            self.assertEqual(agent.call_args.args[1], 'qwen3:4b')
+            vision.assert_called_once()
+        self.assertEqual(received[0]['status'], 'done')
+
     def test_ram_saver_defaults_and_settings_are_persistable(self):
         from sytox.ui import SettingsDialog
         self.assertTrue(self.window.config['ram_saver_enabled'])
