@@ -4,7 +4,9 @@ import os
 import platform
 import re
 import json
+import hashlib
 import shutil
+import tempfile
 import shlex
 import subprocess
 import sys
@@ -22,13 +24,43 @@ from .extensions import Registry
 from .gmail import GmailClient
 from .pc_control import WindowsDesktop
 from .web_search import search_web, format_results
+from .project_inspect import project_overview, search_project, read_project_lines
+from .project_memory import update_project_memory, lookup_project_memory
+from .context_planner import build_context_bundle
+from .code_recovery import create_snapshot, snapshot_paths, restore_snapshot
+from .regression_planner import plan_regression_tests
 
 
 TOOLS = [
     ('list_files','List files relative to the chosen project workspace.',{'path':('string','Relative directory, e.g. .')},['path']),
+    ('project_overview','Read-only: map source files, languages, likely entry points and tests in a large project. Dependency/build folders are skipped.',
+     {'path':('string','Relative project subdirectory; use . for the full workspace')},[]),
+    ('project_memory_update','Refresh private local project file/symbol index; stores only metadata, never code content.',{},[]),
+    ('project_memory_lookup','Find likely source files and top-level symbols in saved local project index; verify the actual source before editing.',
+     {'query':('string','Feature, error, module, or symbol to locate')},['query']),
+    ('project_context_bundle','Read-only: select relevant code files from the local index, returning short, line-numbered source excerpts under a strict character budget. No files are changed.',
+     {'query':('string','Current concrete programming objective or error'),
+      'max_chars':('integer','Optional output character budget, 1500 to 22000'),
+      'max_files':('integer','Optional maximum relevant source files, 1 to 8')},['query']),
+    ('search_project','Read-only: search for a literal term across source files in the workspace, with path and line-number matches.',
+     {'query':('string','Exact phrase/function/symbol to find (case insensitive)'),'path':('string','Relative subdirectory to narrow search')},['query']),
+    ('read_file_lines','Read a specific 1-180-line window of a UTF-8 source file by line numbers.',
+     {'path':('string','Relative file path'),'start_line':('integer','First line, starting at 1'),'end_line':('integer','Last inclusive line, at most 180 lines total')},['path','start_line','end_line']),
     ('read_file','Read a UTF-8 file in the project workspace.',{'path':('string','Relative file path')},['path']),
     ('write_file','Create/replace a UTF-8 file inside the project workspace. Backups of edited files are made.',
      {'path':('string','Relative file path'),'content':('string','Complete file contents')},['path','content']),
+    ('replace_in_file','Safely replace ONE exact snippet in an existing text file. Reject absent/ambiguous snippets, backup old file, invalidate build and test receipts.',
+     {'path':('string','Relative text file in workspace'),
+      'old_text':('string','Exact unique text already in the file, without line numbers'),
+      'new_text':('string','Replacement text'),
+      'expected_sha256':('string','Optional SHA-256 of the original file, to reject concurrent changes')},['path','old_text','new_text']),
+    ('apply_patchset','Apply up to eight coordinated, exact text replacements in different existing source files. All changes are checked first; originals are backed up and restored if any write fails. Tests must be rerun.',
+     {'changes':('array','List of {path, old_text, new_text, optional expected_sha256} edits; every old_text must occur exactly once')},['changes']),
+    ('snapshot_project_files','Back up up to 16 existing project files before a risky change; save outside workspace.',
+     {'paths':('array','Relative file paths to protect before editing')},['paths']),
+    ('rollback_project_snapshot','After failed tests, restore a named snapshot of original files, only with explicit human approval; new tests are required.',
+     {'snapshot_id':('string','ID returned by snapshot_project_files')},['snapshot_id']),
+    ('suggest_regression_tests','Read-only: suggest likely existing tests for changed project files and relevant syntax checks; execute nothing.',{},[]),
     ('run_command','Execute a local development command in the project. Common test/lint commands run without approval; others require permission.',
      {'command':('string','Command to execute, e.g. python -m pytest')},['command']),
     ('project_build_plan','Read-only: show deterministic Windows project build command, expected artifact and runtime dependencies.',{},[]),
@@ -86,10 +118,20 @@ TOOLS = [
 def tool_schema():
     result=[]
     for name,desc,props,required in TOOLS:
+        parameters = {p: {'type': ty, 'description': helptext} for p,(ty,helptext) in props.items()}
+        if name == 'snapshot_project_files':
+            parameters['paths']['items'] = {'type': 'string'}
+        if name == 'apply_patchset':
+            parameters['changes']['items'] = {
+                'type': 'object', 'properties': {
+                    'path': {'type': 'string'},
+                    'old_text': {'type': 'string'},
+                    'new_text': {'type': 'string'},
+                    'expected_sha256': {'type': 'string'},
+                }, 'required': ['path', 'old_text', 'new_text'], 'additionalProperties': False}
         result.append({'type':'function','function':{
             'name':name,'description':desc,
-            'parameters':{'type':'object','properties':{
-                p:{'type':ty,'description':helptext} for p,(ty,helptext) in props.items()},
+            'parameters':{'type':'object','properties':parameters,
                 'required':required,'additionalProperties':False}}})
     return result
 
@@ -127,6 +169,7 @@ class Toolkit:
         self.passed_checks=0
         self.built_artifacts=[]  # Build receipts are invalidated after every subsequent source edit.
         self.unvalidated_paths=set()  # Relative paths changed since the last successful code check.
+        self.modified_paths=set()  # All source paths touched in this task, including validated files.
 
     def _check(self):
         if self.stop_event is not None and self.stop_event.is_set(): raise Cancelled('Gestoppt')
@@ -185,7 +228,7 @@ class Toolkit:
             # Side effects (e.g. saved files or drafts) and actual reads count toward
             # a non-coding task; coding tasks additionally need post-write validation.
             evidence_tools = {
-                'read_file', 'write_file', 'run_command', 'remember', 'browser_visit', 'web_search',
+                'read_file', 'read_file_lines', 'write_file', 'replace_in_file', 'apply_patchset', 'run_command', 'remember', 'browser_visit', 'web_search',
                 'browser_read', 'browser_click', 'browser_type', 'pc_open_app',
                 'pc_inspect_window', 'pc_click_control',
                 'pc_type_text', 'pc_hotkey', 'pc_click', 'selfdev_prepare',
@@ -194,17 +237,22 @@ class Toolkit:
                 'gmail_send',
             }
             ok_command = name == 'run_command' and outcome.startswith('Exit code: 0\n')
-            has_result = outcome not in ('', '(leer)', 'Kein Verzeichnis.')
+            has_result = outcome not in ('', '(leer)', 'Kein Verzeichnis.') and not outcome.startswith('FEHLER ')
             if name == 'web_search' and outcome.startswith('Keine Live-Suchergebnisse'):
                 has_result = False
             if ((name in evidence_tools and name != 'run_command' and has_result)
                     or ok_command or name.startswith('ext_')):
                 self.action_count += 1
                 self.has_meaningful_evidence = True
-            if name == 'write_file':
+            if name in ('write_file', 'replace_in_file', 'apply_patchset') and not outcome.startswith('FEHLER '):
                 self.built_artifacts.clear()
-                self.writes += 1
-                self.unvalidated_paths.add(str(self._path(args['path']).relative_to(self.workspace)))
+                if name == 'apply_patchset':
+                    paths = [self._path(edit['path']) for edit in args['changes']]
+                else:
+                    paths = [self._path(args['path'])]
+                self.writes += len(paths)
+                self.unvalidated_paths.update(p.relative_to(self.workspace).as_posix() for p in paths)
+                self.modified_paths.update(p.relative_to(self.workspace).as_posix() for p in paths)
             if ok_command and self._validates_pending_edits(str(args.get('command', '')), outcome):
                 self.passed_checks += 1
                 self.unvalidated_paths.clear()
@@ -231,10 +279,157 @@ class Toolkit:
             entries.append(('DIR ' if child.is_dir() else 'FILE ')+child.name)
         return '\n'.join(entries) or '(leer)'
 
+    def action_project_overview(self,path='.'):
+        return project_overview(self.workspace, path)
+
+    def action_project_memory_update(self):
+        return update_project_memory(self.workspace)
+
+    def action_project_memory_lookup(self,query):
+        return lookup_project_memory(self.workspace, query)
+
+    def action_project_context_bundle(self,query,max_chars=12000,max_files=6):
+        return build_context_bundle(self.workspace, query, max_chars=max_chars,
+                                    max_files=max_files)
+
+    def action_search_project(self,query,path='.'):
+        return search_project(self.workspace, query, path)
+
+    def action_read_file_lines(self,path,start_line=1,end_line=100):
+        return read_project_lines(self.workspace, path, start_line, end_line)
+
     def action_read_file(self,path):
         p=self._path(path)
         if p.stat().st_size > 250_000: return 'Datei ist größer als 250 KB; bitte gezielter lesen.'
         return p.read_text(encoding='utf-8',errors='replace')[:22000]
+
+    def action_suggest_regression_tests(self):
+        return plan_regression_tests(self.workspace, sorted(self.modified_paths))
+
+    def action_snapshot_project_files(self,paths):
+        snapshot_id, saved = create_snapshot(self.workspace, paths)
+        return ('Snapshot angelegt: ' + snapshot_id + '\nGeschützte Dateien: ' +
+                ', '.join(saved) + '. Keine Projektdatei geändert.')
+
+    def action_rollback_project_snapshot(self,snapshot_id):
+        selected = snapshot_paths(self.workspace, snapshot_id)
+        self._request('Projektdateien wiederherstellen?',
+                      'Snapshot: ' + snapshot_id + '\nDateien werden mit dem gespeicherten '
+                      'Vorher-Zustand überschrieben: ' + ', '.join(selected[:16]) +
+                      '\nDer aktuell vorhandene Zustand wird zusätzlich gesichert. '
+                      'Anschließend müssen alle Tests wiederholt werden.')
+        self._check()
+        restored = restore_snapshot(self.workspace, snapshot_id)
+        self.built_artifacts.clear()
+        self.unvalidated_paths.update(restored)
+        self.modified_paths.update(restored)
+        self.writes += len(restored)
+        return 'Snapshot wiederhergestellt: ' + ', '.join(restored) + '. Tests erneut ausführen.'
+
+    def action_replace_in_file(self,path,old_text,new_text,expected_sha256=''):
+        """Apply one precise edit with the same backup and atomic write as write_file."""
+        p = self._path(path)
+        if not p.is_file():
+            raise ValueError('Die Quelldatei existiert nicht.')
+        if p.stat().st_size > 900_000:
+            raise ValueError('Datei zu groß für diese Änderung.')
+        if (not isinstance(old_text, str) or not old_text
+                or not isinstance(new_text, str)):
+            raise ValueError('old_text muss nicht-leer sein, new_text muss Text sein.')
+        if len(old_text) > 25_000 or len(new_text) > 25_000:
+            raise ValueError('Bitte eine kleinere, gezielte Änderung verwenden.')
+        source_bytes = p.read_bytes()
+        if expected_sha256:
+            if (not isinstance(expected_sha256, str)
+                    or len(expected_sha256) != 64
+                    or hashlib.sha256(source_bytes).hexdigest() != expected_sha256.lower()):
+                raise ValueError('Quelldatei wurde geändert (SHA-256-Abweichung).')
+        original = source_bytes.decode('utf-8')
+        count = original.count(old_text)
+        if count != 1:
+            raise ValueError(f'Exakter Text muss genau einmal vorkommen (Treffer: {count}).')
+        updated = original.replace(old_text, new_text, 1)
+        if updated == original:
+            raise ValueError('Keine Änderung erforderlich.')
+        self.action_write_file(path, updated)
+        return (f'Gezielt geändert: {p.relative_to(self.workspace)}; '
+                'vorherige Version gesichert; erneute Tests erforderlich.')
+
+    def action_apply_patchset(self, changes):
+        """Coordinate precise multi-file edits with preflight, backups and rollback."""
+        if not isinstance(changes, list) or not 1 <= len(changes) <= 8:
+            raise ValueError('Eine Liste aus 1 bis 8 Dateiänderungen wird benötigt.')
+        prepared = []
+        seen = set()
+        total = 0
+        for change in changes:
+            if not isinstance(change, dict):
+                raise ValueError('Jede Änderung muss ein Objekt sein.')
+            raw = change.get('path')
+            old = change.get('old_text')
+            new = change.get('new_text')
+            digest = change.get('expected_sha256', '')
+            if not isinstance(raw, str) or not raw or not isinstance(old, str) or not old or not isinstance(new, str):
+                raise ValueError('Pfad sowie alter und neuer Text müssen angegeben werden.')
+            if len(old) > 25000 or len(new) > 25000:
+                raise ValueError('Textänderung zu groß.')
+            total += len(old) + len(new)
+            if total > 100000:
+                raise ValueError('Änderungspaket zu groß.')
+            # Even an in-workspace symlink must not be edited through a batch.
+            if (self.workspace / raw).is_symlink():
+                raise ValueError('Symbolische Verknüpfung als Änderungsziel ist gesperrt.')
+            p = self._path(raw)
+            if p in seen or not p.is_file() or p.is_symlink():
+                raise ValueError('Dateipfad doppelt, nicht vorhanden oder symbolisch verknüpft.')
+            seen.add(p)
+            if p.stat().st_size > 900000:
+                raise ValueError('Datei zu groß für eine Änderung.')
+            contents = p.read_bytes()
+            if digest:
+                if not isinstance(digest, str) or len(digest) != 64 or hashlib.sha256(contents).hexdigest() != digest.lower():
+                    raise ValueError('Quelldatei wurde geändert (SHA-256-Abweichung).')
+            source = contents.decode('utf-8')
+            if source.count(old) != 1:
+                raise ValueError('Exakter alter Text muss genau einmal vorkommen.')
+            revised = source.replace(old, new, 1)
+            if revised == source:
+                raise ValueError('Änderung darf nicht leer sein.')
+            prepared.append((p, contents, revised.encode('utf-8')))
+
+        # No target is changed until all edits have passed preflight.
+        backup = default_data_dir() / 'backups' / str(self.chat_id or 'unknown') / datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        staged = []
+        applied = []
+        try:
+            for p, original, updated in prepared:
+                self._check()
+                if p.read_bytes() != original:
+                    raise ValueError('Quelldatei während der Vorbereitung geändert.')
+                out = backup / p.relative_to(self.workspace)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(original)
+                # A random temporary file prevents overwriting project files.
+                with tempfile.NamedTemporaryFile(dir=p.parent, prefix='.sytox_patch_', suffix='.tmp',
+                                                  delete=False) as tmp:
+                    temp = Path(tmp.name)
+                    staged.append(temp)
+                    tmp.write(updated)
+            for (p, original, updated), temp in zip(prepared, staged):
+                self._check()
+                if p.read_bytes() != original:
+                    raise ValueError('Quelldatei vor dem Speichern geändert.')
+                temp.replace(p)
+                applied.append((p, original))
+        except Exception:
+            for p, original in reversed(applied):
+                p.write_bytes(original)
+            raise
+        finally:
+            for temp in staged:
+                temp.unlink(missing_ok=True)
+        names = ', '.join(p.relative_to(self.workspace).as_posix() for p, _, _ in prepared)
+        return f'{len(prepared)} Dateien gezielt geändert und gesichert: {names}. Erneute Tests erforderlich.'
 
     def action_write_file(self,path,content):
         p=self._path(path)

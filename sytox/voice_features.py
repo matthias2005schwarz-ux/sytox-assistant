@@ -18,9 +18,38 @@ from pathlib import Path
 
 from .storage import default_data_dir
 
+# Common Vosk spellings, including separated syllables ("sei tox").
+# Always at the START of the utterance: a TV mentioning SYTOX mid-sentence
+# must not become an assistant command.
+_WAKE_NAME = r"(?:sytox|saitox|seitox|sytoks|seitoks|sei[ -]?tox|sai[ -]?tox)"
 _WAKE_RE = re.compile(
-    r"(?:\b(?:hey|hei|he)\s+(?:sytox|saitox|seitox|sytoks|seitoks)\b|"
-    r"^\s*(?:sytox|saitox|seitox|sytoks|seitoks)\b)", re.I)
+    rf"^\s*(?:(?:hey|hei|he)\s+)?{_WAKE_NAME}\b",
+    re.I,
+)
+
+
+class VoiceCommandDeduplicator:
+    """Prevent duplicate Vosk final results from executing the same command twice.
+
+    Time-based protection only applies to identical consecutive commands.
+    This never bypasses normal tool approvals and never blocks distinct commands.
+    """
+
+    def __init__(self, seconds=1.2, clock=None):
+        self.seconds = max(0.0, min(float(seconds), 3.0))
+        self.clock = clock or time.monotonic
+        self.last_text = ""
+        self.last_at = float("-inf")
+
+    def allow(self, text):
+        phrase = ' '.join(str(text or '').casefold().split())
+        if not phrase:
+            return False
+        now = self.clock()
+        if phrase == self.last_text and now - self.last_at < self.seconds:
+            return False
+        self.last_text, self.last_at = phrase, now
+        return True
 
 
 class VoiceTurnRouter:
@@ -67,15 +96,26 @@ class VoiceTurnRouter:
 # not be sent to the assistant while its own loudspeaker is active.  An explicit
 # wake phrase (or stop command) is required by default to prevent audio echo
 # from silently launching PC actions.
-_INTERRUPT_RE = re.compile(r'^\s*(?:stopp|stop|halt|anhalten|ruhe|sei still|sytox stopp|sytox stop)\s*[.!?]*$', re.I)
+_INTERRUPT_RE = re.compile(
+    rf"^\s*(?:(?:(?:hey|hei|he)\s+)?{_WAKE_NAME}[\s,]+)?"
+    r"(?:stopp|stop|halt|anhalten|ruhe|sei still|hör auf|hoer auf|"
+    r"hör auf zu sprechen|hoer auf zu sprechen|bitte sei still)"
+    r"\s*[.!?]*$", re.I,
+)
+
+
+def fast_silence_candidate(phrase):
+    """Only explicit, standalone silence commands qualify for partial ASR stop."""
+    return bool(_INTERRUPT_RE.fullmatch(' '.join(str(phrase or '').split())))
 
 
 def interruption_command(phrase, free_listening=False):
     """Return (interrupt, next_command) while speech output is active.
 
     Empty next_command means to stop speaking and wait for a new utterance.
-    No next_command is run without a human wake phrase unless the user opted in
-    to the less conservative free-listening mode.
+    During speaker playback, even optional hands-free mode requires a wake word
+    or explicit silence command. This avoids interpreting echoed speaker text
+    as new PC-control requests; free listening resumes after playback.
     """
     text = ' '.join(str(phrase).split())
     if not text:
@@ -85,6 +125,8 @@ def interruption_command(phrase, free_listening=False):
     wake = _WAKE_RE.search(text)
     if wake:
         next_command = text[wake.end():].strip(' ,.!?')
+        if fast_silence_candidate(next_command):
+            return True, ''
         # Bare 'Sytox' must be followed by an unmistakable command or question
         # during playback. Do not interrupt for titles like 'SYTOX Webseite'.
         if not re.search(r'\b(?:hey|hei|he)\s+', wake.group(0), re.I):
@@ -94,8 +136,8 @@ def interruption_command(phrase, free_listening=False):
                 next_command):
                 return False, ''
         return True, next_command
-    if free_listening and len(text.split()) >= 3:
-        return True, text
+    # No implicit barge-in from background/echoed text during playback.
+    # The free_listening setting still applies while the speaker is silent.
     return False, ''
 
 

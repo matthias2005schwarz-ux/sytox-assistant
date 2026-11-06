@@ -42,6 +42,23 @@ QFrame#hero {{
 }}
 QLabel#brandName {{ color: #FFFFFF; font-size: 24px; font-weight: 900; }}
 QLabel#brandSubtitle {{ color: #A79CA2; font-size: 10px; font-weight: 650; }}
+QLabel#brandIcon {{ background: transparent; border: none; }}
+QLabel#brandStatusTitle {{ color: #E7D7DC; font-size: 10px; font-weight: 800;
+    letter-spacing: 1px; }}
+QPushButton#brandStatusButton {{
+    background: #1D1A1F; border: 1px solid #3D3037; border-radius: 8px;
+    color: #C2B5BB; font-size: 10px; font-weight: 760;
+    text-align: left; padding: 5px 8px; min-height: 14px;
+}}
+QPushButton#brandStatusButton:hover {{
+    border-color: #8B3948; background: #342027; color: #FFF3F5;
+}}
+QPushButton#brandStatusButton[connected="true"] {{
+    color: #9FE2BC; background: #1C2823; border-color: #315C4B;
+}}
+QLabel#topbarWordmark, QLabel#heroWordmark {{
+    background: transparent; border: none;
+}}
 QLabel#sectionTitle {{ color: #E7DBDE; font-size: 10px; font-weight: 800; }}
 QLabel#panelDescription {{ color: #A89CA0; font-size: 12px; }}
 QLabel#muted {{ color: {MUTED}; }}

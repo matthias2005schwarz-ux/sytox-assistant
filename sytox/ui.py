@@ -9,7 +9,7 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QBuffer, QIODevice
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QTextCursor, QDesktopServices, QLinearGradient, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -21,7 +21,12 @@ from PySide6.QtWidgets import (
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
-from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
+from .chat_modes import QUICK, PROJECT, FAST_MODEL, model_for_chat, is_small_project_request
+from .voice_features import (record_until, transcribe_wav, speak, render_speech_file,
+                             VoiceTurnRouter, VoiceCommandDeduplicator,
+                             interruption_command, fast_silence_candidate,
+                             download_german_voice_model, desktop_voice_intent,
+                             agent_status_intent)
 from .desktop_ui import DesktopControlDialog
 from .place_queries import place_from_message
 from .place_view import InstantStreetViewPanel
@@ -32,6 +37,26 @@ from .work_intents import work_intent
 from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
 from .ollama_installer import MODEL_CHOICES, SetupCancelled, setup_local_ollama, valid_local_endpoint
+from .screen_vision import (DEFAULT_VISION_MODEL, screen_intent, screen_followup_intent,
+                            analyze_screenshot, MAX_SCREENSHOT_BYTES)
+from .performance_monitor import measure_performance, format_performance
+from .model_benchmark import run_local_benchmark, format_benchmark
+from .model_autotune import (probe_hardware, describe_recommendation,
+                             read_local_model_size_gb)
+
+def bundled_asset(filename):
+    """Resolve read-only user-provided artwork in source and frozen Windows EXE."""
+    root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
+    return root / 'assets' / filename
+
+
+def brand_wordmark_pixmap(width, height):
+    """Use the supplied SYTOX KI graphic; never distort its aspect ratio."""
+    pixmap = QPixmap(str(bundled_asset('sytox_wordmark.jpg')))
+    if pixmap.isNull():
+        return pixmap
+    return pixmap.scaled(width, height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
 
 class BrandMark(QWidget):
     """Vector-drawn SYTOX monogram; no external image or web UI required."""
@@ -67,8 +92,7 @@ def subtle_glow(widget, color='#92303E', radius=23, opacity=135):
 
 
 def app_icon():
-    resources = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
-    icon_file = resources / 'assets' / 'sytox.ico'
+    icon_file = bundled_asset('sytox.ico')
     if icon_file.exists():
         return QIcon(str(icon_file))
     pix=QPixmap(64,64);pix.fill(Qt.transparent)
@@ -109,11 +133,57 @@ class Worker(QThread):
         try:
             a=Agent(self.store,self.settings['model'],self.settings['ollama_url'],
                     self.settings['workspace'],self.request_approval,self.log_line.emit,self.stop_event,
-                    self.settings.get('gmail_client_secrets',''))
+                    self.settings.get('gmail_client_secrets',''),
+                    self.settings.get('model_context_tokens', 0),
+                    quick_coding=self.settings.get('quick_coding', False))
             result=a.run(self.chat_id,self.mode,self.hours,self.task_id)
             self.completed.emit(result)
         except Exception as e:
             self.completed.emit({'status':'failed','content':f'{type(e).__name__}: {e}','task_id':self.task_id})
+
+
+class QuickReplyWorker(QThread):
+    """Direct local model conversation, no heavy tool-using agent loop."""
+    partial = Signal(str)
+    completed = Signal(object)
+
+    def __init__(self, store, chat_id, settings):
+        super().__init__()
+        self.store, self.chat_id, self.settings = store, chat_id, dict(settings)
+        self.stop_event = threading.Event()
+
+    def run(self):
+        try:
+            history = self.store.messages(self.chat_id, limit=16)
+            turns = [{'role': m['role'], 'content': m['content'][:5000]}
+                     for m in history[-12:] if m['role'] in ('user', 'assistant')]
+            system = {'role': 'system', 'content': (
+                'Du bist SYTOX, ein freundlicher, klarer deutschsprachiger '
+                'lokaler KI-Assistent. Antworte direkt, gut verständlich '
+                'und bei einfachen Fragen kurz. Du kannst kurze Skripte '
+                'und Codebeispiele schreiben. Du hast im Schnellchat '
+                'KEINE Datei-, Windows-, Bildschirm- oder Internetwerkzeuge. '
+                'Behaupte niemals, du hättest etwas am PC ausgeführt oder '
+                'einen Bildschirm gesehen. Echte Dateiänderungen erfolgen '
+                'nur in einem separaten kleinen Coding-Auftrag mit den '
+                'bisherigen Berechtigungsabfragen. Erfinde keine Live-Quellen.'
+            )}
+            client = OllamaClient(self.settings['ollama_url'],
+                                  self.settings['fast_model'], context_tokens=4096)
+            answer = client.chat([system] + turns, stop=self.stop_event,
+                                 on_text=self.partial.emit, think=False)
+            message = (answer.get('content') or '').strip()
+            result = {'status': 'done',
+                      'content': message or 'Keine Antwort erhalten. Prüfe dein Schnellmodell.'}
+        except Exception as exc:
+            message = str(exc)
+            if '404' in message or 'Modell' in message or 'model' in message.lower():
+                message += ('\nSchnellmodell nachinstallieren: ollama pull ' +
+                            self.settings.get('fast_model', FAST_MODEL))
+            result = {'status': 'failed',
+                      'content': 'Schnellchat: ' + type(exc).__name__ + ': ' + message}
+        self.store.add_message(self.chat_id, 'assistant', result['content'])
+        self.completed.emit(result)
 
 
 class UpdateCheckWorker(QThread):
@@ -175,6 +245,7 @@ class WakeListener(QThread):
         self.speaking_event = speaking_event if speaking_event is not None else threading.Event()
         self.allow_interruption = bool(allow_interruption)
         self.router = VoiceTurnRouter(require_wake, follow_up_seconds)
+        self.command_guard = VoiceCommandDeduplicator()
 
     def allow_follow_up(self):
         self.router.allow_follow_up()
@@ -196,31 +267,68 @@ class WakeListener(QThread):
                 except queue.Full:
                     pass
 
+            def clear_old_audio():
+                # Anything captured during TTS or mute is stale, not a new
+                # question. In particular, never forward the assistant's own
+                # spoken response back into a Windows command.
+                while True:
+                    try:
+                        audio_queue.get_nowait()
+                    except queue.Empty:
+                        break
+
             muted_before = False
             was_speaking = False
             barge_latched = False
+            partial_stop_text = ''
+            partial_stop_hits = 0
             with sd.RawInputStream(samplerate=16000, channels=1, dtype='int16',
                                    callback=on_audio, blocksize=4000):
                 while not self.stop_event.is_set():
                     speaking = self.speaking_event.is_set()
                     if self.mute_event.is_set() and not (self.allow_interruption and speaking):
                         muted_before = True
-                        while True:
-                            try: audio_queue.get_nowait()
-                            except queue.Empty: break
+                        clear_old_audio()
                         self.stop_event.wait(.06)
                         continue
                     if muted_before or (was_speaking and not speaking):
-                        recognizer.Reset()  # no fragments from a muted/previous utterance
+                        clear_old_audio()
+                        recognizer.Reset()  # discard fragments and stale TTS audio
+                        partial_stop_text = ''
+                        partial_stop_hits = 0
                         muted_before = False
                     if not speaking:
                         barge_latched = False
+                        partial_stop_text = ''
+                        partial_stop_hits = 0
                     was_speaking = speaking
                     try:
                         audio = audio_queue.get(timeout=.25)
                     except queue.Empty:
                         continue
                     if not recognizer.AcceptWaveform(audio):
+                        # During playback, recognise an explicit "Stopp" early.
+                        # Two consecutive identical Vosk partials are required,
+                        # and no partial request is EVER forwarded as an action.
+                        if speaking and not barge_latched:
+                            try:
+                                partial = json.loads(recognizer.PartialResult()).get('partial', '').strip()
+                            except (AttributeError, ValueError, TypeError):
+                                partial = ''
+                            if fast_silence_candidate(partial):
+                                if partial.casefold() == partial_stop_text:
+                                    partial_stop_hits += 1
+                                else:
+                                    partial_stop_text = partial.casefold()
+                                    partial_stop_hits = 1
+                                if partial_stop_hits >= 2:
+                                    barge_latched = True
+                                    self.router.allow_follow_up()
+                                    self.mute_event.set()
+                                    self.interrupted.emit('')
+                            else:
+                                partial_stop_text = ''
+                                partial_stop_hits = 0
                         continue
                     phrase = json.loads(recognizer.Result()).get('text', '').strip()
                     if phrase:
@@ -235,8 +343,9 @@ class WakeListener(QThread):
                             self.interrupted.emit(next_command)
                         continue
                     command = self.router.command_for(phrase)
-                    if command:
-                        # Do not capture a second command while Qt is processing this turn.
+                    if command and self.command_guard.allow(command):
+                        # Only forward new, distinct commands. Existing tool
+                        # approval and sensitive-action rules still apply.
                         self.mute_event.set()
                         self.wake_command.emit(command)
         except Exception as e:
@@ -533,6 +642,82 @@ class SpeechSynthesizer(QThread):
             self.error.emit(f'Sprachausgabe: {type(e).__name__}: {e}')
 
 
+class ScreenAnalysisWorker(QThread):
+    """One screen question, local inference only; keep raw PNG out of logs and disk."""
+    completed = Signal(int, bool, str)
+
+    def __init__(self, png, question, url, model, generation, parent=None):
+        super().__init__(parent)
+        self.png = png
+        self.question = question
+        self.url = url
+        self.model = model
+        self.generation = generation
+        self.cancel_event = threading.Event()
+
+    def run(self):
+        try:
+            answer = analyze_screenshot(self.png, self.question, self.url, self.model,
+                                        cancel=self.cancel_event)
+            if not self.cancel_event.is_set():
+                self.completed.emit(self.generation, True, answer)
+        except Exception as exc:
+            if not self.cancel_event.is_set():
+                self.completed.emit(self.generation, False,
+                                    f'{type(exc).__name__}: {exc}')
+        finally:
+            self.png = b''
+            self.question = ''
+
+
+class PerformanceWorker(QThread):
+    """Nonblocking local metrics; never uses the main GUI thread for network I/O."""
+    measured = Signal(object)
+
+    def __init__(self, base_url, model, parent=None):
+        super().__init__(parent)
+        self.base_url = base_url
+        self.model = model
+
+    def run(self):
+        try:
+            measured = measure_performance(self.base_url)
+            # Read-only local Ollama tag inspection; unavailable means unknown.
+            measured['model_size_gb'] = read_local_model_size_gb(
+                self.model, self.base_url)
+            self.measured.emit(measured)
+        except Exception:
+            self.measured.emit({})
+
+
+# Keep benchmarks alive even if their settings dialogs close during model loading.
+_ACTIVE_BENCHMARK_WORKERS = set()
+
+
+def _cancel_active_benchmarks():
+    for worker in tuple(_ACTIVE_BENCHMARK_WORKERS):
+        worker.cancel_event.set()
+
+
+class ModelBenchmarkWorker(QThread):
+    measured = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, url, model, context_tokens=0):
+        super().__init__()
+        self.url, self.model, self.context_tokens = url, model, context_tokens
+        self.cancel_event = threading.Event()
+
+    def run(self):
+        try:
+            self.measured.emit(run_local_benchmark(
+                self.url, self.model, context_tokens=self.context_tokens,
+                cancel=self.cancel_event))
+        except Exception as exc:
+            if not self.cancel_event.is_set():
+                self.failed.emit(type(exc).__name__ + ': ' + str(exc)[:350])
+
+
 class OllamaProbe(QThread):
     """Avoid freezing the Qt event loop while checking a local model server."""
     checked = Signal(object)
@@ -659,8 +844,9 @@ class OllamaHelpDialog(QDialog):
             self, 'KI lokal einrichten',
             'SYTOX wird – falls nötig – Ollama über den Windows-Paketmanager '
             'installieren und anschließend das Modell „' + self.chosen_model() + '“ laden.\n\n'
-            'Dafür werden mehrere GB freier Speicherplatz und Internet benötigt. '
-            'Die Installation kann einige Minuten dauern. Fortfahren?',
+            'Für Qwen3-Coder 30B sind etwa 19 GB Download und deutlich mehr Arbeitsspeicher '
+            '(empfohlen mindestens 32 GB RAM) erforderlich. Das Modell kann auf schwächeren PCs '
+            'sehr langsam sein. Es wird nur nach deiner Bestätigung heruntergeladen. Fortfahren?',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if answer != QMessageBox.Yes:
             return
@@ -718,6 +904,27 @@ class SettingsDialog(QDialog):
         self.original=settings.copy()
         form=QFormLayout(self)
         self.model=QLineEdit(settings['model'])
+        self.fast_model=QLineEdit(settings.get('fast_model', FAST_MODEL))
+        self.fast_model.setToolTip('Einmalig installieren: ollama pull qwen3:4b')
+        self.vision_model=QLineEdit(settings.get('vision_model', DEFAULT_VISION_MODEL))
+        self.vision_model.setToolTip('Bildmodell für Screenshots; separat über Ollama laden, z. B. ollama pull qwen3-vl:4b')
+        self.model_context=QComboBox()
+        for label, tokens in [('Automatisch (RAM-bewusst, 4K bis 32K)', 0),
+                              ('4.096 Tokens (minimaler RAM-Bedarf)', 4096),
+                              ('8.192 Tokens (weniger RAM)', 8192),
+                              ('16.384 Tokens (mehr Projektkontext)', 16384),
+                              ('32.768 Tokens (hoher RAM-Bedarf)', 32768)]:
+            self.model_context.addItem(label, tokens)
+        index=self.model_context.findData(settings.get('model_context_tokens', 0))
+        self.model_context.setCurrentIndex(max(0,index))
+        self.hardware_preview = QLabel('Automatische Hardware-Empfehlung wird ermittelt …')
+        self.hardware_preview.setWordWrap(True)
+        self.hardware_preview.setObjectName('panelDescription')
+        # Only synchronous RAM inspection (no process spawn or network in GUI thread).
+        self._hardware_snapshot = probe_hardware(which=lambda _name: None)
+        self.model.textChanged.connect(self._update_hardware_preview)
+        self.model_context.currentIndexChanged.connect(self._update_hardware_preview)
+        self._update_hardware_preview()
         self.url=QLineEdit(settings['ollama_url'])
         self.folder=QLineEdit(settings['workspace'])
         choose=QPushButton('…');choose.setMaximumWidth(38)
@@ -755,7 +962,11 @@ class SettingsDialog(QDialog):
         self.follow_up.setRange(5,90)
         self.follow_up.setSuffix(' Sekunden')
         self.follow_up.setValue(int(settings.get('voice_followup_seconds',25)))
-        form.addRow('Ollama-Modell',self.model)
+        form.addRow('Qwen-Projekte (großes Modell)',self.model)
+        form.addRow('Schnellchat (kleines Modell)',self.fast_model)
+        form.addRow('Bildschirmhilfe (Bildmodell)',self.vision_model)
+        form.addRow('Kontextgröße',self.model_context)
+        form.addRow('RAM-/Modell-Empfehlung',self.hardware_preview)
         form.addRow('Ollama-Adresse',self.url)
         form.addRow('Projektordner',row)
         form.addRow('Vosk-Modellordner (Deutsch)',self.vosk)
@@ -773,8 +984,82 @@ class SettingsDialog(QDialog):
         form.addRow('Gmail OAuth-Desktop-Client JSON',self.gmail)
         check=QPushButton('Ollama-Verbindung testen')
         check.clicked.connect(self.check_ollama);form.addRow('',check)
+        self.benchmark_worker = None
+        self.benchmark_button = QPushButton('Lokalen KI-Benchmark starten')
+        self.benchmark_button.setToolTip('Zwei kurze Aufgaben · lokales Ollama · kein Download oder Chat-Limit')
+        self.benchmark_button.clicked.connect(self.start_benchmark)
+        self.benchmark_cancel_button = QPushButton('Abbrechen')
+        self.benchmark_cancel_button.setEnabled(False)
+        self.benchmark_cancel_button.clicked.connect(self.cancel_benchmark)
+        bench_row = QHBoxLayout()
+        bench_row.addWidget(self.benchmark_button)
+        bench_row.addWidget(self.benchmark_cancel_button)
+        form.addRow('Modellgeschwindigkeit', bench_row)
+        self.benchmark_status = QLabel('Noch nicht gemessen · Benchmark läuft nur auf deinem PC')
+        self.benchmark_status.setWordWrap(True)
+        self.benchmark_status.setObjectName('panelDescription')
+        form.addRow('', self.benchmark_status)
         save=QPushButton('Speichern');save.setObjectName('primary')
         save.clicked.connect(self.validate_and_save);form.addRow('',save)
+
+    def start_benchmark(self):
+        if any(worker.isRunning() for worker in tuple(_ACTIVE_BENCHMARK_WORKERS)):
+            self.benchmark_status.setText('Ein lokaler Benchmark läuft bereits.')
+            return
+        worker = ModelBenchmarkWorker(self.url.text().strip(),
+                                      self.model.text().strip(),
+                                      self.model_context.currentData())
+        self.benchmark_worker = worker
+        _ACTIVE_BENCHMARK_WORKERS.add(worker)
+        worker.measured.connect(self._benchmark_measured)
+        worker.failed.connect(self._benchmark_failed)
+        worker.finished.connect(self._benchmark_finished)
+        worker.finished.connect(lambda: _ACTIVE_BENCHMARK_WORKERS.discard(worker))
+        app = QApplication.instance()
+        if app is not None and not getattr(app, '_sytox_benchmark_shutdown_hooked', False):
+            app.aboutToQuit.connect(_cancel_active_benchmarks)
+            app._sytox_benchmark_shutdown_hooked = True
+        self.benchmark_button.setEnabled(False)
+        self.benchmark_cancel_button.setEnabled(True)
+        self.benchmark_status.setText('Lokaler Benchmark läuft – zwei kurze Testaufgaben …')
+        worker.start()
+
+    def cancel_benchmark(self):
+        if self.benchmark_worker is not None:
+            self.benchmark_worker.cancel_event.set()
+            self.benchmark_cancel_button.setEnabled(False)
+            self.benchmark_status.setText('Abbruch angefordert. Laufende Anfrage kann noch auslaufen.')
+
+    def _benchmark_measured(self, report):
+        speed = report.get('median_tokens_per_second')
+        ttft = report.get('median_first_token_seconds')
+        self.benchmark_status.setText(
+            'Gemessen: ' + (str(speed) if speed is not None else 'n/a') +
+            ' Token/s · Antwortbeginn ' + (str(ttft) if ttft is not None else 'n/a') + ' s')
+        if self.isVisible():
+            QMessageBox.information(self, 'SYTOX · Lokaler KI-Benchmark',
+                                    format_benchmark(report))
+
+    def _benchmark_failed(self, message):
+        self.benchmark_status.setText('Benchmark fehlgeschlagen: ' + message[:230])
+
+    def _benchmark_finished(self):
+        self.benchmark_button.setEnabled(True)
+        self.benchmark_cancel_button.setEnabled(False)
+        self.benchmark_worker = None
+
+    def reject(self):
+        self.cancel_benchmark()
+        super().reject()
+
+    def closeEvent(self, event):
+        self.cancel_benchmark()
+        super().closeEvent(event)
+
+    def _update_hardware_preview(self, *_args):
+        self.hardware_preview.setText(describe_recommendation(
+            self.model.text().strip(), self._hardware_snapshot,
+            manual_context=self.model_context.currentData()))
 
     def validate_and_save(self):
         if self.speech_engine.currentData()=='edge' and not self.edge_consent.isChecked():
@@ -787,6 +1072,7 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self,'Piper',
                                 'Bitte eine existierende Piper-EXE und ein Stimmenmodell (.onnx) auswählen.')
             return
+        self.cancel_benchmark()
         self.accept()
 
     def browse_workspace(self):
@@ -804,7 +1090,11 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, status.title, message)
 
     def values(self):
-        return {'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
+        return {'model':self.model.text().strip(),
+                'fast_model':self.fast_model.text().strip(),
+                'ollama_url':self.url.text().strip(),
+                'model_context_tokens':self.model_context.currentData(),
+                'vision_model':self.vision_model.text().strip(),
                 'workspace':self.folder.text().strip(), 'vosk_model':self.vosk.text().strip(),
                 'piper_exe':self.piperexe.text().strip(),'piper_model':self.pipermodel.text().strip(),
                 'voice_enabled':self.voice.isChecked(),
@@ -827,6 +1117,8 @@ class MainWindow(QMainWindow):
         self.config_path=default_data_dir()/'settings.json'
         self.config=self.load_settings()
         self.chat_id=None;self.worker=None;self.recorder=None;self.listener=None;self.speakers=[]
+        self._quick_stream_label = None
+        self._quick_stream_text = ''
         self.voice_muted=threading.Event()
         self.voice_speaking=threading.Event()
         self.voice_jobs=[]
@@ -854,10 +1146,20 @@ class MainWindow(QMainWindow):
         self.ollama_status=None
         self.ollama_probe=None
         self._probe_again=False
+        self.screen_enabled=False
+        self.screen_generation=0
+        self.screen_worker=None
+        self.screen_analysis_chat_id=None
+        self.performance_worker=None
+        self.performance_timer=QTimer(self)
+        self.performance_timer.setInterval(12000)
+        self.performance_timer.timeout.connect(self.check_performance)
         self.setWindowTitle('SYTOX Assistant · Dein KI-Workspace')
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
         self.build_ui();self.setup_tray();self.reload_chats()
+        self.performance_timer.start()
+        QTimer.singleShot(1900, self.check_performance)
         if self.chatlist.count()==0:self.create_chat()
         else:self.select_chat(self.chatlist.item(0).data(Qt.UserRole))
         self.log('System','Bereit. Lokale Daten: '+str(default_data_dir()))
@@ -869,7 +1171,10 @@ class MainWindow(QMainWindow):
 
     def load_settings(self):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
-        settings={'model':'qwen2.5-coder:7b','ollama_url':'http://localhost:11434',
+        settings={'model':'qwen3-coder:30b','fast_model':FAST_MODEL,
+                   'ollama_url':'http://localhost:11434',
+                  'model_context_tokens':0,
+                  'vision_model':DEFAULT_VISION_MODEL,
                   'workspace':str(base/'projects'/'default'),'vosk_model':'',
                   'piper_exe':'','piper_model':'','voice_enabled':False,
                   'speech_engine':'windows','edge_voice':'de-DE-KatjaNeural','edge_rate':'+8%',
@@ -896,7 +1201,7 @@ class MainWindow(QMainWindow):
         self.splitter = splitter
         layout.addWidget(splitter)
 
-        # Left: simple navigation, with a distinctive native vector brand.
+        # Left: user-provided metallic app icon + functional local model status.
         left = QFrame()
         left.setObjectName('sidebar')
         self.navigation_panel = left
@@ -905,28 +1210,41 @@ class MainWindow(QMainWindow):
         l.setContentsMargins(14, 23, 14, 17)
         l.setSpacing(9)
         identity = QHBoxLayout()
-        identity.setSpacing(11)
-        mark = BrandMark()
-        subtle_glow(mark)
-        identity.addWidget(mark)
-        names = QVBoxLayout()
-        names.setSpacing(1)
-        title = QLabel('SYTOX')
-        title.setObjectName('brandName')
-        names.addWidget(title)
-        subtitle = QLabel('DESKTOP AI')
-        subtitle.setObjectName('brandSubtitle')
-        names.addWidget(subtitle)
-        identity.addLayout(names)
-        identity.addStretch(1)
+        identity.setSpacing(12)
+        self.brand_app_icon = QLabel()
+        self.brand_app_icon.setObjectName('brandIcon')
+        self.brand_app_icon.setFixedSize(54, 54)
+        self.brand_app_icon.setAlignment(Qt.AlignCenter)
+        self.brand_app_icon.setPixmap(app_icon().pixmap(QSize(50, 50)))
+        subtle_glow(self.brand_app_icon, color='#A72A39', radius=17, opacity=85)
+        identity.addWidget(self.brand_app_icon)
+        details = QVBoxLayout()
+        details.setSpacing(4)
+        brand_title = QLabel('LOKALER WORKSPACE')
+        brand_title.setObjectName('brandStatusTitle')
+        details.addWidget(brand_title)
+        self.brand_status_btn = QPushButton('●  Modell prüfen')
+        self.brand_status_btn.setObjectName('brandStatusButton')
+        self.brand_status_btn.setAccessibleName('KI-Modellstatus prüfen und Modell einrichten')
+        self.brand_status_btn.setToolTip('Lokales KI-Modell prüfen und bei Bedarf einrichten')
+        self.brand_status_btn.clicked.connect(self.show_model_help)
+        details.addWidget(self.brand_status_btn)
+        identity.addLayout(details, 1)
         l.addLayout(identity)
-        l.addSpacing(21)
-        btn_new = QPushButton('+  Neuer Chat')
-        btn_new.setObjectName('primary')
-        btn_new.clicked.connect(self.create_chat)
-        btn_new.setMinimumHeight(44)
-        l.addWidget(btn_new)
-        l.addSpacing(7)
+        l.addSpacing(18)
+        self.btn_quick = QPushButton('⚡  Neuer Schnellchat')
+        self.btn_quick.setObjectName('primary')
+        self.btn_quick.setToolTip('Schnelle Gespräche, Sprachfragen und kurze Skripte')
+        self.btn_quick.clicked.connect(lambda: self.create_chat(QUICK))
+        self.btn_quick.setMinimumHeight(44)
+        l.addWidget(self.btn_quick)
+        self.btn_project = QPushButton('◆  Neues Qwen-Projekt')
+        self.btn_project.setObjectName('subtle')
+        self.btn_project.setToolTip('Aufwendige Projekte mit Qwen3-Coder 30B')
+        self.btn_project.clicked.connect(lambda: self.create_chat(PROJECT))
+        self.btn_project.setMinimumHeight(43)
+        l.addWidget(self.btn_project)
+        l.addSpacing(4)
         self.search = QLineEdit()
         self.search.setObjectName('chatSearch')
         self.search.setAccessibleName('Gespräche durchsuchen')
@@ -975,7 +1293,18 @@ class MainWindow(QMainWindow):
         top = QFrame()
         top.setObjectName('topbar')
         th = QHBoxLayout(top)
-        th.setContentsMargins(24, 14, 24, 14)
+        th.setContentsMargins(19, 11, 20, 11)
+        self.topbar_wordmark = QLabel()
+        self.topbar_wordmark.setObjectName('topbarWordmark')
+        self.topbar_wordmark.setAlignment(Qt.AlignCenter)
+        self.topbar_wordmark.setFixedSize(148, 51)
+        top_logo = brand_wordmark_pixmap(148, 51)
+        if not top_logo.isNull():
+            self.topbar_wordmark.setPixmap(top_logo)
+        else:
+            self.topbar_wordmark.setText('SYTOX')
+        th.addWidget(self.topbar_wordmark, 0, Qt.AlignVCenter)
+        th.addSpacing(9)
         titles = QVBoxLayout()
         titles.setSpacing(2)
         breadcrumb = QLabel('WORKSPACE  /  KONVERSATION')
@@ -986,6 +1315,10 @@ class MainWindow(QMainWindow):
         titles.addWidget(self.chat_heading)
         th.addLayout(titles)
         th.addStretch(1)
+        self.screen_active_chip = QLabel('Bildschirm aus')
+        self.screen_active_chip.setObjectName('statusChip')
+        self.screen_active_chip.setToolTip('Bei freigegebener Bildschirmhilfe erscheint hier ein deutlicher Hinweis.')
+        th.addWidget(self.screen_active_chip, 0, Qt.AlignVCenter)
         self.focus_btn = QPushButton('☰')
         self.focus_btn.setObjectName('panelToggle')
         self.focus_btn.setAccessibleName('Rechte Leiste mit Steuerzentrale und Street View öffnen oder schließen')
@@ -1171,6 +1504,40 @@ class MainWindow(QMainWindow):
         voice.addWidget(diagnostics_button)
         r.addWidget(voice_card)
 
+        screen_card, screen = new_card()
+        label = QLabel('BILDSCHIRMHILFE')
+        label.setObjectName('sectionTitle')
+        screen.addWidget(label)
+        self.screen_state = QLabel('Aus · kein Bildschirmzugriff')
+        self.screen_state.setObjectName('panelDescription')
+        self.screen_state.setWordWrap(True)
+        screen.addWidget(self.screen_state)
+        self.screen_enable_btn = QPushButton('Bildschirmfreigabe starten')
+        self.screen_enable_btn.clicked.connect(lambda: self.enable_screen())
+        screen.addWidget(self.screen_enable_btn)
+        self.screen_analyze_btn = QPushButton('Jetzt Screenshot analysieren')
+        self.screen_analyze_btn.setEnabled(False)
+        self.screen_analyze_btn.clicked.connect(lambda: self.analyze_screen('Was ist hier zu sehen, und welche Fehlermeldungen oder nächsten Schritte erkennst du?'))
+        screen.addWidget(self.screen_analyze_btn)
+        self.screen_stop_btn = QPushButton('Bildschirmfreigabe beenden')
+        self.screen_stop_btn.setEnabled(False)
+        self.screen_stop_btn.clicked.connect(self.disable_screen)
+        screen.addWidget(self.screen_stop_btn)
+        r.addWidget(screen_card)
+
+        performance_card, performance = new_card()
+        perf_title = QLabel('LEISTUNGSZENTRALE')
+        perf_title.setObjectName('sectionTitle')
+        performance.addWidget(perf_title)
+        self.performance_info = QLabel('CPU/RAM/Ollama werden lokal geprüft …')
+        self.performance_info.setObjectName('panelDescription')
+        self.performance_info.setWordWrap(True)
+        performance.addWidget(self.performance_info)
+        refresh_perf = QPushButton('Leistungsdaten aktualisieren')
+        refresh_perf.clicked.connect(lambda: self.check_performance(force=True))
+        performance.addWidget(refresh_perf)
+        r.addWidget(performance_card)
+
         activity_card, activity = new_card()
         logs_title = QLabel('AKTIVITÄTEN')
         logs_title.setObjectName('sectionTitle')
@@ -1271,8 +1638,15 @@ class MainWindow(QMainWindow):
         hero.setObjectName('hero')
         hero.setMaximumWidth(670)
         box = QVBoxLayout(hero)
-        box.setContentsMargins(32, 30, 32, 30)
+        box.setContentsMargins(29, 25, 29, 30)
         box.setSpacing(13)
+        self.hero_wordmark = QLabel()
+        self.hero_wordmark.setObjectName('heroWordmark')
+        self.hero_wordmark.setAlignment(Qt.AlignCenter)
+        large_logo = brand_wordmark_pixmap(545, 183)
+        if not large_logo.isNull():
+            self.hero_wordmark.setPixmap(large_logo)
+            box.addWidget(self.hero_wordmark)
         eyebrow = QLabel('DEIN PERSÖNLICHER KI-WORKSPACE')
         eyebrow.setObjectName('heroEyebrow')
         box.addWidget(eyebrow)
@@ -1327,6 +1701,9 @@ class MainWindow(QMainWindow):
         # Closing the window should NOT shut down the assistant. Exit through
         # the tray menu (or Windows session shutdown) to quit the background app.
         if self.tray and not self._is_exiting:
+            # Closing into the tray ends visual access; no hidden screenshot session.
+            if self.screen_enabled:
+                self.disable_screen()
             self.hide()
             event.ignore()
             return
@@ -1353,6 +1730,18 @@ class MainWindow(QMainWindow):
             if not self.voice_download.wait(6000):
                 QMessageBox.information(self,'Sprachmodell',
                     'Der Download wird noch beendet. Bitte gleich erneut versuchen.')
+                return
+        self.disable_screen()
+        self.performance_timer.stop()
+        if self.performance_worker and self.performance_worker.isRunning():
+            if not self.performance_worker.wait(5500):
+                QMessageBox.information(self, 'Leistungszentrale',
+                    'Hardwaremessung wird noch beendet. Bitte gleich erneut versuchen.')
+                return
+        if self.screen_worker and self.screen_worker.isRunning():
+            if not self.screen_worker.wait(2500):
+                QMessageBox.information(self, 'Bildschirmhilfe',
+                    'Lokale Bildanalyse wird beendet. Bitte gleich erneut versuchen.')
                 return
         self.stop_speech()
         if self.parallel_chat and not self.parallel_chat.stop_reply():
@@ -1383,23 +1772,51 @@ class MainWindow(QMainWindow):
         self.chatlist.clear()
         for chat in self.store.chats():
             if search not in chat['title'].lower():continue
-            it=QListWidgetItem(chat['title']);it.setData(Qt.UserRole,chat['id'])
+            marker = '⚡ ' if chat.get('mode') == QUICK else '◆ '
+            it=QListWidgetItem(marker + chat['title'])
+            it.setToolTip('Schnellchat · kleines Modell' if chat.get('mode') == QUICK
+                          else 'Qwen-Projekt · 30B-Modell')
+            it.setData(Qt.UserRole,chat['id'])
             self.chatlist.addItem(it)
             if chat['id']==self.chat_id:self.chatlist.setCurrentItem(it)
 
-    def create_chat(self):
+    def create_chat(self, mode=QUICK):
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self,'Auftrag läuft','Bitte erst den laufenden Auftrag stoppen.')
             return
-        cid=self.store.create_chat();self.reload_chats();self.select_chat(cid)
+        if mode not in (QUICK, PROJECT):
+            mode = QUICK
+        cid=self.store.create_chat('Neuer Schnellchat' if mode == QUICK
+                                  else 'Neues Qwen-Projekt', mode=mode)
+        self.reload_chats()
+        self.select_chat(cid)
+
+    def current_chat_mode(self):
+        return self.store.chat_mode(self.chat_id) if self.chat_id else QUICK
+
+    def current_chat_model(self):
+        return model_for_chat(self.current_chat_mode(), self.config)
 
     def select_chat(self,cid):
         if self.worker and self.worker.isRunning() and cid!=self.chat_id:
             QMessageBox.information(self,'Auftrag läuft','Während der Ausführung kann der Chat nicht gewechselt werden.')
             return
+        if self.screen_enabled and self.chat_id is not None and cid != self.chat_id:
+            self.disable_screen()
         self.chat_id=cid
         current=next((c for c in self.store.chats() if c['id']==cid),None)
         self.chat_heading.setText(current['title'] if current else 'Chat')
+        self.model_name.setText(self.current_chat_model())
+        if self.current_chat_mode() == QUICK:
+            self.mode.setCurrentIndex(0)
+            self.mode.setEnabled(False)
+            self.mode.setToolTip('Schnellchat: direkte Antworten und kleine Coding-Aufträge')
+            self.state.setText('⚡ Schnellchat · Sprechen, Bildschirm, kleiner Code')
+        else:
+            self.mode.setEnabled(True)
+            self.mode.setToolTip('Qwen-Projekt: Einmal, Zeitmodus oder bis fertig')
+            self.state.setText('◆ Qwen-Projekt · aufwendige Aufgaben')
+        self.check_model_status()
         self.reload_chats();self.clear_bubbles()
         messages = self.store.messages(cid)
         if not messages:
@@ -1469,6 +1886,7 @@ class MainWindow(QMainWindow):
             self._animate_appearance(row, 200)
         QTimer.singleShot(100, lambda: self.scroll.verticalScrollBar().setValue(
             self.scroll.verticalScrollBar().maximum()))
+        return label
 
     def log(self,kind,text):
         self.logs.appendPlainText(f'{kind}: {text}')
@@ -1476,9 +1894,135 @@ class MainWindow(QMainWindow):
             self._agent_last_status = str(text)[:130]
             self.state.setText(('● ' if kind=='Status' else '◆ ')+str(text)[:80])
 
+    def _screen_state_changed(self):
+        if not self.screen_enabled:
+            self.screen_state.setText('Aus · kein Bildschirmzugriff')
+            self.screen_active_chip.setText('Bildschirm aus')
+            self.screen_active_chip.setStyleSheet('color:#A5ABB4;background:transparent;')
+        else:
+            self.screen_state.setText('AKTIV · Hauptbildschirm wird nur auf Nachfrage erfasst')
+            self.screen_active_chip.setText('● Bildschirmfreigabe aktiv')
+            self.screen_active_chip.setStyleSheet('color:#FFE7E7;background:#6B1823;'
+                                                 'border:1px solid #E44B56;'
+                                                 'border-radius:9px;padding:5px 8px;')
+        self.screen_enable_btn.setEnabled(not self.screen_enabled)
+        self.screen_analyze_btn.setEnabled(self.screen_enabled)
+        self.screen_stop_btn.setEnabled(self.screen_enabled)
+
+    def enable_screen(self, question='', spoken=False):
+        """Enable only after a visible human confirmation; never start at boot."""
+        if not self.screen_enabled:
+            model = self.config.get('vision_model', DEFAULT_VISION_MODEL)
+            if QMessageBox.question(
+                self, 'Bildschirmfreigabe für SYTOX',
+                'SYTOX darf auf deinen ausdrücklichen Wunsch einen Screenshot des '
+                'Hauptbildschirms an das lokale Bildmodell „' + model + '“ schicken.\n\n'
+                'Screenshots werden weder gespeichert noch protokolliert. '
+                'Bei jeder Bildschirmfrage wird ein neues Einzelbild erstellt. '
+                'Deaktiviere die Freigabe jederzeit per Button oder Sprachbefehl.\n\n'
+                'Bitte schließe zuvor Passwörter, private Nachrichten und andere '
+                'vertrauliche Inhalte. Jetzt freigeben?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            ) != QMessageBox.Yes:
+                self.log('Bildschirm', 'Freigabe abgelehnt.')
+                return
+            self.screen_enabled = True
+            self.screen_generation += 1
+            self._screen_state_changed()
+            self.log('Bildschirm', 'Freigabe aktiv. Kein automatischer Dauerstream.')
+        if question:
+            self.analyze_screen(question, spoken=spoken)
+
+    def disable_screen(self, spoken=False):
+        """Revoke permission immediately; invalidate all pending result callbacks."""
+        self.screen_enabled = False
+        self.screen_generation += 1
+        if self.screen_worker and self.screen_worker.isRunning():
+            self.screen_worker.cancel_event.set()
+        self._screen_state_changed()
+        self.log('Bildschirm', 'Freigabe aus. Ausstehende Auswertung verworfen.')
+        if spoken and self.listener and self.listener.isRunning():
+            self.start_speech('Okay, ich schaue nicht mehr auf deinen Bildschirm.')
+
+    def analyze_screen(self, question, spoken=False):
+        """Capture on Qt GUI thread; ship bytes directly to the local worker."""
+        if not self.screen_enabled:
+            return
+        if self.screen_worker and self.screen_worker.isRunning():
+            self.log('Bildschirm', 'Eine Analyse läuft bereits. Bitte kurz warten.')
+            return
+        try:
+            from PySide6.QtGui import QGuiApplication
+            screen = QGuiApplication.primaryScreen()
+            if screen is None:
+                raise RuntimeError('Kein aktiver Hauptbildschirm verfügbar.')
+            pixmap = screen.grabWindow(0)
+            if pixmap.isNull():
+                raise RuntimeError('Bildschirmaufnahme fehlgeschlagen.')
+            if pixmap.width() > 2048:
+                pixmap = pixmap.scaledToWidth(2048, Qt.SmoothTransformation)
+            buffer = QBuffer()
+            if not buffer.open(QIODevice.WriteOnly):
+                raise RuntimeError('Screenshot-Speicher nicht verfügbar.')
+            if not pixmap.save(buffer, 'PNG'):
+                raise RuntimeError('Screenshot konnte nicht als PNG verarbeitet werden.')
+            png = bytes(buffer.data())
+            buffer.close()
+            if len(png) > MAX_SCREENSHOT_BYTES:
+                raise RuntimeError('Screenshot ist zu groß. Bitte Bildschirmauflösung reduzieren.')
+        except Exception as exc:
+            self.log('Bildschirm', str(exc))
+            QMessageBox.warning(self, 'Bildschirmhilfe', str(exc))
+            return
+        generation = self.screen_generation
+        self.screen_analysis_chat_id = self.chat_id
+        self.screen_state.setText('AKTIV · lokales Bildmodell analysiert Einzelbild …')
+        worker = ScreenAnalysisWorker(png, question, self.config['ollama_url'],
+                                      self.config.get('vision_model', DEFAULT_VISION_MODEL),
+                                      generation, self)
+        self.screen_worker = worker
+        worker.completed.connect(self._screen_analysis_completed)
+        worker.finished.connect(lambda w=worker: self._screen_analysis_finished(w))
+        worker.start()
+
+    def _screen_analysis_completed(self, generation, success, message):
+        if (not self.screen_enabled or generation != self.screen_generation or
+                self.screen_analysis_chat_id != self.chat_id):
+            return
+        if success:
+            # Deliberately do not save screen-derived text to the chat DB.
+            self.add_bubble('assistant', 'BILDSCHIRMHILFE · nicht gespeichert\n' + message)
+            if self.listener and self.listener.isRunning():
+                self.start_speech(message)
+        else:
+            self.log('Bildschirm', 'Lokale Bildanalyse fehlgeschlagen.')
+            self.add_bubble('assistant', 'Bildschirmanalyse fehlgeschlagen: ' + message +
+                            '\nBildmodell installieren, z. B. ollama pull ' +
+                            self.config.get('vision_model', DEFAULT_VISION_MODEL))
+        self._screen_state_changed()
+
+    def _screen_analysis_finished(self, worker):
+        if self.screen_worker is worker:
+            self.screen_worker = None
+        worker.deleteLater()
+        self._screen_state_changed()
+
     def send(self):
         txt=self.input.toPlainText().strip()
         if not txt:return
+        screen_action = screen_intent(txt)
+        if screen_action == 'disable':
+            self.input.clear()
+            self.disable_screen()
+            return
+        if screen_action == 'enable':
+            self.input.clear()
+            self.enable_screen(txt)
+            return
+        if self.screen_enabled and screen_followup_intent(txt):
+            self.input.clear()
+            self.analyze_screen(txt)
+            return
         intent = work_intent(txt)
         self.offer_place_if_relevant(txt)
         if intent:
@@ -1508,7 +2052,34 @@ class MainWindow(QMainWindow):
             hours=max(.02,min(float(duration.group(1).replace(',','.')),24.0))
             mode='timed'
         if re.search(r'\bbis (?:es |alles )?fertig\b',txt.lower()):mode='until_done'
-        self.start_worker(mode,hours)
+        if self.current_chat_mode() == QUICK:
+            if is_small_project_request(txt):
+                self.start_worker('once', 1.0)
+            else:
+                self.start_quick_reply()
+        else:
+            self.start_worker(mode,hours)
+
+    def start_quick_reply(self):
+        self.voice_muted.set()
+        self._quick_stream_text = ''
+        self._quick_stream_label = self.add_bubble('assistant', 'Antwort wird erstellt …')
+        settings = self.config.copy()
+        settings['fast_model'] = self.current_chat_model()
+        self.worker = QuickReplyWorker(self.store, self.chat_id, settings)
+        self.worker.partial.connect(self._quick_partial)
+        self.worker.completed.connect(self.worker_done)
+        self.stopbtn.setEnabled(True)
+        self.send_btn.setEnabled(True)
+        self.task_state.setText('⚡ Schnellchat · Antwort wird generiert …')
+        self.worker.start()
+
+    def _quick_partial(self, chunk):
+        if self._quick_stream_label is not None:
+            self._quick_stream_text += str(chunk)
+            self._quick_stream_label.setText(self._quick_stream_text[-25000:])
+
+
 
     def start_worker(self,mode='once',hours=1.0,task_id=None):
         # The Agent runs in its own thread. Listening for follow-up questions
@@ -1518,7 +2089,12 @@ class MainWindow(QMainWindow):
         else:
             self.voice_muted.set()
         self._agent_last_status='Auftrag gestartet; noch kein konkreter Fortschritt gemeldet.'
-        self.worker=Worker(self.store,self.chat_id,self.config.copy(),mode,hours,task_id)
+        worker_settings=self.config.copy()
+        worker_settings['model'] = self.current_chat_model()
+        if self.current_chat_mode() == QUICK:
+            worker_settings['model_context_tokens'] = 4096
+            worker_settings['quick_coding'] = True
+        self.worker=Worker(self.store,self.chat_id,worker_settings,mode,hours,task_id)
         self.worker.log_line.connect(self.log)
         self.worker.approval_request.connect(self.handle_approval)
         self.worker.completed.connect(self.worker_done)
@@ -1610,7 +2186,12 @@ class MainWindow(QMainWindow):
         self.stopbtn.setEnabled(False);self.send_btn.setEnabled(True)
         self.task_state.setText(result.get('status','unknown'))
         answer = result.get('content','')
-        self.add_bubble('assistant',answer)
+        if isinstance(self.worker, QuickReplyWorker) and self._quick_stream_label is not None:
+            self._quick_stream_label.setText(answer)
+            self._quick_stream_label = None
+            self._quick_stream_text = ''
+        else:
+            self.add_bubble('assistant',answer)
         self.log('Status','Aufgabe: '+result.get('status','unbekannt'))
         if result.get('status')=='failed' and ('Ollama' in answer or 'Modell' in answer):
             self.check_model_status()
@@ -1793,31 +2374,63 @@ class MainWindow(QMainWindow):
         lay.addLayout(row)
         dialog.exec()
 
+    def check_performance(self, force=False):
+        if not force and not self.isVisible():
+            return
+        if self.performance_worker and self.performance_worker.isRunning():
+            return
+        worker = PerformanceWorker(self.config.get('ollama_url', 'http://localhost:11434'),
+                                   self.current_chat_model(), self)
+        self.performance_worker = worker
+        worker.measured.connect(self._performance_measured)
+        worker.finished.connect(lambda w=worker: self._performance_finished(w))
+        worker.start()
+
+    def _performance_measured(self, result):
+        recommendation = describe_recommendation(
+            self.current_chat_model(), result,
+            manual_context=self.config.get('model_context_tokens', 0))
+        self.performance_info.setText(format_performance(result) + '\n\n' + recommendation)
+
+    def _performance_finished(self, worker):
+        if self.performance_worker is worker:
+            self.performance_worker = None
+        worker.deleteLater()
+
     def check_model_status(self):
         """Check the configured Ollama model without blocking mouse/keyboard UI."""
         if self.ollama_probe and self.ollama_probe.isRunning():
             self._probe_again = True
             return
         self.status_chip.setText('KI wird geprüft')
+        self.brand_status_btn.setText('●  Prüfe Modell …')
         self.model_status_label.setText('Verbindung wird geprüft …')
-        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.config['model'])
+        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.current_chat_model())
         self.ollama_probe.checked.connect(self._model_status_checked)
         self.ollama_probe.finished.connect(self._model_probe_finished)
         self.ollama_probe.start()
 
     def _model_status_checked(self, status: OllamaStatus):
         if self.ollama_probe and (self.ollama_probe.url != self.config['ollama_url'] or
-                                  self.ollama_probe.model != self.config['model']):
+                                  self.ollama_probe.model != self.current_chat_model()):
             self._probe_again = True
         else:
             self.ollama_status = status
             self.model_status_label.setText(status.details)
             self.model_status_label.setToolTip(status.details)
             if status.ready:
+                self.brand_status_btn.setText('●  KI bereit')
+                self.brand_status_btn.setProperty('connected', 'true')
+                self.brand_status_btn.style().unpolish(self.brand_status_btn)
+                self.brand_status_btn.style().polish(self.brand_status_btn)
                 self.status_chip.setText('●  KI bereit')
                 self.status_chip.setStyleSheet('color:#86E1BD;background:#173027;'
                     'border:1px solid #316049;border-radius:11px;padding:5px 11px;')
             else:
+                self.brand_status_btn.setText('●  Modell prüfen')
+                self.brand_status_btn.setProperty('connected', 'false')
+                self.brand_status_btn.style().unpolish(self.brand_status_btn)
+                self.brand_status_btn.style().polish(self.brand_status_btn)
                 self.status_chip.setText('●  ' + status.title)
                 self.status_chip.setStyleSheet('color:#F3BB95;background:#30231F;'
                     'border:1px solid #6A4235;border-radius:11px;padding:5px 11px;')
@@ -1828,13 +2441,14 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.check_model_status)
 
     def show_model_help(self):
-        dialog = OllamaHelpDialog(self.config['model'], self.ollama_status, self)
+        dialog = OllamaHelpDialog(self.current_chat_model(), self.ollama_status, self)
         if dialog.exec() == QDialog.Accepted and dialog.installed_model:
-            self.config['model'] = dialog.installed_model
+            key = 'fast_model' if self.current_chat_mode() == QUICK else 'model'
+            self.config[key] = dialog.installed_model
             self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2),
                                         encoding='utf-8')
-            self.model_name.setText(self.config['model'])
-            self.log('System', 'Ollama eingerichtet: ' + self.config['model'])
+            self.model_name.setText(self.current_chat_model())
+            self.log('System', 'Ollama eingerichtet: ' + self.current_chat_model())
         self.check_model_status()
 
     def edit_settings(self):
@@ -1842,7 +2456,7 @@ class MainWindow(QMainWindow):
         if dialog.exec()==QDialog.Accepted:
             self.config=dialog.values()
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
-            self.model_name.setText(self.config['model'])
+            self.model_name.setText(self.current_chat_model())
             self.log('System','Einstellungen gespeichert.')
             self.check_model_status()
 
@@ -2102,6 +2716,16 @@ class MainWindow(QMainWindow):
 
     def received_voice_command(self,text):
         self.log('Stimme','Befehl gehört: '+text[:120])
+        screen_action = screen_intent(text)
+        if screen_action == 'disable':
+            self.disable_screen(spoken=True)
+            return
+        if screen_action == 'enable':
+            self.enable_screen(text, spoken=True)
+            return
+        if self.screen_enabled and screen_followup_intent(text):
+            self.analyze_screen(text, spoken=True)
+            return
         intent = work_intent(text)
         if intent:
             self.handle_work_control(intent, text, spoken=True)

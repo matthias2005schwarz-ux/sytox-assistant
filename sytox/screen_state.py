@@ -68,5 +68,6 @@ class ScreenState:
         self.screen_state.setText('Aktiv · Analyse fehlgeschlagen')
         text = 'Bildschirmhilfe: ' + str(error)
         self.log('Fehler', text)
-        self.add_bubble('assistant', text + '\nTipp: ollama pull qwen3-vl:2b')
+        chosen = self.config.get('vision_model', 'qwen3-vl:4b')
+        self.add_bubble('assistant', text + '\nBitte lokales Bildmodell prüfen: ' + str(chosen)[:100])
         self._conversation_ready()

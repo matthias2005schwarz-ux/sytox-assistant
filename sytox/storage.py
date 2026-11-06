@@ -75,17 +75,30 @@ class Store:
             CREATE TABLE IF NOT EXISTS preferences(
               key TEXT PRIMARY KEY, value TEXT NOT NULL);
             ''')
+            # Add a chat kind without deleting or reclassifying existing chats.
+            # The default PROJECT preserves the historic 30B agent behavior.
+            existing_cols = {row['name'] for row in db.execute('PRAGMA table_info(chats)')}
+            if 'mode' not in existing_cols:
+                db.execute("ALTER TABLE chats ADD COLUMN mode TEXT NOT NULL DEFAULT 'project'")
             try:
                 db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(content, chat_id UNINDEXED)')
                 db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5(content, memory_id UNINDEXED)')
             except sqlite3.OperationalError:
                 pass  # old Python builds may lack FTS5
 
-    def create_chat(self, title='Neuer Chat'):
+    def create_chat(self, title='Neuer Chat', mode='project'):
+        if mode not in ('quick', 'project'):
+            raise ValueError('Ungültiger Chat-Typ.')
         cid = uuid.uuid4().hex
         with self._lock, self._connect() as db:
-            db.execute('INSERT INTO chats VALUES(?,?,?,?)', (cid,title,now(),now()))
+            db.execute('''INSERT INTO chats(id,title,created_at,updated_at,mode)
+                          VALUES(?,?,?,?,?)''', (cid,title,now(),now(),mode))
         return cid
+
+    def chat_mode(self, cid):
+        with self._connect() as db:
+            result = db.execute('SELECT mode FROM chats WHERE id=?', (cid,)).fetchone()
+            return result['mode'] if result and result['mode'] == 'quick' else 'project'
 
     def chats(self):
         with self._connect() as db:

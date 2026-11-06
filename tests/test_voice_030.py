@@ -33,9 +33,13 @@ class TestVoiceInterruptions(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(interruption_command(text), (False, ''))
 
-    def test_free_listening_must_be_explicit_and_nontrivial(self):
-        self.assertEqual(interruption_command('öffne bitte Discord', True), (True, 'öffne bitte Discord'))
+    def test_hands_free_mode_does_not_run_echoed_commands_during_playback(self):
+        # Hands-free mode resumes on silence, but never allows an arbitrary
+        # spoken response to trigger tool operations while SYTOX is speaking.
+        self.assertEqual(interruption_command('öffne bitte Discord', True), (False, ''))
         self.assertEqual(interruption_command('öffne Discord', True), (False, ''))
+        self.assertEqual(interruption_command('Hey Sytox öffne Discord', True),
+                         (True, 'öffne Discord'))
 
 
 class TestInterruptibleWindowsSapi(unittest.TestCase):

@@ -94,7 +94,7 @@ class SelfDevTests(unittest.TestCase):
         self.assertIn('erstellt', tools.call('selfdev_prepare', {}))
         self.assertIn('Gespeichert', tools.call('write_file', {
             'path': 'assistant_source/sytox/__init__.py', 'content': 'VALUE = 3\n'}))
-        self.assertIn(str(Path('assistant_source') / 'sytox' / '__init__.py'), tools.unvalidated_paths)
+        self.assertIn((Path('assistant_source') / 'sytox' / '__init__.py').as_posix(), tools.unvalidated_paths)
         self.assertIn('1 Tests erfolgreich', tools.call('selfdev_validate', {}))
         self.assertEqual(tools.passed_checks, 1)
         self.assertEqual(tools.unvalidated_paths, set())

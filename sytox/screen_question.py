@@ -2,7 +2,7 @@
 import threading
 
 from .screen_capture import screenshot_png
-from .screen_assist import explain_image
+from .screen_vision import analyze_screenshot, DEFAULT_VISION_MODEL
 
 
 class ScreenQuestion:
@@ -28,7 +28,12 @@ class ScreenQuestion:
 
         def work():
             try:
-                response = explain_image(frame, question, stop=stop)
+                # The configured vision model is independent of the coding model.
+                response = analyze_screenshot(
+                    frame, question,
+                    self.config.get('ollama_url', 'http://localhost:11434'),
+                    self.config.get('vision_model', DEFAULT_VISION_MODEL),
+                    cancel=stop)
                 self.screen_signals.answer.emit(generation, response)
             except Exception as exc:
                 self.screen_signals.error.emit(

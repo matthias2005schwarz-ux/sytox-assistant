@@ -47,8 +47,13 @@ class ParallelReplyWorker(QThread):
 
     def run(self):
         try:
+            # Keep the side conversation responsive while the 30B agent works.
+            # A missing fast model produces a clear error instead of silently
+            # falling back to the very slow project model.
+            from .chat_modes import FAST_MODEL
             client = OllamaClient(
-                self.config['ollama_url'], self.config['model']
+                self.config['ollama_url'], self.config.get('fast_model') or FAST_MODEL,
+                context_tokens=4096
             )
             messages = [{'role': 'system', 'content': SYSTEM_PROMPT}] + self.history
             question = next((entry['content'] for entry in reversed(self.history)
@@ -68,7 +73,7 @@ class ParallelReplyWorker(QThread):
                         'als nicht aktuell überprüft und erfinde keine Quellen.'})
             if self.stop_event.is_set():
                 return
-            reply = client.chat(messages, tools=None, stop=self.stop_event)
+            reply = client.chat(messages, tools=None, stop=self.stop_event, think=False)
             text = str(reply.get('content') or '').strip()
             if searched and sources and not any(x['url'] in text for x in sources):
                 text += '\nQuellen (Suchtreffer): ' + ' | '.join(

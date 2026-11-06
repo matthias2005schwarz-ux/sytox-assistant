@@ -1,3 +1,126 @@
+# Zwei getrennte KI-Modi – Schnellchat und Qwen-Projekte
+
+SYTOX bietet jetzt **links zwei eigene Startschaltflächen**:
+
+- **⚡ Neuer Schnellchat:** nutzt das lokale `qwen3:4b` (ca. 2,5 GB) für
+  schnelle normale Gespräche, natürliches Deutsch, Antworten mit Live-Textausgabe
+  und kleine Coding-Aufträge. Ein normales „Hallo“ geht **ohne** die schwere
+  Agent-Werkzeugschleife direkt an Qwen3. Ausdrückliche Befehle, kleine Skripte,
+  Apps oder Dateien zu programmieren, nutzen den bestehenden Coding-Agenten
+  mit den bisherigen Berechtigungsabfragen. Anspruchsvolle Projekte sind weiter
+  besser im Qwen-Projektmodus aufgehoben.
+- **◆ Neues Qwen-Projekt:** nutzt das bereits bekannte
+  `qwen3-coder:30b` (~19 GB) für anspruchsvolle Programmierung,
+  Mehrschritt-Aufträge, Tests, Architektur, Debugging und Multi-Agenten-Reviews.
+  Die bisherigen Zeit-/Arbeitsmodi bleiben hier verfügbar.
+- **Bildschirmfragen:** Beide Chatarten verwenden bei ausdrücklich erteilter
+  Bildschirmfreigabe das **separate** lokale Bildmodell `qwen3-vl:4b`
+  (ca. 3,3 GB). Das Textmodell 4B kann keine Bilder direkt verarbeiten.
+- **Sprachmodus:** Vosk erkennt Sprache lokal. Antworten werden auf Wunsch
+  vorgelesen; das aktive Gespräch bestimmt automatisch das passende Textmodell.
+- **Unterhaltung während eines Projekts:** die Nebenunterhaltung verwendet
+  ebenfalls das kleine 4B-Modell, ohne Zugriff auf die Werkzeuge des laufenden
+  Programmierauftrags.
+
+**Einmalige Einrichtung in PowerShell** (nichts wird ungefragt heruntergeladen):
+
+```powershell
+ollama pull qwen3:4b
+ollama pull qwen3-vl:4b
+ollama list
+```
+
+Dein vorhandenes `qwen3-coder:30b` musst du **nicht** erneut laden.
+Das 4B-Textmodell und 4B-Bildmodell sind zwei unterschiedliche Downloads.
+Wenn ein Modell fehlt, zeigt die UI den fehlenden Namen und bietet über
+**Einrichten** den vorhandenen, ausdrücklich bestätigungspflichtigen
+Ollama-Installationsdialog. Es gibt weiterhin **keine Chat-Nutzungsquote**.
+
+**Kompatibilität:** Bestehende Chats, Aufgaben und Dateien werden nicht gelöscht
+oder automatisch umgestellt. Bei der Datenbankmigration bleiben alte Chats
+im bisherigen Qwen-Projektmodus; neue Chats können pro Chat zwischen den
+beiden Arten gewählt werden. Die Modellnamen lassen sich getrennt in den
+Einstellungen verändern. Die Chatart wird gespeichert und beim Öffnen
+wiederhergestellt.
+
+**Einschränkungen:** Die tatsächliche Geschwindigkeit hängt von CPU, RAM und
+Ollamas Modellspeicher ab. Gleichzeitige Modelle können auf einem PC ohne GPU
+um Arbeitsspeicher und CPU konkurrieren. Kleine Modelle sind bei Tool-Aufrufen
+und komplexer Programmierung weniger zuverlässig. Die Windows-CI-Tests
+verwenden simulierte Modellantworten; echte Qualität muss am Nutzer-PC
+bestätigt werden.
+
+---
+
+# Programmier-Agent 2.0: überprüfbare Korrekturschleifen (Entwicklungszweig)
+
+- **Fehlerdiagnose:** Wenn ein lokaler Test, Build oder eine Syntaxprüfung scheitert, erzeugt SYTOX einen begrenzten Diagnoseauszug und erinnert den Agenten daran, zuerst die Ursache im aktuellen Projekt zu untersuchen. Reparaturen verwenden weiterhin die bestehenden Dateiwirkungs- und Freigaberegeln. Eine Fehlermeldung ist **kein** Beleg, dass eine Korrektur erfolgreich war.
+- **Keine endlosen identischen Fehler:** Fehlermeldungen werden mit einem kurzen Hash-Fingerabdruck klassifiziert. Derselbe Fehler wird nach drei Fehlversuchen pausiert, anstatt unendlich Tests auszuführen oder blind Code umzuschreiben. Andere Fehler beginnen eine neue Diagnose-Serie. Der Fingerabdruck und die Anzahl werden im lokalen Task-Checkpoint gespeichert, damit „Fortsetzen“ nicht wieder bei null anfängt. Ein technischer Sicherheitsstopp ist **kein tägliches oder monatliches Nutzungslimit**.
+- **Sicherheit und Datenschutz:** Rohinhalte gescheiterter Tests bleiben nur als lokaler Modellkontext im laufenden Auftrag. In Aktivitätslogs und Checkpoints werden keine kompletten Fehlermeldungen gespeichert. Die Zusammenfassung enthält keine neuen Ausführungsrechte. Eine Wiederherstellung vorhandener Dateien benötigt weiterhin deine Freigabe.
+- **Regressionstest-Vorschläge:** Das zusätzliche read-only Werkzeug `suggest_regression_tests` sucht zu veränderten Quelldateien vorhandene Python-, JavaScript- oder TypeScript-Tests und erkennt Go-, Rust- und C#-Projektprüfungen. Es führt weder Befehle aus noch installiert es Werkzeuge; für Testausführung gelten die bestehenden Berechtigungen.\n- **Keine falsche Fertigmeldung:** Auch beim kurzen Programmieren mit nur einer Chatantwort ist eine geänderte Datei erst nach einem erfolgreichen passenden Test oder einer passenden Syntaxprüfung verifiziert. Sind Änderungen noch ungeprüft, wird der Auftrag als **pausiert** gemeldet, einschließlich der offenen Dateinamen. Im längeren Arbeitsmodus bleibt `complete_task` an nachgewiesene Änderungen und Tests gebunden.
+- **Grenzen:** Der neue Reparatur-Mechanismus erkennt wiederkehrende Fehler und kann das Modell gezielt zu Ursachenanalyse und Regressionstests anleiten, ersetzt aber keinen garantierten automatischen Bugfix. Die Tests laufen mit simulierten Ollama-Antworten; tatsächliches Verhalten von Qwen3-Coder 30B muss später auf dem Nutzer-PC gemessen werden. Kein neuer Installer/Release.
+
+---
+
+# Automatische Modelloptimierung für Qwen3-Coder 30B (Entwicklungszweig)
+
+SYTOX passt die Ollama-Kontextgröße im **automatischen Modus** an die gemessene Hardware an. Das geschieht beim Start eines Modellauftrags, ohne tägliche/monatliche Nachrichtenlimits und ohne Herunterladen oder Austauschen des ausgewählten Modells.
+
+- **Erkennung:** Über `psutil` werden Gesamt-RAM und verfügbarer RAM geprüft. Auf NVIDIA-Systemen wird, falls installiert, die Gesamtgröße des GPU-Speichers über `nvidia-smi` mit festen, begrenzten Argumenten ausgelesen; unbekannte GPU- oder RAM-Werte werden als unbekannt dargestellt. AMD-GPUs können in der Leistungszentrale anhand der Windows-Geräteerkennung angezeigt werden, ihr freier VRAM ist derzeit nicht zuverlässig messbar.
+- **Kontextwahl:** Für Qwen3-Coder 30B empfiehlt die Automatik konservativ 4.096, 8.192, 16.384 oder unter günstigen Bedingungen 32.768 Tokens. Die Ausgabegrenze skaliert wie bisher mit dem Kontext. Bei ungefähr 16 GB RAM erscheint eine ausdrückliche Warnung: Das ca. 19 GB große Modell plus zusätzlicher Laufzeitspeicher kann damit möglicherweise gar nicht laufen. **Eine kleinere Kontextgröße allein löst zu wenig Speicher nicht.**
+- **Modellgröße:** Die Leistungszentrale liest die tatsächliche Dateigröße eines schon installierten Modells nur über die lokale Ollama-API `/api/tags`. Wenn sie nicht verfügbar ist, wird eine Schätzung angezeigt. Es erfolgt kein Netzwerkzugriff auf fremde Server für diese Prüfung.
+- **Manuelle Kontrolle:** In den Einstellungen bleibt jede ausgewählte feste Größe (4K, 8K, 16K, 32K) verbindlich. Wer `Automatisch` wählt, sieht die RAM-basierte Empfehlung und kann jederzeit umstellen. Bestehende Einstellungen bleiben erhalten.
+- **Stabilität:** Die automatische Hardware-Empfehlung wird pro OllamaClient-Auftrag einmal ermittelt und für die Anfrage-/Verlaufsbudgetierung wiederverwendet. Das verhindert sprunghafte Kontextwechsel innerhalb eines einzigen lang laufenden Programmierauftrags.
+- **Grenzen:** Heuristik und grobe RAM-Werte können die echte Geschwindigkeit, GPU-Offloading, AMD-VRAM, Windows-Auslagerungsdatei, Ollama-KV-Cache und gleichzeitige andere Programme nicht exakt vorhersagen. Qwen3-Coder 30B wurde weiterhin nicht auf dem Nutzer-PC ausgeführt; praktische Messungen sind nach dem Modell-Download erforderlich. Es wird noch **kein Installer** veröffentlicht.
+
+---
+
+# Kontextverwaltung 2.0 (große Programmierprojekte, Entwicklungszweig)
+
+**Neu – aufgabenbezogene Datei-Auswahl:** Nach der bereits vorhandenen lokalen Projektindex-Aktualisierung bewertet SYTOX relevante Dateinamen, Klassen, Funktionen und Methoden zur jeweiligen Programmieraufgabe. CamelCase und snake_case werden getrennt erkannt; statt wahllos ganze Projektordner in einen Modellaufruf zu packen, sieht das Modell zuerst eine kurze priorisierte Projektkarte.
+
+**Neues read-only Werkzeug:** `project_context_bundle` wählt bis zu acht passende Quelltextdateien aus und zeigt kleine, zeilennummerierte Ausschnitte der relevanten Stellen. Die Rückgabe wird auf maximal 22.000 Zeichen begrenzt, standardmäßig 12.000 Zeichen und sechs Dateien. Mehr Code kann der Agent jederzeit mit weiteren Werkzeugaufrufen gezielt lesen. Verdächtige Secret-Dateien, externe Symlinks und übliche Abhängigkeits-/Build-Ordner werden ausgelassen. Ein seit der letzten Indexierung veränderter Quelltext wird nicht als vermeintlich aktueller Auszug angezeigt.
+
+**Kontextverwaltung beim Weiterarbeiten:** Die Agent-Schleife überwacht zusätzlich die ungefähre Länge des bisherigen Chat-/Werkzeugverlaufs. Wenn die Nachrichtenzahl oder das Kontextbudget überschritten wird, bleiben ursprüngliches Ziel, Arbeitsplan, letzte Aktionen, geänderte Dateien und offene Tests in einem kompakten Zwischenstand erhalten. Alte Werkzeugausgaben und Codeargumente werden gekürzt; die letzten zusammengehörenden Assistant-/Tool-Nachrichten bleiben in korrekter Reihenfolge. **Es handelt sich um eine grobe Zeichenabschätzung, keine exakte Tokenzählung.** Die Begrenzung bezieht sich nur auf den Inhalt einer einzelnen Modellanfrage, nicht auf die Anzahl der täglichen oder monatlichen Chat- oder Programmieraufträge.
+
+**Grenzen:** Keine automatische vollständige semantische Kenntnis jedes Dateiinhalts; Datei- und Funktionssuche beruht überwiegend auf Namen. SYTOX muss vor Änderungen den tatsächlichen Code lesen und anschließend Tests ausführen. Der Index erfasst derzeit maximal 600 relevante Dateien und speichert selbst keine vollständigen Quelldateien. Ein sehr großes Repo wird somit nur teilweise abgedeckt. Die tatsächliche Modellqualität und RAM-Last mit Qwen3-Coder 30B können erst mit lokal installiertem Modell geprüft werden.
+
+**Lieferstatus:** Entwicklungszweig/Tests, noch kein neuer veröffentlichter Installer.
+
+---
+
+# Qwen3-Coder 30B: zuverlässigere Werkzeugaufrufe (Entwicklungszweig)
+
+- **Atomare Prüfung vor Ausführung:** Für jeden vom Modell gewünschten Tool-Aufruf werden Funktionsname, Pflichtargumente, Datentypen, erlaubte Werte und maximale Größe anhand der **tatsächlich übergebenen Tool-Schemas** geprüft. JSON-Strings aus Ollama werden geparst, falsches JSON wird **nicht** als leeres Objekt fehlinterpretiert.
+- **Keine halben Aktionen:** Schlägt Qwen3 eine zu große Serie (mehr als acht Aufrufe in einer Modellantwort) oder einen ungültigen Aufruf vor, wird **das gesamte Paket** vor Ausführung abgelehnt. Acht ist eine Obergrenze *pro Modellantwort*, **kein tägliches oder monatliches Nutzungslimit**: Weitere Aufrufe sind in späteren Antworten möglich.
+- **Gezielte Korrektur:** Das Modell erhält eine kurze Fehlermeldung und kann bis zu drei Versuche unternehmen, seine Argumente zu korrigieren. Danach wird ein längerer Auftrag pausiert; abgelehnte Aufrufe gelten nicht als abgeschlossene Arbeit. Bestehende Berechtigungsdialoge werden nicht umgangen.
+- **Ollama-Streaming:** Die Anwendung sammelt mehrere Tool-Aufrufe aus Streaming-Antworten, aber verwirft unvollständige oder am Tokenlimit abgeschnittene Antworten, statt unvollständigen Code auszuführen. Bisherige Modelle bleiben wählbar.
+- **Grenzen:** Tests verwenden simulierte Modellantworten; die tatsächliche Zuverlässigkeit mit `qwen3-coder:30b` muss nach dem Download auf dem Nutzer-PC noch gemessen werden. Es wird noch kein neuer Installer veröffentlicht.
+- **Referenz:** [Offizielle Ollama-Dokumentation zu Streaming und Werkzeugaufrufen](https://github.com/ollama/ollama/blob/main/docs/capabilities/tool-calling.mdx).
+
+---
+
+# SYTOX: Fünf lokale Erweiterungen (Entwicklungszweig, noch kein Release)
+
+1. **Bildschirmhilfe mit Zustimmung:** In der rechten Leiste auf „Bildschirmfreigabe starten“ klicken oder nach aktiviertem Sprachmodus „Hey Sytox, schau auf meinen Bildschirm“ sagen. Erst ein zusätzlicher Zustimmungsdialog schaltet die Funktion frei. Jede Frage erfasst ein **einzelnes Screenshot** des Hauptbildschirms; es gibt keinen heimlichen Dauerstream. „Kannst wieder aus meinem Bildschirm rausgehen“, der Stop-Button, Chatwechsel oder Schließen ins Tray beenden den Zugriff; eine verspätete Antwort wird dann nicht angezeigt. Ein sichtbarer Hinweis in der Kopfzeile zeigt die aktive Berechtigung. Screenshots selbst werden von SYTOX nicht auf die Festplatte geschrieben und nicht im Chat gespeichert. Ein bereits an Ollama übertragenes Einzelbild kann nachträglich nicht aus dessen Verarbeitung zurückgeholt werden.
+2. **Lokales Projektgedächtnis:** Beim Start einer Programmieraufgabe werden bis zu 600 Text-/Quelldateien gezielt untersucht und Pfade, wichtige Symbole, Dateigrößen, Änderungszeiten und Prüfsummen im lokalen Anwendungsdatenordner indexiert. Quelltext wird nicht als Gedächtniskopie gespeichert. Bei Änderungen erkennt SYTOX veraltete Einträge; vor der Bearbeitung liest der Agent weiterhin den echten Code. Keine globale Suche auf fremden Laufwerken.
+3. **Gezielte Wiederherstellung:** Vor riskanten Codeänderungen kann der Agent Snapshots von bis zu 16 bestehenden Dateien außerhalb des Projektordners speichern. Die Wiederherstellung braucht deine ausdrückliche Zustimmung; der aktuelle Zustand wird als zusätzliche Sicherung behalten und Tests müssen erneut laufen. Dies ist eine Sicherheitsfunktion, **keine Garantie**, dass der Agent alle Fehler selbst beheben kann.
+4. **Spezialisierte Agentenrollen:** Der Hauptagent kann Architekt, Debugger und Code-Prüfer für unabhängige Hinweise aufrufen. Diese Rollen arbeiten ohne Datei-, Browser- oder PC-Werkzeuge und hinterlassen keinen eigenen Code. Alle Rollen nutzen derzeit nacheinander das konfigurierte lokale Modell, **keine wirklich parallelen Agenten**.
+5. **Leistungszentrale:** In der rechten Leiste werden lokale CPU-/RAM-Metriken und Ollamas aktuell geladene Modelle angezeigt. NVIDIA-Karten liefern bei vorhandenem `nvidia-smi` GPU-/VRAM-Werte; Windows-GPU-Leistungszähler können bei AMD/Intel/NVIDIA den Gerätenamen und eine **ungefähre 3D-Engine-Auslastung** liefern. Wenn Messwerte nicht verfügbar sind, bleibt das Feld offen. AMD-VRAM wird derzeit nicht zuverlässig ausgelesen.
+
+**Wichtig für Bildanalyse:** Das Coding-Modell `qwen3-coder:30b` ist kein Bildmodell. Für Screenshots ist separat `qwen3-vl:4b` (ca. 3,3 GB) eingestellt. Dieses Modell benötigt laut [Ollama-Bibliothek](https://ollama.com/library/qwen3-vl) Ollama 0.12.7 oder neuer. **Es wird nichts ungefragt heruntergeladen.** Der spätere Befehl lautet `ollama pull qwen3-vl:4b`. Aufnahme und Analyse erfolgen nur über die lokale Ollama-Adresse auf Port 11434. Die tatsächliche Qualität von Fehlermeldungserkennung, Sprachbefehlen und AMD-GPU-Zählern muss am Nutzer-PC noch praktisch getestet werden.
+
+**Lieferstatus:** Quellcode im GitHub-Entwicklungszweig. Automatisierte Tests laufen über den vorhandenen Windows-Workflow; kein neuer Installer oder veröffentlichter 0.3.8-Release.
+
+---
+
+# SYTOX: Qwen3-Coder 30B als bevorzugtes lokales Modell (Entwicklungszweig)
+
+- **Standard für neue Einstellungen:** `qwen3-coder:30b` statt Qwen2.5-Coder 7B. Dies ist das etwa 19 GB große Q4_K_M-Modell aus der offiziellen Ollama-Bibliothek (`ollama pull qwen3-coder:30b`).
+- **Systemanforderungen:** Die 19 GB sind die Modell-/Downloadgröße, nicht der maximale Arbeitsspeicherbedarf. Für flüssigeres Arbeiten sind mindestens 32 GB RAM empfehlenswert; auf CPUs oder älteren GPUs kann die Ausführung sehr langsam sein. Kontextfenster und parallele Agenten benötigen zusätzliche Ressourcen.
+- **Kompatibilität:** Bereits gespeicherte Nutzereinstellungen bleiben unverändert; Qwen2.5-Coder 7B/3B/1.5B bleiben wählbar. Das neue Modell wird nicht ohne Auswahl und Einrichtungsfreigabe heruntergeladen.
+- **Status:** Modellname/Standard/Einrichtungsoption im Quellcode angepasst. Ein echter Download, RAM-Leistung und Coding-Qualität mit Ollama auf dem Nutzer-PC sind noch nicht verifiziert. Kein neues Release.
+
 # Entwicklungszweig: Instant Street View in der rechten Leiste
 
 SYTOX bietet eine ausklappbare rechte Leiste mit **Instant Street View**. Das Hamburger-Symbol ☰ rechts oben blendet die Leiste ein oder aus. Klare Ortsfragen wie „Wofür ist Wien bekannt?“ übernehmen den Ort in das Suchfeld. Mit „Ansicht laden“ kann die Website direkt im Windows-Programm geöffnet werden. „Im Browser“ öffnet denselben Ort im Standardbrowser.
@@ -369,3 +492,60 @@ Für fortgeschrittene, unbeaufsichtigte Nutzung reicht diese Version noch nicht:
 - **Releases veröffentlichen:** Eine Version muss in `sytox/__init__.py`, `Windows_Installer.iss` und den zugehörigen Release-Skripten identisch sein. Ein Git-Tag wie `v0.3.3` löst `.github/workflows/windows-release.yml` aus: Tests → Windows-EXE → Installer → Installations-Smoketest → Release mit Installer und SHA-256-Datei. **CI-Artefakte allein sind keine automatischen Updates.** Solange kein GitHub Release veröffentlicht wurde, meldet SYTOX keine neue Version.
 
 Hinweis: Ein SHA-256-Hash erkennt einen beschädigten oder geänderten Download gegenüber der veröffentlichten Datei, ersetzt aber keine Code-Signatur des Herausgebers.
+
+## Lokaler Qwen3-Coder-30B-Benchmark (opt-in)
+
+SYTOX > **Einstellungen** > **Modellgeschwindigkeit** > **Lokalen KI-Benchmark starten**.
+Der Test fragt nur das selbst konfigurierte **lokale** Ollama auf Port 11434 ab.
+Er benötigt keine Cloud, liest keine Chats/Projektdateien und lädt keine Modelle
+herunter. Ein optionaler Abbrechen-Knopf beendet die nächste eingehende Antwort.
+Die Oberfläche bleibt dank eigenem Qt-Worker bedienbar.
+
+Alternativ im Projektordner über PowerShell:
+
+```powershell
+python tools/local_model_benchmark.py --model qwen3-coder:30b
+python tools/local_model_benchmark.py --model qwen3-coder:30b --json
+```
+
+Es werden zwei kurze feste Aufgaben (Erklärung und Python-Funktion) gemessen.
+Ausgewiesen werden die Zeit bis zum ersten sichtbaren Token, die gesamte
+Antwortzeit, die von Ollama **tatsächlich** gelieferten Tokenzahlen und
+Generierungstokens pro Sekunde (aus `eval_count/eval_duration`).
+Wenn Ollama keine entsprechenden Messdaten liefert, steht
+`nicht gemessen`, nicht ein geschätzter Wert. Der erste Lauf kann das
+19-GB-Modell erst laden und ist deshalb nicht mit einem warmen Lauf vergleichbar.
+
+**Wichtig:** Das Limit von 96 generierten Tokens **gilt ausschließlich je
+Benchmark-Test**. Die normale SYTOX-Chatnutzung wird dadurch nicht begrenzt.
+Der automatische RAM-bewusste Kontext ist eine Speicherempfehlung, kein
+Nutzungslimit. CI verwendet bewusst nur simulierte Ollama-Antworten;
+echte Leistungsmessungen müssen auf deinem Windows-PC mit lokal
+installiertem Modell durchgeführt werden.
+
+## Sprachsteuerung 2.0 (offline mit Vosk)
+
+Der Gesprächsmodus verwendet weiterhin das lokal installierte deutsche Vosk-Modell
+und verändert die Freigaben des Windows-/Programmier-Agenten **nicht**.
+
+- **„Hey Sytox, was ist das?“** und gebräuchliche Aussprachevarianten werden
+  auch bei einer Schreibweise wie „hei seitox“ oder „hey sei tox“ erkannt.
+  Das Aktivierungswort muss am Anfang des gesprochenen Satzes stehen.
+- **„Stopp“ / „Hey Sytox, stopp“**: Während SYTOX spricht, können zwei
+  aufeinanderfolgende gleiche Vosk-Teilergebnisse die Sprachausgabe bereits
+  vor dem vollständigen Sprachsatz stoppen. Teiltranskripte lösen niemals
+  Windows- oder Dateibefehle aus.
+- **Kein Echo-Befehl:** Audiodaten der eigenen Sprachausgabe werden beim
+  Übergang zu neuem Zuhören verworfen. Selbst im aktivierten Freisprechmodus
+  werden während laufender Sprachausgabe nur ausdrückliche Stopp-/Wake-Phrasen
+  als Unterbrechungen akzeptiert.
+- **Weniger Duplikate:** Der lokale Listener unterdrückt identische unmittelbar
+  wiederholte erkannte Befehle für 1,2 Sekunden. Danach sind sie wieder
+  möglich; dies ist **kein Nutzungs- oder Chatlimit**.
+- Nach der Sprachausgabe gelten weiterhin die in den Einstellungen gewählten
+  Anschlussfrage-Zeiten. Für sensible Aktionen bleiben alle bisherigen
+  Genehmigungen und Sicherheitsprüfungen bestehen.
+
+Der CI-Lauf verwendet simulierte Audiodaten. Mikrofon-Empfindlichkeit,
+Aussprache, Rückkopplung und die echte Sprachausgabe auf deinem Windows-PC
+müssen vor einer offiziellen Freigabe zusätzlich praktisch getestet werden.
