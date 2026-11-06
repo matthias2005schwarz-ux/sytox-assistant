@@ -14,6 +14,7 @@ from .actions import Toolkit, tool_schema, Cancelled
 from .web_search import should_search, search_web, format_results
 from .program_build import needs_compiled_artifact
 from .ram_saver import keep_alive_for_config
+from .model_resources import model_gate
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
 Stil: freundlich, klar und direkt. Sprich Hochdeutsch ohne Dialekt.
@@ -73,7 +74,7 @@ class OllamaClient:
         resp.raise_for_status()
         return [entry.get('name', '') for entry in resp.json().get('models', [])]
 
-    def chat(self, messages, tools=None, stop=None):
+    def chat(self, messages, tools=None, stop=None, priority='background'):
         payload = {'model': self.model, 'messages': messages, 'stream': True,
                    'options': {'temperature': 0.3, 'num_ctx': 8192, 'num_predict': 1600}}
         if tools:
@@ -81,33 +82,36 @@ class OllamaClient:
         if self.keep_alive is not None:
             payload['keep_alive'] = self.keep_alive
         try:
-            with requests.post(self.url + '/api/chat', json=payload, stream=True,
-                               timeout=(8, 600)) as response:
-                if not response.ok:
-                    if response.status_code == 404 and 'model' in response.text.lower():
-                        raise OllamaError(
-                            f'Das KI-Modell „{self.model}“ ist in Ollama nicht verfügbar. '
-                            'In SYTOX auf „Einrichten“ klicken und den Modellbefehl kopieren.')
-                    raise OllamaError(f'Ollama HTTP {response.status_code}: {response.text[:500]}')
-                reply = {'role': 'assistant', 'content': '', 'tool_calls': []}
-                for line in response.iter_lines():
-                    if stop and stop.is_set():
-                        response.close()
-                        raise Cancelled('Benutzer hat den Auftrag gestoppt')
-                    if not line:
-                        continue
-                    chunk = json.loads(line)
-                    if 'error' in chunk:
-                        raise OllamaError(str(chunk['error']))
-                    msg = chunk.get('message') or {}
-                    reply['content'] += msg.get('content') or ''
-                    if msg.get('tool_calls'):
-                        reply['tool_calls'].extend(msg['tool_calls'])
-                    if chunk.get('done'):
-                        break
-                if not reply['tool_calls']:
-                    reply.pop('tool_calls')
-                return reply
+            with model_gate.inference(priority=priority, stop_event=stop):
+                with requests.post(self.url + '/api/chat', json=payload, stream=True,
+                                   timeout=(8, 600)) as response:
+                    if not response.ok:
+                        if response.status_code == 404 and 'model' in response.text.lower():
+                            raise OllamaError(
+                                f'Das KI-Modell „{self.model}“ ist in Ollama nicht verfügbar. '
+                                'In SYTOX auf „Einrichten“ klicken und den Modellbefehl kopieren.')
+                        raise OllamaError(f'Ollama HTTP {response.status_code}: {response.text[:500]}')
+                    reply = {'role': 'assistant', 'content': '', 'tool_calls': []}
+                    for line in response.iter_lines():
+                        if stop and stop.is_set():
+                            response.close()
+                            raise Cancelled('Benutzer hat den Auftrag gestoppt')
+                        if not line:
+                            continue
+                        chunk = json.loads(line)
+                        if 'error' in chunk:
+                            raise OllamaError(str(chunk['error']))
+                        msg = chunk.get('message') or {}
+                        reply['content'] += msg.get('content') or ''
+                        if msg.get('tool_calls'):
+                            reply['tool_calls'].extend(msg['tool_calls'])
+                        if chunk.get('done'):
+                            break
+                    if not reply['tool_calls']:
+                        reply.pop('tool_calls')
+                    return reply
+        except InterruptedError as exc:
+            raise Cancelled('Benutzer hat die lokale Modellausführung gestoppt.') from exc
         except requests.exceptions.ConnectionError as exc:
             raise OllamaError('Ollama nicht erreichbar. Bitte Ollama starten und Modell installieren.') from exc
         except requests.exceptions.Timeout as exc:
