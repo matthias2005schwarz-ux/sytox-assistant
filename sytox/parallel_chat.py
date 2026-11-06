@@ -25,6 +25,7 @@ from .windows_repair import (
     wants_windows_diagnosis, asks_for_repair, choose_unambiguous_fix,
 )
 from .work_intents import work_intent
+from .voice_features import agent_status_intent
 from .web_search import should_search, search_web, format_results
 
 
@@ -156,6 +157,7 @@ class ParallelChatDialog(QDialog):
 
     answer_ready = Signal(str, bool)
     control_requested = Signal(str, str, bool)
+    status_requested = Signal(str, bool)
     approval_request = Signal(str, str, object)
 
     def __init__(self, config, parent=None):
@@ -221,6 +223,9 @@ class ParallelChatDialog(QDialog):
             # Treat explicit task-control statements as control messages,
             # not as tool-free LLM questions. The MainWindow handles them.
             self.control_requested.emit(intent, text, bool(spoken))
+            return True
+        if agent_status_intent(text):
+            self.status_requested.emit(text, bool(spoken))
             return True
         if self.reply_worker is not None and self.reply_worker.isRunning():
             self.status_label.setText('Ich beantworte noch die vorherige Frage.')
