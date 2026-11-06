@@ -38,6 +38,7 @@ try {
     Invoke-Native 'Python-Komponententests ohne native Qt-Fenster' $python @('tools/run_nonqt_tests.py')
     $env:PYTHONPATH = (Join-Path $PSScriptRoot 'tests') + ';' + $PSScriptRoot
     Invoke-Native 'Qt-Hauptfenster-Verbindungstests' $python @('-m','unittest','-v','test_ollama_ui.OllamaQtOnboardingTests')
+    Invoke-Native 'Qt-Benchmarkdialog und Worker-Tests' $python @('-m','unittest','-v','test_model_benchmark_ui.BenchmarkUiTests')
     Invoke-Native 'Echte Win32-Fensterliste und UI-Automation laden' $python @('-c',
         "from sytox.pc_control import WindowsDesktop; from pywinauto import Desktop; wins = WindowsDesktop().windows(); print('Windows-Fenster gefunden:', len(wins)); assert isinstance(wins,list); Desktop(backend='uia'); print('Win32 + UIA OK')")
     Invoke-Native 'Vollstaendiger Qt-GUI-Start' $python @('main.py','--smoke-test')
