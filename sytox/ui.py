@@ -2341,7 +2341,7 @@ class MainWindow(QMainWindow):
         if self.performance_worker and self.performance_worker.isRunning():
             return
         worker = PerformanceWorker(self.config.get('ollama_url', 'http://localhost:11434'),
-                                   self.config.get('model', 'qwen3-coder:30b'), self)
+                                   self.current_chat_model(), self)
         self.performance_worker = worker
         worker.measured.connect(self._performance_measured)
         worker.finished.connect(lambda w=worker: self._performance_finished(w))
@@ -2349,7 +2349,7 @@ class MainWindow(QMainWindow):
 
     def _performance_measured(self, result):
         recommendation = describe_recommendation(
-            self.config.get('model', 'qwen3-coder:30b'), result,
+            self.current_chat_model(), result,
             manual_context=self.config.get('model_context_tokens', 0))
         self.performance_info.setText(format_performance(result) + '\n\n' + recommendation)
 
@@ -2365,14 +2365,14 @@ class MainWindow(QMainWindow):
             return
         self.status_chip.setText('KI wird geprüft')
         self.model_status_label.setText('Verbindung wird geprüft …')
-        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.config['model'])
+        self.ollama_probe = OllamaProbe(self.config['ollama_url'], self.current_chat_model())
         self.ollama_probe.checked.connect(self._model_status_checked)
         self.ollama_probe.finished.connect(self._model_probe_finished)
         self.ollama_probe.start()
 
     def _model_status_checked(self, status: OllamaStatus):
         if self.ollama_probe and (self.ollama_probe.url != self.config['ollama_url'] or
-                                  self.ollama_probe.model != self.config['model']):
+                                  self.ollama_probe.model != self.current_chat_model()):
             self._probe_again = True
         else:
             self.ollama_status = status
@@ -2393,13 +2393,14 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self.check_model_status)
 
     def show_model_help(self):
-        dialog = OllamaHelpDialog(self.config['model'], self.ollama_status, self)
+        dialog = OllamaHelpDialog(self.current_chat_model(), self.ollama_status, self)
         if dialog.exec() == QDialog.Accepted and dialog.installed_model:
-            self.config['model'] = dialog.installed_model
+            key = 'fast_model' if self.current_chat_mode() == QUICK else 'model'
+            self.config[key] = dialog.installed_model
             self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2),
                                         encoding='utf-8')
-            self.model_name.setText(self.config['model'])
-            self.log('System', 'Ollama eingerichtet: ' + self.config['model'])
+            self.model_name.setText(self.current_chat_model())
+            self.log('System', 'Ollama eingerichtet: ' + self.current_chat_model())
         self.check_model_status()
 
     def edit_settings(self):
@@ -2407,7 +2408,7 @@ class MainWindow(QMainWindow):
         if dialog.exec()==QDialog.Accepted:
             self.config=dialog.values()
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
-            self.model_name.setText(self.config['model'])
+            self.model_name.setText(self.current_chat_model())
             self.log('System','Einstellungen gespeichert.')
             self.check_model_status()
 
