@@ -129,7 +129,7 @@ class ParallelReplyWorker(QThread):
                         'als nicht aktuell überprüft und erfinde keine Quellen.'})
             if self.stop_event.is_set():
                 return
-            reply = client.chat(messages, tools=None, stop=self.stop_event)
+            reply = client.chat(messages, tools=None, stop=self.stop_event, priority='interactive')
             text = str(reply.get('content') or '').strip()
             if repair_outcome is not None:
                 # Never let an optimistic model answer hide the actual result.
