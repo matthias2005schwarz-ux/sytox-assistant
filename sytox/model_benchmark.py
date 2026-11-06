@@ -99,7 +99,7 @@ def run_local_benchmark(url="http://localhost:11434",
         done = None
         try:
             with request(endpoint + "/api/chat", json=payload, stream=True,
-                         timeout=(8, 240)) as response:
+                         timeout=(8, 240), allow_redirects=False) as response:
                 response.raise_for_status()
                 for raw in response.iter_lines():
                     if stop.is_set():
