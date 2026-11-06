@@ -202,6 +202,21 @@ class Store:
                 WHERE m.content LIKE ? ESCAPE '\\' ''', ('%' + literal + '%',)).fetchall()
             return {row['chat_id'] for row in rows}
 
+    def chat_export_text(self, cid):
+        """Export one saved conversation in full; personal memory is separate."""
+        with self._connect() as db:
+            rows = db.execute('''SELECT c.title,m.id,m.role,m.content
+                FROM chats AS c LEFT JOIN messages AS m ON m.chat_id=c.id
+                WHERE c.id=? ORDER BY m.id''', (cid,)).fetchall()
+        if not rows:
+            raise ValueError('Unbekannter Chat.')
+        parts = ['SYTOX Assistant – Chat-Export\nTitel: ' + rows[0]['title']]
+        labels = {'user': 'Du', 'assistant': 'SYTOX', 'system': 'System', 'tool': 'Werkzeug'}
+        for row in rows:
+            if row['id'] is not None:
+                parts.append(labels.get(row['role'], 'Nachricht') + ':\n' + row['content'])
+        return '\n\n'.join(parts) + '\n'
+
     def add_memory(self, text):
         text=str(text).strip()[:1000]
         if not text: raise ValueError('Leere Erinnerung')

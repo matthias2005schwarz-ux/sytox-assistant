@@ -9,7 +9,7 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QSaveFile, QIODevice
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QTextCursor, QDesktopServices, QLinearGradient, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
@@ -1074,14 +1074,16 @@ class MainWindow(QMainWindow):
         self.chatlist.setSpacing(2)
         self.chatlist.itemClicked.connect(lambda it: self.select_chat(it.data(Qt.UserRole)))
         l.addWidget(self.chatlist, 2)
-        rename = QPushButton('Chat umbenennen')
-        rename.setObjectName('ghost')
-        rename.clicked.connect(self.rename_chat)
-        l.addWidget(rename)
-        delete = QPushButton('Chat löschen')
-        delete.setObjectName('ghost')
-        delete.clicked.connect(self.delete_chat)
-        l.addWidget(delete)
+        chat_actions = QPushButton('Chat-Aktionen')
+        chat_actions.setObjectName('ghost')
+        chat_actions.setAccessibleName('Aktionen für das aktuelle Gespräch')
+        self.chat_actions_menu = QMenu(chat_actions)
+        self.chat_actions_menu.addAction('Chat umbenennen', self.rename_chat)
+        self.chat_actions_menu.addAction('Als Text exportieren', self.export_chat)
+        self.chat_actions_menu.addSeparator()
+        self.chat_actions_menu.addAction('Chat löschen', self.delete_chat)
+        chat_actions.setMenu(self.chat_actions_menu)
+        l.addWidget(chat_actions)
         cfg = QPushButton('Einstellungen')
         cfg.setObjectName('subtle')
         cfg.clicked.connect(self.edit_settings)
@@ -1700,6 +1702,30 @@ class MainWindow(QMainWindow):
                 self._rendering_history = False
         tasks=self.store.tasks(cid)
         self.task_state.setText((task_status_text(tasks[0]['status'])+': '+tasks[0]['goal'][:85]) if tasks else 'Keine aktive Aufgabe')
+
+    def export_chat(self):
+        if not self.chat_id:
+            return
+        chat_id = self.chat_id
+        path, _filter = QFileDialog.getSaveFileName(
+            self, 'Gespeicherten Chat als Text exportieren', 'SYTOX_Chat.txt', 'Textdateien (*.txt)')
+        if not path:
+            return
+        try:
+            content = self.store.chat_export_text(chat_id).encode('utf-8')
+            target = QSaveFile(path)
+            if not target.open(QIODevice.WriteOnly):
+                raise OSError(target.errorString())
+            if target.write(content) != len(content):
+                detail = target.errorString()
+                target.cancelWriting()
+                raise OSError(detail)
+            if not target.commit():
+                raise OSError(target.errorString())
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, 'Export fehlgeschlagen', str(exc))
+            return
+        self.log('System', 'Gespeicherter Chatverlauf wurde als Text exportiert.')
 
     def rename_chat(self):
         if not self.chat_id:return

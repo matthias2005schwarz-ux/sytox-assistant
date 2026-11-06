@@ -18,6 +18,8 @@ Der Aufklappzustand von Sprachoptionen und Aktivitäten wird auch über Neustart
 Auch der Fokusmodus mit ausgeblendeter Steuerzentrale bleibt nach einem Neustart erhalten.
 Die Suche in der Seitenleiste findet Titel und gespeicherte Nachrichten in Chats und Qwen-Projekten lokal.
 Beim Lesen älterer Nachrichten bleibt die Scrollposition erhalten; „Zur neuesten Nachricht“ führt wieder ans Ende.
+Unter „Chat-Aktionen“ lässt sich der gesamte gespeicherte Verlauf lokal als UTF-8-Textdatei exportieren.
+Ungesendete Entwürfe, Erinnerungen und technische Logs sind darin nicht enthalten.
 
 ## Direkt-Updates innerhalb von SYTOX (ab Version 0.3.9)
 

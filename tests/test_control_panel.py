@@ -2,6 +2,7 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent
@@ -110,6 +111,23 @@ class ControlPanelTests(unittest.TestCase):
     def test_user_bubble_has_no_reply_copy_button(self):
         self.window.add_bubble('user', 'Meine Nachricht')
         self.assertEqual(self.window.findChildren(QPushButton, 'copyReplyButton'), [])
+
+    def test_chat_export_writes_utf8_saved_messages_without_unsent_draft(self):
+        self.window.store.add_message(self.window.chat_id, 'user', 'Grüße 👋\n```python\nprint(1)\n```')
+        self.window.input.setPlainText('Nicht gesendeter Entwurf')
+        destination = Path(self.home.name) / 'Gespräch.txt'
+        with patch('sytox.ui.QFileDialog.getSaveFileName', return_value=(str(destination), '')):
+            self.window.export_chat()
+        text = destination.read_text(encoding='utf-8')
+        self.assertIn('Grüße 👋\n```python\nprint(1)\n```', text)
+        self.assertNotIn('Nicht gesendeter Entwurf', text)
+        self.assertEqual(len(self.window.store.messages(self.window.chat_id)), 1)
+
+    def test_cancelled_export_does_not_read_or_write_the_chat(self):
+        with patch('sytox.ui.QFileDialog.getSaveFileName', return_value=('', '')), \
+             patch.object(self.window.store, 'chat_export_text') as export:
+            self.window.export_chat()
+            export.assert_not_called()
 
     def test_sidebar_search_finds_message_contents_in_chats_and_projects(self):
         chat = self.window.store.create_chat('Alltag')
