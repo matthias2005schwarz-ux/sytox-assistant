@@ -317,9 +317,41 @@ def extract_verified_portable(archive: Path, progress=None):
         raise
 
 
+def _preflight_staged_app(stage):
+    """Boot the new binary safely before exiting the user's existing app.
+
+    The smoke test gets a separate temporary profile, so it never touches
+    running project tasks or chat history in the user's actual profile.
+    """
+    if not is_installed_app():
+        return  # Source-mode unit testing cannot execute Windows binaries.
+    with tempfile.TemporaryDirectory(prefix="sytox_preflight_", dir=update_cache_dir()) as profile:
+        env = os.environ.copy()
+        env["APPDATA"] = profile
+        exe = Path(stage) / "SYTOX_Assistant.exe"
+        try:
+            result = subprocess.run(
+                [str(exe), "--smoke-test", "--background"],
+                cwd=str(stage), env=env, check=False, timeout=90,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise UpdateError("Die neue SYTOX-Version konnte vor dem Update nicht starten: "
+                              + str(exc)) from exc
+        if result.returncode != 0:
+            raise UpdateError("Vorab-Starttest der neuen Version fehlgeschlagen "
+                              f"(Code {result.returncode}). Die bisherige App bleibt unverändert.")
+
+
 def download_verified_portable(update, progress=None):
     archive = _verified_portable_archive(update, progress)
-    return extract_verified_portable(archive, progress)
+    stage = extract_verified_portable(archive, progress)
+    try:
+        _preflight_staged_app(stage)
+        return stage
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
 
 
 def _validated_staged_package(stage):
