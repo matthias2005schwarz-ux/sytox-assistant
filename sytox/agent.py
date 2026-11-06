@@ -15,6 +15,7 @@ from .web_search import should_search, search_web, format_results
 from .program_build import needs_compiled_artifact
 from .ram_saver import keep_alive_for_config
 from .model_resources import model_gate
+from .project_backup import create_snapshot, SnapshotError
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
 Stil: freundlich, klar und direkt. Sprich Hochdeutsch ohne Dialekt.
@@ -240,6 +241,19 @@ class Agent:
                     'Bitte nur unüberprüftes Allgemeinwissen nennen und dies kennzeichnen.'})
         toolkit = Toolkit(self.store, self.workspace, self.approve, self.stop, chat_id, self.logger, self.gmail_client_secrets)
         toolkit.unvalidated_paths.update(checkpoint.get('unvalidated_paths', []))
+        if coding_task and not checkpoint.get('baseline_snapshot'):
+            try:
+                snapshot = create_snapshot(
+                    self.workspace, toolkit.backup_root, 'before_coding')
+                checkpoint['baseline_snapshot'] = snapshot['filename']
+                self.store.update_task(task_id, 'running', checkpoint)
+                self.logger('Status', 'Projekt-Sicherheitskopie erstellt: '
+                            + str(snapshot['files']) + ' Dateien.')
+            except (OSError, SnapshotError) as exc:
+                toolkit.close()
+                message = 'Programmierung sicherheitshalber pausiert: Backup fehlgeschlagen: ' + str(exc)
+                self.store.update_task(task_id, 'paused', checkpoint)
+                return {'status': 'paused', 'content': message, 'task_id': task_id}
         steps, idle = previous_steps, 0
         step_started = None
         step_durations = checkpoint.get('step_durations', [])
@@ -249,6 +263,43 @@ class Agent:
                           if isinstance(sample, dict) and 'step' in sample]
         remaining_steps = checkpoint.get('remaining_steps')
         remaining_steps_at = checkpoint.get('remaining_steps_at')
+        active_change = next((item for item in self.store.task_changes(task_id)
+                              if item['status'] == 'in_progress'), None)
+        change_base_writes = int(checkpoint.get('change_base_writes', previous_writes))
+        change_base_checks = int(checkpoint.get('change_base_checks', previous_checks))
+        if active_change:
+            messages.append({'role': 'user', 'content':
+                'Ein bereits begonnener Änderungswunsch aus der Warteschlange '
+                'muss vor der Fertigmeldung weiter umgesetzt und geprüft werden: '
+                + active_change['instruction']})
+
+        def promote_change():
+            """Resume next instruction only after the preceding phase is validated."""
+            nonlocal active_change, change_base_writes, change_base_checks
+            nonlocal remaining_steps, remaining_steps_at, progress_notes
+            item = self.store.claim_next_change(task_id)
+            if item is None:
+                return None
+            if active_change and active_change['id'] == item['id']:
+                return item['instruction']
+            try:
+                snapshot = create_snapshot(
+                    self.workspace, toolkit.backup_root, 'before_amendment')
+            except (OSError, SnapshotError) as exc:
+                raise SnapshotError('Zusatzwunsch pausiert: Backup fehlgeschlagen: ' + str(exc))
+            active_change = item
+            change_base_writes = previous_writes + toolkit.writes
+            change_base_checks = previous_checks + toolkit.passed_checks
+            remaining_steps = None
+            remaining_steps_at = None
+            progress_notes = (progress_notes + [{
+                'completed': 'Vorherigen Auftragsstand geprüft',
+                'next_step': item['instruction'][:500],
+                'evidence': 'Sicherheitskopie: ' + snapshot['filename'],
+            }])[-8:]
+            self.logger('Status', 'Zusatzwunsch wird vor der Fertigmeldung umgesetzt: '
+                        + item['instruction'][:105])
+            return item['instruction']
 
         def persist_task(state, details):
             """Store actual step timings, never a fabricated model completion time."""
@@ -261,6 +312,12 @@ class Agent:
                     if len(step_durations) > 12:
                         del step_durations[:-12]
             details['step_durations'] = list(step_durations)
+            details['baseline_snapshot'] = checkpoint.get('baseline_snapshot')
+            details['change_base_writes'] = change_base_writes
+            details['change_base_checks'] = change_base_checks
+            details['pending_changes'] = len(self.store.task_changes(task_id))
+            if active_change:
+                details['active_change_id'] = active_change['id']
             if remaining_steps is not None:
                 details['remaining_steps'] = remaining_steps
                 details['remaining_steps_at'] = remaining_steps_at
@@ -310,6 +367,7 @@ class Agent:
                 if calls:
                     idle = 0
                     for call in calls[:8]:
+                        queued_prompt = ''
                         fn = call.get('function') or {}
                         name = fn.get('name', '')
                         args = fn.get('arguments') or {}
@@ -354,23 +412,54 @@ class Agent:
                             writes = toolkit.writes + previous_writes
                             checks = toolkit.passed_checks + previous_checks
                             artifact_ok = (not artifact_need or (artifact_need == 'exe' and bool(toolkit.verified_exe_builds())))
-                            if count and artifact_ok and (not coding_task or (writes and checks and validated_writes >= writes and not toolkit.unvalidated_paths)):
-                                status, result = 'done', str(args.get('summary', 'Auftrag erledigt'))[:3000]
-                                result += '\nNachweis (Modellbericht, bitte prüfen): ' + str(args.get('evidence', '(keiner)'))[:1300]
-                                if artifact_need == 'exe':
-                                    artifact = toolkit.verified_exe_builds()[0]
-                                    result += ('\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
-                                               + '\nSHA-256: ' + artifact['sha256']
-                                               + '\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
-                                finished = True
-                                break
-                            res = ('Abschluss abgelehnt: kein ausreichender Nachweis. '
-                                   'Für Programmieraufgaben ist mindestens eine gespeicherte Datei und '
-                                   'eine erfolgreiche Test-/Syntaxprüfung NACH der letzten Änderung nötig. '
-                                   'Bei gewünschter EXE ist zusätzlich eine tatsächlich gebaute und '
-                                   'per project_build verifizierte Windows-Datei erforderlich. '
-                                   'Ein Installer ist damit noch NICHT abgedeckt. '
-                                   'Andernfalls Blockade melden oder weitermachen.')
+                            baseline_ok = (count and artifact_ok
+                                           and (not coding_task or (writes and checks
+                                                and validated_writes >= writes
+                                                and not toolkit.unvalidated_paths)))
+                            change_ok = (not active_change or
+                                         (writes > change_base_writes
+                                          and checks > change_base_checks
+                                          and validated_writes >= writes
+                                          and not toolkit.unvalidated_paths))
+                            if baseline_ok and change_ok:
+                                if active_change:
+                                    self.store.finish_change(task_id, active_change['id'])
+                                    active_change = None
+                                    self.logger('Aktion', 'Zusatzwunsch geprüft und angewendet.')
+                                if self.store.task_changes(task_id):
+                                    next_instruction = promote_change()
+                                    res = ('Der bisherige Stand ist validiert. '
+                                           'Jetzt wird der nächste vorgemerkte Änderungswunsch '
+                                           'im selben Auftrag umgesetzt: ' + next_instruction)
+                                    queued_prompt = (
+                                        'Aktueller Zusatzwunsch (nicht separat ausliefern): '
+                                        + next_instruction
+                                        + '\\nDanach alle Änderungen testen und erst '
+                                          'nach der letzten Ergänzung complete_task aufrufen.')
+                                else:
+                                    provisional = {
+                                        'steps': steps, 'progress_notes': progress_notes[-8:],
+                                        'writes': writes, 'passed_checks': checks,
+                                    }
+                                    if self.store.complete_task_if_queue_empty(task_id, provisional):
+                                        status, result = 'done', str(args.get('summary', 'Auftrag erledigt'))[:3000]
+                                        result += '\\nNachweis (Modellbericht, bitte prüfen): ' + str(args.get('evidence', '(keiner)'))[:1300]
+                                        if artifact_need == 'exe':
+                                            artifact = toolkit.verified_exe_builds()[0]
+                                            result += ('\\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
+                                                       + '\\nSHA-256: ' + artifact['sha256']
+                                                       + '\\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
+                                        finished = True
+                                        break
+                                    next_instruction = promote_change()
+                                    res = 'Neuer Änderungswunsch während Abschluss: ' + str(next_instruction)
+                                    queued_prompt = 'Bitte zuerst diesen Zusatzwunsch fertig umsetzen: ' + str(next_instruction)
+                            else:
+                                res = ('Abschluss abgelehnt: noch nicht ausreichend verifiziert. '
+                                       'Jede neue Ergänzung muss zusätzlich geändert UND nach der '
+                                       'letzten Änderung erfolgreich getestet sein. '
+                                       'Für EXE-Aufträge ist ein echter, verifizierter Build nötig. '
+                                       'Sonst weiterarbeiten oder Blockade melden.')
                         elif name != 'record_progress':
                             before_checks = toolkit.passed_checks
                             res = toolkit.call(name, args)
@@ -383,6 +472,9 @@ class Agent:
                                     if private_pc else res[:1800])
                         self.logger('Aktion', f'{name}: {safe_res[:180]}')
                         messages.append({'role': 'tool', 'tool_name': name, 'content': res})
+                        if name == 'complete_task' and queued_prompt:
+                            messages.append({'role': 'user', 'content': queued_prompt})
+                            queued_prompt = ''
                         checkpoint = {'steps': steps, 'last_result': f'{name}: {safe_res}',
                                       'tool_actions': toolkit.action_count + previous_actions,
                                       'writes': toolkit.writes + previous_writes,
@@ -415,6 +507,18 @@ class Agent:
                         'progress_notes': progress_notes[-8:]}
                 persist_task('running', checkpoint)
                 if mode == 'once':
+                    # An additional user instruction is part of the SAME
+                    # deliverable, not a second handoff after completion.
+                    if coding_task and self.store.task_changes(task_id):
+                        mode = 'until_done'
+                        self.store.set_task_mode(task_id, mode)
+                        messages.append({'role': 'user', 'content':
+                            'Schließe zuerst den ursprünglichen Programmierauftrag '
+                            'vollständig ab und validiere ihn mit Werkzeugen. '
+                            'Danach stehen vorgemerkte Änderungen an, die du '
+                            'in dasselbe Projekt einarbeiten musst. '
+                            'Melde erst nach allen Änderungen mit complete_task fertig.'})
+                        continue
                     if auto_search and sourced_results and not any(
                             item['url'] in text for item in sourced_results):
                         text += '\nQuellen (Suchtreffer): ' + ' | '.join(
@@ -426,6 +530,15 @@ class Agent:
                              + '\nAbschluss nicht bestätigt: Die angeforderte EXE bzw. '
                                'der Installer wurde nicht durch einen erfolgreichen Build nachgewiesen.')
                     else:
+                        if not self.store.complete_task_if_queue_empty(
+                            task_id, {'steps': steps, 'progress_notes': progress_notes[-8:]}):
+                            mode = 'until_done'
+                            self.store.set_task_mode(task_id, mode)
+                            messages.append({'role': 'user', 'content':
+                                'Neue Zusatzanweisungen sind eingetroffen. '
+                                'Bitte erst nach vollständiger Umsetzung aller '
+                                'Ergänzungen und Tests complete_task aufrufen.'})
+                            continue
                         status, result = 'done', text or 'Das Modell hat keine Antwort geliefert.'
                         if artifact_need == 'exe':
                             artifact = toolkit.verified_exe_builds()[0]
