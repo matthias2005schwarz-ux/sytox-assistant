@@ -16,6 +16,29 @@ class ParallelReplyTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication(['sytox-parallel-chat-test'])
 
+    def test_screen_vision_is_internal_to_fast_chat(self):
+        question = {'role': 'user', 'content': 'Schau auf meinen Bildschirm. Was siehst du?'}
+        worker = ParallelReplyWorker(
+            {'model': 'fallback', 'fast_model': 'qwen3:4b',
+             'vision_model': 'qwen3-vl:4b',
+             'ollama_url': 'http://localhost:11434'}, [question]
+        )
+        answers = []
+        worker.completed.connect(answers.append)
+        with patch('sytox.parallel_chat.describe_screen', return_value='Editor offen') as vision, \
+             patch('sytox.parallel_chat.OllamaClient') as client, \
+             patch('sytox.parallel_chat.search_web') as web:
+            client.return_value.chat.return_value = {
+                'role': 'assistant', 'content': 'Du hast einen Editor offen.'
+            }
+            worker.run()
+            vision.assert_called_once()
+            self.assertEqual(client.call_args.args[1], 'qwen3:4b')
+            sent = client.return_value.chat.call_args.args[0]
+            self.assertIn('Editor offen', sent[-1]['content'])
+            web.assert_not_called()
+        self.assertEqual(answers, ['Du hast einen Editor offen.'])
+
     def test_tool_free_answer_uses_independent_history(self):
         context = [{'role': 'user', 'content': 'Wie funktioniert das?'}]
         worker = ParallelReplyWorker(
