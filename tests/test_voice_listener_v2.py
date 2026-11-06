@@ -72,13 +72,20 @@ class VoiceListenerV2Tests(unittest.TestCase):
         listener.wake_command.connect(heard.append)
 
         class Recognizer:
-            def __init__(self): self.reset_count = 0
+            def __init__(self):
+                self.reset_count = 0
+                self.result_count = 0
             def AcceptWaveform(self, _audio):
                 speaking.clear()  # TTS has just finished; queued audio is stale.
                 muted.clear()
                 return True
             def Result(self):
-                return json.dumps({"text": "hey sytox öffne notepad"})
+                self.result_count += 1
+                # The first sample is normal loudspeaker content; the queued
+                # stale sample would contain a fake wake word if not flushed.
+                transcript = ("Hier ist ein Beispiel" if self.result_count == 1
+                              else "hey sytox öffne notepad")
+                return json.dumps({"text": transcript})
             def Reset(self):
                 self.reset_count += 1
                 listener.stop_event.set()
