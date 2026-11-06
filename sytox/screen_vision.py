@@ -110,7 +110,7 @@ def analyze_screenshot(png: bytes, question: str, url: str, model: str,
             raise InterruptedError('Bildschirmfreigabe beendet.')
         payload['stream'] = True
         with request(endpoint + '/api/chat', json=payload,
-                     stream=True, timeout=(8, 40)) as response:
+                     stream=True, timeout=(8, 40), allow_redirects=False) as response:
             response.raise_for_status()
             answer = []
             completed = False
