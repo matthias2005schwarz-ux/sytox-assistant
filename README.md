@@ -1,3 +1,57 @@
+# Zwei getrennte KI-Modi – Schnellchat und Qwen-Projekte
+
+SYTOX bietet jetzt **links zwei eigene Startschaltflächen**:
+
+- **⚡ Neuer Schnellchat:** nutzt das lokale `qwen3:4b` (ca. 2,5 GB) für
+  schnelle normale Gespräche, natürliches Deutsch, Antworten mit Live-Textausgabe
+  und kleine Coding-Aufträge. Ein normales „Hallo“ geht **ohne** die schwere
+  Agent-Werkzeugschleife direkt an Qwen3. Ausdrückliche Befehle, kleine Skripte,
+  Apps oder Dateien zu programmieren, nutzen den bestehenden Coding-Agenten
+  mit den bisherigen Berechtigungsabfragen. Anspruchsvolle Projekte sind weiter
+  besser im Qwen-Projektmodus aufgehoben.
+- **◆ Neues Qwen-Projekt:** nutzt das bereits bekannte
+  `qwen3-coder:30b` (~19 GB) für anspruchsvolle Programmierung,
+  Mehrschritt-Aufträge, Tests, Architektur, Debugging und Multi-Agenten-Reviews.
+  Die bisherigen Zeit-/Arbeitsmodi bleiben hier verfügbar.
+- **Bildschirmfragen:** Beide Chatarten verwenden bei ausdrücklich erteilter
+  Bildschirmfreigabe das **separate** lokale Bildmodell `qwen3-vl:4b`
+  (ca. 3,3 GB). Das Textmodell 4B kann keine Bilder direkt verarbeiten.
+- **Sprachmodus:** Vosk erkennt Sprache lokal. Antworten werden auf Wunsch
+  vorgelesen; das aktive Gespräch bestimmt automatisch das passende Textmodell.
+- **Unterhaltung während eines Projekts:** die Nebenunterhaltung verwendet
+  ebenfalls das kleine 4B-Modell, ohne Zugriff auf die Werkzeuge des laufenden
+  Programmierauftrags.
+
+**Einmalige Einrichtung in PowerShell** (nichts wird ungefragt heruntergeladen):
+
+```powershell
+ollama pull qwen3:4b
+ollama pull qwen3-vl:4b
+ollama list
+```
+
+Dein vorhandenes `qwen3-coder:30b` musst du **nicht** erneut laden.
+Das 4B-Textmodell und 4B-Bildmodell sind zwei unterschiedliche Downloads.
+Wenn ein Modell fehlt, zeigt die UI den fehlenden Namen und bietet über
+**Einrichten** den vorhandenen, ausdrücklich bestätigungspflichtigen
+Ollama-Installationsdialog. Es gibt weiterhin **keine Chat-Nutzungsquote**.
+
+**Kompatibilität:** Bestehende Chats, Aufgaben und Dateien werden nicht gelöscht
+oder automatisch umgestellt. Bei der Datenbankmigration bleiben alte Chats
+im bisherigen Qwen-Projektmodus; neue Chats können pro Chat zwischen den
+beiden Arten gewählt werden. Die Modellnamen lassen sich getrennt in den
+Einstellungen verändern. Die Chatart wird gespeichert und beim Öffnen
+wiederhergestellt.
+
+**Einschränkungen:** Die tatsächliche Geschwindigkeit hängt von CPU, RAM und
+Ollamas Modellspeicher ab. Gleichzeitige Modelle können auf einem PC ohne GPU
+um Arbeitsspeicher und CPU konkurrieren. Kleine Modelle sind bei Tool-Aufrufen
+und komplexer Programmierung weniger zuverlässig. Die Windows-CI-Tests
+verwenden simulierte Modellantworten; echte Qualität muss am Nutzer-PC
+bestätigt werden.
+
+---
+
 # Programmier-Agent 2.0: überprüfbare Korrekturschleifen (Entwicklungszweig)
 
 - **Fehlerdiagnose:** Wenn ein lokaler Test, Build oder eine Syntaxprüfung scheitert, erzeugt SYTOX einen begrenzten Diagnoseauszug und erinnert den Agenten daran, zuerst die Ursache im aktuellen Projekt zu untersuchen. Reparaturen verwenden weiterhin die bestehenden Dateiwirkungs- und Freigaberegeln. Eine Fehlermeldung ist **kein** Beleg, dass eine Korrektur erfolgreich war.
