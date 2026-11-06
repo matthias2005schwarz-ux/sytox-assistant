@@ -284,7 +284,18 @@ class Store:
         with self._lock,self._connect() as db:
             db.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?)',
                        (tid,cid,goal,mode,deadline,'running','{}',now(),now()))
+            # Attach requests given between starting the worker and task creation.
+            db.execute('UPDATE task_changes SET task_id=?,updated_at=? '
+                       'WHERE chat_id=? AND task_id IS NULL AND status=\'queued\'',
+                       (tid, now(), cid))
         return tid
+
+    def set_task_mode(self, tid, mode):
+        if mode not in ('once', 'until_done', 'timed'):
+            raise ValueError('Unbekannter Arbeitsmodus.')
+        with self._lock, self._connect() as db:
+            db.execute('UPDATE tasks SET mode=?, updated_at=? WHERE id=?',
+                       (mode, now(), tid))
 
     def extend_task(self, tid, deadline):
         """Extend a timed task when resuming a session whose prior time expired."""
@@ -317,13 +328,15 @@ class Store:
                 "ORDER BY created_at DESC LIMIT 1", (cid,)
             ).fetchone()
             if not active:
-                # The agent creates the task shortly after the UI starts its
-                # thread. The UI must retry rather than orphan a change.
-                raise RuntimeError('Noch kein laufender Auftrag zum Vormerken.')
+                # The worker may have started but not yet inserted its task.
+                # Store temporarily unattached; create_task binds it atomically.
+                task_id = None
+            else:
+                task_id = active['id']
             cursor = db.execute(
                 'INSERT INTO task_changes(chat_id,task_id,instruction,status,created_at,updated_at) '
                 "VALUES(?,?,?,'queued',?,?)",
-                (cid, active['id'], instruction, now(), now()),
+                (cid, task_id, instruction, now(), now()),
             )
             return cursor.lastrowid
 
