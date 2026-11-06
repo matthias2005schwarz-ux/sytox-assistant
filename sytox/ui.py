@@ -1554,6 +1554,7 @@ class MainWindow(QMainWindow):
         if not accepted or not title.strip():
             return
         cid = self.store.create_chat(title=title.strip(), kind='project')
+        self.search.clear()  # Ensure the new project is visible even after a search.
         self.reload_chats()
         self.select_chat(cid)
 
@@ -1679,7 +1680,8 @@ class MainWindow(QMainWindow):
         self.add_bubble('user',txt)
         self.input.clear()
         messages=self.store.messages(self.chat_id)
-        if len([m for m in messages if m['role']=='user'])==1:
+        if (self.store.chat_kind(self.chat_id) != 'project' and
+                len([m for m in messages if m['role']=='user']) == 1):
             self.store.rename_chat(self.chat_id,txt[:46]+'…' if len(txt)>46 else txt[:46]);self.reload_chats()
             self.chat_heading.setText(txt[:46])
         mode={'Einmal':'once','1 Stunde arbeiten':'timed','3 Stunden arbeiten':'timed','Bis fertig':'until_done'}[self.mode.currentText()]
