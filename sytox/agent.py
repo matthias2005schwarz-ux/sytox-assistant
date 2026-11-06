@@ -556,15 +556,34 @@ class Agent:
                             checks = toolkit.passed_checks + previous_checks
                             artifact_ok = (not artifact_need or (artifact_need == 'exe' and bool(toolkit.verified_exe_builds())))
                             if count and artifact_ok and (not coding_task or (writes and checks and validated_writes >= writes and not toolkit.unvalidated_paths)):
-                                status, result = 'done', str(args.get('summary', 'Auftrag erledigt'))[:3000]
-                                result += '\nNachweis (Modellbericht, bitte prüfen): ' + str(args.get('evidence', '(keiner)'))[:1300]
-                                if artifact_need == 'exe':
-                                    artifact = toolkit.verified_exe_builds()[0]
-                                    result += ('\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
-                                               + '\nSHA-256: ' + artifact['sha256']
-                                               + '\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
-                                finished = True
-                                break
+                                if team.review_needed(writes):
+                                    if not local_model_only(self.client.url):
+                                        res = 'FEHLER PermissionError: Team-Review benötigt lokales Ollama.'
+                                    else:
+                                        try:
+                                            review_reply = self.client.chat(
+                                                reviewer_request(goal, coding_plan.get('test_strategy', ''),
+                                                                 self.workspace, toolkit.modified_paths),
+                                                tools=None, stop=self.stop)
+                                            feedback = str(review_reply.get('content') or '').strip()
+                                            team.reviewed(writes, feedback)
+                                            res = ('Team-Review durchgeführt (unverifiziert, kein Testersatz). '
+                                                   'Prüfe Hinweise, korrigiere tatsächliche Probleme und teste erneut. '
+                                                   'Wenn alles nachweislich fertig ist, complete_task erneut ausführen:\n'
+                                                   + feedback[:2500])
+                                        except (OllamaError, ValueError, OSError) as exc:
+                                            res = ('FEHLER ' + type(exc).__name__ +
+                                                   ': Team-Review fehlgeschlagen: ' + str(exc)[:300])
+                                else:
+                                    status, result = 'done', str(args.get('summary', 'Auftrag erledigt'))[:3000]
+                                    result += '\nNachweis (Modellbericht, bitte prüfen): ' + str(args.get('evidence', '(keiner)'))[:1300]
+                                    if artifact_need == 'exe':
+                                        artifact = toolkit.verified_exe_builds()[0]
+                                        result += ('\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
+                                                   + '\nSHA-256: ' + artifact['sha256']
+                                                   + '\nWindows-PE geprüft; Start und Funktion noch nicht getestet.')
+                                    finished = True
+                                    break
                             res = ('Abschluss abgelehnt: kein ausreichender Nachweis. '
                                    'Für Programmieraufgaben ist mindestens eine gespeicherte Datei und '
                                    'eine erfolgreiche Test-/Syntaxprüfung NACH der letzten Änderung nötig. '
