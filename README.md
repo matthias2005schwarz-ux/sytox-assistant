@@ -1,4 +1,4 @@
-## Direkt-Updates innerhalb von SYTOX (in Entwicklung)
+## Direkt-Updates innerhalb von SYTOX (ab Version 0.3.9)
 
 Unter **Nach Updates suchen** erkennt die installierte Windows-App offizielle GitHub Releases.
 Neue Versionen koennen neben einem Erstinstallationsprogramm ein offizielles HTTPS-Release-
@@ -19,7 +19,7 @@ den der eingebaute Update-Button selbst laden und ausfuehren kann. Anschliessend
 laufen weitere geeignete Releases ohne Installer. Nicht veroeffentlichte
 Entwicklungsstaende erscheinen absichtlich nicht bei der Update-Suche.
 
-**Status:** Quellcode und automatisierte Tests in Entwicklung; noch kein neues Release.
+**Hinweis:** Der direkte In-App-Updater steht ab der ersten installierten Version 0.3.9 zur Verfuegung. Beim Upgrade von 0.3.8 auf 0.3.9 wird der bisherige integrierte Installer einmalig benoetigt. Ein manueller Download ist dafuer nicht erforderlich.
 
 # SYTOX Assistant 0.3.8 – lokales Langzeitgedächtnis
 
