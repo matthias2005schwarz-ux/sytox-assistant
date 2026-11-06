@@ -161,6 +161,19 @@ class ProjectSidebarQtTests(unittest.TestCase):
         self.assertEqual(select_chat_model('Wie geht es dir?', dialog.config)[1], 'fast')
         dialog.close()
 
+    def test_first_project_message_preserves_its_user_chosen_name(self):
+        with patch('sytox.ui.QInputDialog.getText', return_value=('Mein festes Projekt', True)):
+            self.window.create_project()
+        project_id = self.window.chat_id
+        self.window.input.setPlainText('Programmiere ein neues Minecraft Plugin')
+        with patch.object(self.window, 'start_worker') as start:
+            self.window.send()
+            start.assert_called_once()
+        self.assertEqual(
+            next(c['title'] for c in self.window.store.chats() if c['id'] == project_id),
+            'Mein festes Projekt')
+        self.assertEqual(self.window.store.chat_kind(project_id), 'project')
+
     def test_cancelled_project_creation_does_not_make_empty_project(self):
         with patch('sytox.ui.QInputDialog.getText', return_value=('', False)):
             self.window.create_project()
