@@ -19,7 +19,7 @@ def component_suite():
         for child in node:
             if isinstance(child, unittest.TestSuite):
                 collect(child)
-            elif not child.id().startswith('test_ollama_ui.'):
+            elif not child.id().startswith(('test_ollama_ui.', 'test_model_benchmark_ui.')):
                 cases.append(child)
 
     collect(full_suite)
