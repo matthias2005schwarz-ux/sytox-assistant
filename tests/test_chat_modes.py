@@ -4,11 +4,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from sytox.agent import OllamaClient
+from sytox.agent import OllamaClient, Agent, QUICK_CODING_TOOLS
 from sytox.chat_modes import (
     QUICK, PROJECT, FAST_MODEL, PROJECT_MODEL,
     is_small_project_request, model_for_chat, normalize_chat_mode,
@@ -96,6 +97,40 @@ class QuickModelProtocolTests(unittest.TestCase):
                 on_text=observed.append)
         self.assertEqual(result['content'], 'Hallo aus Qwen3')
         self.assertEqual(observed, ['Hallo ', 'aus Qwen3'])
+
+
+class QuickCodingAgentTests(unittest.TestCase):
+    def test_small_project_writes_and_tests_with_restricted_tool_catalog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = Store(root / 'chats.db')
+            chat = store.create_chat('Mini-Projekt', mode=QUICK)
+            store.add_message(chat, 'user', 'Programmiere ein kurzes Python-Skript')
+            agent = Agent(store, 'qwen3:4b', 'http://localhost:11434',
+                          root / 'project', lambda *_: True, lambda *_: None,
+                          threading.Event(), context_tokens=4096, quick_coding=True)
+            def tool(name, **kwargs):
+                return {'role': 'assistant', 'content': '', 'tool_calls': [
+                    {'function': {'name': name, 'arguments': kwargs}}]}
+            agent.client.chat = MagicMock(side_effect=[
+                tool('write_file', path='hello.py', content='print(42)\\n'),
+                tool('run_command', command='python -m compileall hello.py'),
+                {'role': 'assistant', 'content': 'Kleines Skript geschrieben und getestet.'},
+            ])
+            result = agent.run(chat, 'once')
+            self.assertEqual(result['status'], 'done', result['content'])
+            self.assertEqual((root / 'project' / 'hello.py').read_text(encoding='utf-8'),
+                             'print(42)\\n')
+            self.assertEqual(agent.client.chat.call_count, 3)
+            for call in agent.client.chat.call_args_list:
+                self.assertIs(call.kwargs.get('think'), False)
+                offered = {tool['function']['name'] for tool in call.kwargs['tools']}
+                self.assertEqual(offered, QUICK_CODING_TOOLS)
+                self.assertNotIn('pc_click', offered)
+                self.assertNotIn('gmail_send', offered)
+                self.assertNotIn('start_coding_team', offered)
+                self.assertIn('kleinen lokalen Coding-Modus',
+                              call.args[0][0]['content'])
 
 
 if __name__ == '__main__':
