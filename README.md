@@ -438,3 +438,33 @@ Für fortgeschrittene, unbeaufsichtigte Nutzung reicht diese Version noch nicht:
 - **Releases veröffentlichen:** Eine Version muss in `sytox/__init__.py`, `Windows_Installer.iss` und den zugehörigen Release-Skripten identisch sein. Ein Git-Tag wie `v0.3.3` löst `.github/workflows/windows-release.yml` aus: Tests → Windows-EXE → Installer → Installations-Smoketest → Release mit Installer und SHA-256-Datei. **CI-Artefakte allein sind keine automatischen Updates.** Solange kein GitHub Release veröffentlicht wurde, meldet SYTOX keine neue Version.
 
 Hinweis: Ein SHA-256-Hash erkennt einen beschädigten oder geänderten Download gegenüber der veröffentlichten Datei, ersetzt aber keine Code-Signatur des Herausgebers.
+
+## Lokaler Qwen3-Coder-30B-Benchmark (opt-in)
+
+SYTOX > **Einstellungen** > **Modellgeschwindigkeit** > **Lokalen KI-Benchmark starten**.
+Der Test fragt nur das selbst konfigurierte **lokale** Ollama auf Port 11434 ab.
+Er benötigt keine Cloud, liest keine Chats/Projektdateien und lädt keine Modelle
+herunter. Ein optionaler Abbrechen-Knopf beendet die nächste eingehende Antwort.
+Die Oberfläche bleibt dank eigenem Qt-Worker bedienbar.
+
+Alternativ im Projektordner über PowerShell:
+
+```powershell
+python tools/local_model_benchmark.py --model qwen3-coder:30b
+python tools/local_model_benchmark.py --model qwen3-coder:30b --json
+```
+
+Es werden zwei kurze feste Aufgaben (Erklärung und Python-Funktion) gemessen.
+Ausgewiesen werden die Zeit bis zum ersten sichtbaren Token, die gesamte
+Antwortzeit, die von Ollama **tatsächlich** gelieferten Tokenzahlen und
+Generierungstokens pro Sekunde (aus `eval_count/eval_duration`).
+Wenn Ollama keine entsprechenden Messdaten liefert, steht
+`nicht gemessen`, nicht ein geschätzter Wert. Der erste Lauf kann das
+19-GB-Modell erst laden und ist deshalb nicht mit einem warmen Lauf vergleichbar.
+
+**Wichtig:** Das Limit von 96 generierten Tokens **gilt ausschließlich je
+Benchmark-Test**. Die normale SYTOX-Chatnutzung wird dadurch nicht begrenzt.
+Der automatische RAM-bewusste Kontext ist eine Speicherempfehlung, kein
+Nutzungslimit. CI verwendet bewusst nur simulierte Ollama-Antworten;
+echte Leistungsmessungen müssen auf deinem Windows-PC mit lokal
+installiertem Modell durchgeführt werden.
