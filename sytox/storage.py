@@ -48,7 +48,8 @@ class Store:
         with self._connect() as db:
             db.executescript('''
             CREATE TABLE IF NOT EXISTS chats(
-              id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+              id TEXT PRIMARY KEY, title TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              kind TEXT NOT NULL DEFAULT 'chat', model_mode TEXT NOT NULL DEFAULT 'fast');
             CREATE TABLE IF NOT EXISTS messages(
               id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, role TEXT NOT NULL,
               content TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -83,17 +84,51 @@ class Store:
             CREATE TABLE IF NOT EXISTS preferences(
               key TEXT PRIMARY KEY, value TEXT NOT NULL);
             ''')
+            # Non-destructive migration: old user databases keep every chat/message.
+            fields = {row['name'] for row in db.execute('PRAGMA table_info(chats)')}
+            if 'kind' not in fields:
+                db.execute("ALTER TABLE chats ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'")
+            if 'model_mode' not in fields:
+                db.execute("ALTER TABLE chats ADD COLUMN model_mode TEXT NOT NULL DEFAULT 'fast'")
             try:
                 db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(content, chat_id UNINDEXED)')
                 db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS memory_search USING fts5(content, memory_id UNINDEXED)')
             except sqlite3.OperationalError:
                 pass  # old Python builds may lack FTS5
 
-    def create_chat(self, title='Neuer Chat'):
+    def create_chat(self, title='Neuer Chat', kind='chat', model_mode=None):
+        if kind not in ('chat', 'project'):
+            raise ValueError('Unbekannter Chattyp')
+        if model_mode is None:
+            model_mode = 'project' if kind == 'project' else 'fast'
+        if model_mode not in ('auto', 'fast', 'project'):
+            raise ValueError('Unbekannter Modellmodus')
         cid = uuid.uuid4().hex
         with self._lock, self._connect() as db:
-            db.execute('INSERT INTO chats VALUES(?,?,?,?)', (cid,title,now(),now()))
+            db.execute('''INSERT INTO chats(id,title,created_at,updated_at,kind,model_mode)
+                          VALUES(?,?,?,?,?,?)''',
+                       (cid, title[:100], now(), now(), kind, model_mode))
         return cid
+
+    def chat_kind(self, cid):
+        with self._connect() as db:
+            row = db.execute('SELECT kind FROM chats WHERE id=?', (cid,)).fetchone()
+        return row['kind'] if row else None
+
+    def chat_model_mode(self, cid):
+        with self._connect() as db:
+            row = db.execute('SELECT kind,model_mode FROM chats WHERE id=?', (cid,)).fetchone()
+        if row is None:
+            return None
+        return 'project' if row['kind'] == 'project' else row['model_mode']
+
+    def set_chat_model_mode(self, cid, model_mode):
+        if model_mode not in ('auto', 'fast', 'project'):
+            raise ValueError('Unbekannter Modellmodus')
+        with self._lock, self._connect() as db:
+            db.execute('''UPDATE chats SET model_mode=?,updated_at=?
+                          WHERE id=? AND kind='chat' ''',
+                       (model_mode, now(), cid))
 
     def chats(self):
         with self._connect() as db:
