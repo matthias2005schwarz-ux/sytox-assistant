@@ -132,13 +132,13 @@ class ParallelReplyWorker(QThread):
             reply = client.chat(messages, tools=None, stop=self.stop_event)
             text = str(reply.get('content') or '').strip()
             if repair_outcome is not None:
-                # A small model may hallucinate success. Always append actual status.
+                # Never let an optimistic model answer hide the actual result.
                 status = str(repair_outcome.get('status', 'unbekannt'))
                 detail = str(repair_outcome.get('detail', ''))[:400]
-                text += '\\nSYTOX-Reparaturstatus: ' + status + (
-                    ' – ' + detail if detail else ''
-                ) + '\\nDer ursprüngliche Anwendungsfehler ist erst nach einem '
-                    'erfolgreichen Programmstart nachweislich behoben.'
+                text += ('\nSYTOX-Reparaturstatus: ' + status
+                         + (' – ' + detail if detail else '')
+                         + '\nDer ursprüngliche Anwendungsfehler ist erst nach '
+                           'einem erfolgreichen Programmstart nachweislich behoben.')
             if searched and sources and not any(x['url'] in text for x in sources):
                 text += '\nQuellen (Suchtreffer): ' + ' | '.join(
                     x['url'] for x in sources[:2])
