@@ -97,7 +97,7 @@ class VoiceTurnRouter:
 # wake phrase (or stop command) is required by default to prevent audio echo
 # from silently launching PC actions.
 _INTERRUPT_RE = re.compile(
-    rf"^\\s*(?:(?:(?:hey|hei|he)\\s+)?{_WAKE_NAME}\\s+)?"
+    rf"^\\s*(?:(?:(?:hey|hei|he)\\s+)?{_WAKE_NAME}[\\s,]+)?"
     r"(?:stopp|stop|halt|anhalten|ruhe|sei still|hör auf|hoer auf|"
     r"hör auf zu sprechen|hoer auf zu sprechen|bitte sei still)"
     r"\\s*[.!?]*$", re.I,
@@ -125,6 +125,8 @@ def interruption_command(phrase, free_listening=False):
     wake = _WAKE_RE.search(text)
     if wake:
         next_command = text[wake.end():].strip(' ,.!?')
+        if fast_silence_candidate(next_command):
+            return True, ''
         # Bare 'Sytox' must be followed by an unmistakable command or question
         # during playback. Do not interrupt for titles like 'SYTOX Webseite'.
         if not re.search(r'\b(?:hey|hei|he)\s+', wake.group(0), re.I):
