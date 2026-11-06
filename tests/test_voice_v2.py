@@ -18,7 +18,7 @@ class VoiceRoutingV2Tests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 router = VoiceTurnRouter(clock=clock)
                 self.assertEqual(router.command_for(phrase + ", was ist los?"),
-                                 "was ist los?")
+                                 "was ist los")
 
     def test_no_wake_in_middle_of_unrelated_sentence(self):
         for phrase in ("Es gibt eine Sytox Webseite",
