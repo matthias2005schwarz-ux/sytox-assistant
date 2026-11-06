@@ -468,3 +468,30 @@ Der automatische RAM-bewusste Kontext ist eine Speicherempfehlung, kein
 Nutzungslimit. CI verwendet bewusst nur simulierte Ollama-Antworten;
 echte Leistungsmessungen müssen auf deinem Windows-PC mit lokal
 installiertem Modell durchgeführt werden.
+
+## Sprachsteuerung 2.0 (offline mit Vosk)
+
+Der Gesprächsmodus verwendet weiterhin das lokal installierte deutsche Vosk-Modell
+und verändert die Freigaben des Windows-/Programmier-Agenten **nicht**.
+
+- **„Hey Sytox, was ist das?“** und gebräuchliche Aussprachevarianten werden
+  auch bei einer Schreibweise wie „hei seitox“ oder „hey sei tox“ erkannt.
+  Das Aktivierungswort muss am Anfang des gesprochenen Satzes stehen.
+- **„Stopp“ / „Hey Sytox, stopp“**: Während SYTOX spricht, können zwei
+  aufeinanderfolgende gleiche Vosk-Teilergebnisse die Sprachausgabe bereits
+  vor dem vollständigen Sprachsatz stoppen. Teiltranskripte lösen niemals
+  Windows- oder Dateibefehle aus.
+- **Kein Echo-Befehl:** Audiodaten der eigenen Sprachausgabe werden beim
+  Übergang zu neuem Zuhören verworfen. Selbst im aktivierten Freisprechmodus
+  werden während laufender Sprachausgabe nur ausdrückliche Stopp-/Wake-Phrasen
+  als Unterbrechungen akzeptiert.
+- **Weniger Duplikate:** Der lokale Listener unterdrückt identische unmittelbar
+  wiederholte erkannte Befehle für 1,2 Sekunden. Danach sind sie wieder
+  möglich; dies ist **kein Nutzungs- oder Chatlimit**.
+- Nach der Sprachausgabe gelten weiterhin die in den Einstellungen gewählten
+  Anschlussfrage-Zeiten. Für sensible Aktionen bleiben alle bisherigen
+  Genehmigungen und Sicherheitsprüfungen bestehen.
+
+Der CI-Lauf verwendet simulierte Audiodaten. Mikrofon-Empfindlichkeit,
+Aussprache, Rückkopplung und die echte Sprachausgabe auf deinem Windows-PC
+müssen vor einer offiziellen Freigabe zusätzlich praktisch getestet werden.
