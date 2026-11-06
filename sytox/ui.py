@@ -1212,12 +1212,19 @@ class MainWindow(QMainWindow):
         identity.addStretch(1)
         l.addLayout(identity)
         l.addSpacing(21)
-        btn_new = QPushButton('+  Neuer Chat')
-        btn_new.setObjectName('primary')
-        btn_new.clicked.connect(self.create_chat)
-        btn_new.setMinimumHeight(44)
-        l.addWidget(btn_new)
-        l.addSpacing(7)
+        self.btn_quick = QPushButton('⚡  Neuer Schnellchat')
+        self.btn_quick.setObjectName('primary')
+        self.btn_quick.setToolTip('Schnelle Gespräche, Sprachfragen und kurze Skripte')
+        self.btn_quick.clicked.connect(lambda: self.create_chat(QUICK))
+        self.btn_quick.setMinimumHeight(44)
+        l.addWidget(self.btn_quick)
+        self.btn_project = QPushButton('◆  Neues Qwen-Projekt')
+        self.btn_project.setObjectName('subtle')
+        self.btn_project.setToolTip('Aufwendige Projekte mit Qwen3-Coder 30B')
+        self.btn_project.clicked.connect(lambda: self.create_chat(PROJECT))
+        self.btn_project.setMinimumHeight(43)
+        l.addWidget(self.btn_project)
+        l.addSpacing(4)
         self.search = QLineEdit()
         self.search.setObjectName('chatSearch')
         self.search.setAccessibleName('Gespräche durchsuchen')
@@ -1727,15 +1734,30 @@ class MainWindow(QMainWindow):
         self.chatlist.clear()
         for chat in self.store.chats():
             if search not in chat['title'].lower():continue
-            it=QListWidgetItem(chat['title']);it.setData(Qt.UserRole,chat['id'])
+            marker = '⚡ ' if chat.get('mode') == QUICK else '◆ '
+            it=QListWidgetItem(marker + chat['title'])
+            it.setToolTip('Schnellchat · kleines Modell' if chat.get('mode') == QUICK
+                          else 'Qwen-Projekt · 30B-Modell')
+            it.setData(Qt.UserRole,chat['id'])
             self.chatlist.addItem(it)
             if chat['id']==self.chat_id:self.chatlist.setCurrentItem(it)
 
-    def create_chat(self):
+    def create_chat(self, mode=QUICK):
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self,'Auftrag läuft','Bitte erst den laufenden Auftrag stoppen.')
             return
-        cid=self.store.create_chat();self.reload_chats();self.select_chat(cid)
+        if mode not in (QUICK, PROJECT):
+            mode = QUICK
+        cid=self.store.create_chat('Neuer Schnellchat' if mode == QUICK
+                                  else 'Neues Qwen-Projekt', mode=mode)
+        self.reload_chats()
+        self.select_chat(cid)
+
+    def current_chat_mode(self):
+        return self.store.chat_mode(self.chat_id) if self.chat_id else QUICK
+
+    def current_chat_model(self):
+        return model_for_chat(self.current_chat_mode(), self.config)
 
     def select_chat(self,cid):
         if self.worker and self.worker.isRunning() and cid!=self.chat_id:
@@ -1746,6 +1768,17 @@ class MainWindow(QMainWindow):
         self.chat_id=cid
         current=next((c for c in self.store.chats() if c['id']==cid),None)
         self.chat_heading.setText(current['title'] if current else 'Chat')
+        self.model_name.setText(self.current_chat_model())
+        if self.current_chat_mode() == QUICK:
+            self.mode.setCurrentIndex(0)
+            self.mode.setEnabled(False)
+            self.mode.setToolTip('Schnellchat: direkte Antworten und kleine Coding-Aufträge')
+            self.state.setText('⚡ Schnellchat · Sprechen, Bildschirm, kleiner Code')
+        else:
+            self.mode.setEnabled(True)
+            self.mode.setToolTip('Qwen-Projekt: Einmal, Zeitmodus oder bis fertig')
+            self.state.setText('◆ Qwen-Projekt · aufwendige Aufgaben')
+        self.check_model_status()
         self.reload_chats();self.clear_bubbles()
         messages = self.store.messages(cid)
         if not messages:
@@ -1815,6 +1848,7 @@ class MainWindow(QMainWindow):
             self._animate_appearance(row, 200)
         QTimer.singleShot(100, lambda: self.scroll.verticalScrollBar().setValue(
             self.scroll.verticalScrollBar().maximum()))
+        return label
 
     def log(self,kind,text):
         self.logs.appendPlainText(f'{kind}: {text}')
