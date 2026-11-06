@@ -948,6 +948,7 @@ class MainWindow(QMainWindow):
         self._progress_refresh.start()
         # A failed swap reopens the previous EXE; show its rollback reason once.
         QTimer.singleShot(1500, self._show_pending_update_result)
+        QTimer.singleShot(10000, self._show_pending_update_result)
         QTimer.singleShot(700, self.check_model_status)
         if self.config.get('auto_check_updates', True):
             QTimer.singleShot(2200, self.check_for_updates)
