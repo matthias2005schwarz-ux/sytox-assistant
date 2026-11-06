@@ -79,6 +79,7 @@ class ScreenVisionTests(unittest.TestCase):
         self.assertEqual(result, "Fehler 404")
         self.assertEqual(recorded[0][0], "http://localhost:11434/api/chat")
         self.assertTrue(recorded[0][1]["stream"])
+        self.assertIs(recorded[0][1]["allow_redirects"], False)
 
     def test_cancelled_request_aborts_without_displaying_answer(self):
         cancel = threading.Event()
