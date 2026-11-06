@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
 from .storage import Store,default_data_dir
+from .chat_modes import QUICK, PROJECT, FAST_MODEL, model_for_chat, is_small_project_request
 from .voice_features import (record_until, transcribe_wav, speak, render_speech_file,
                              VoiceTurnRouter, VoiceCommandDeduplicator,
                              interruption_command, fast_silence_candidate,
@@ -125,6 +126,50 @@ class Worker(QThread):
             self.completed.emit(result)
         except Exception as e:
             self.completed.emit({'status':'failed','content':f'{type(e).__name__}: {e}','task_id':self.task_id})
+
+
+class QuickReplyWorker(QThread):
+    """Direct local model conversation, no heavy tool-using agent loop."""
+    partial = Signal(str)
+    completed = Signal(object)
+
+    def __init__(self, store, chat_id, settings):
+        super().__init__()
+        self.store, self.chat_id, self.settings = store, chat_id, dict(settings)
+        self.stop_event = threading.Event()
+
+    def run(self):
+        try:
+            history = self.store.messages(self.chat_id, limit=16)
+            turns = [{'role': m['role'], 'content': m['content'][:5000]}
+                     for m in history[-12:] if m['role'] in ('user', 'assistant')]
+            system = {'role': 'system', 'content': (
+                'Du bist SYTOX, ein freundlicher, klarer deutschsprachiger '
+                'lokaler KI-Assistent. Antworte direkt, gut verständlich '
+                'und bei einfachen Fragen kurz. Du kannst kurze Skripte '
+                'und Codebeispiele schreiben. Du hast im Schnellchat '
+                'KEINE Datei-, Windows-, Bildschirm- oder Internetwerkzeuge. '
+                'Behaupte niemals, du hättest etwas am PC ausgeführt oder '
+                'einen Bildschirm gesehen. Echte Dateiänderungen erfolgen '
+                'nur in einem separaten kleinen Coding-Auftrag mit den '
+                'bisherigen Berechtigungsabfragen. Erfinde keine Live-Quellen.'
+            )}
+            client = OllamaClient(self.settings['ollama_url'],
+                                  self.settings['fast_model'], context_tokens=4096)
+            answer = client.chat([system] + turns, stop=self.stop_event,
+                                 on_text=self.partial.emit, think=False)
+            message = (answer.get('content') or '').strip()
+            result = {'status': 'done',
+                      'content': message or 'Keine Antwort erhalten. Prüfe dein Schnellmodell.'}
+        except Exception as exc:
+            message = str(exc)
+            if '404' in message or 'Modell' in message or 'model' in message.lower():
+                message += ('\nSchnellmodell nachinstallieren: ollama pull ' +
+                            self.settings.get('fast_model', FAST_MODEL))
+            result = {'status': 'failed',
+                      'content': 'Schnellchat: ' + type(exc).__name__ + ': ' + message}
+        self.store.add_message(self.chat_id, 'assistant', result['content'])
+        self.completed.emit(result)
 
 
 class UpdateCheckWorker(QThread):
@@ -845,6 +890,8 @@ class SettingsDialog(QDialog):
         self.original=settings.copy()
         form=QFormLayout(self)
         self.model=QLineEdit(settings['model'])
+        self.fast_model=QLineEdit(settings.get('fast_model', FAST_MODEL))
+        self.fast_model.setToolTip('Einmalig installieren: ollama pull qwen3:4b')
         self.vision_model=QLineEdit(settings.get('vision_model', DEFAULT_VISION_MODEL))
         self.vision_model.setToolTip('Bildmodell für Screenshots; separat über Ollama laden, z. B. ollama pull qwen3-vl:4b')
         self.model_context=QComboBox()
@@ -901,8 +948,9 @@ class SettingsDialog(QDialog):
         self.follow_up.setRange(5,90)
         self.follow_up.setSuffix(' Sekunden')
         self.follow_up.setValue(int(settings.get('voice_followup_seconds',25)))
-        form.addRow('Ollama-Modell',self.model)
-        form.addRow('Bildmodell (separat)',self.vision_model)
+        form.addRow('Qwen-Projekte (großes Modell)',self.model)
+        form.addRow('Schnellchat (kleines Modell)',self.fast_model)
+        form.addRow('Bildschirmhilfe (Bildmodell)',self.vision_model)
         form.addRow('Kontextgröße',self.model_context)
         form.addRow('RAM-/Modell-Empfehlung',self.hardware_preview)
         form.addRow('Ollama-Adresse',self.url)
@@ -1028,7 +1076,9 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, status.title, message)
 
     def values(self):
-        return {'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
+        return {'model':self.model.text().strip(),
+                'fast_model':self.fast_model.text().strip(),
+                'ollama_url':self.url.text().strip(),
                 'model_context_tokens':self.model_context.currentData(),
                 'vision_model':self.vision_model.text().strip(),
                 'workspace':self.folder.text().strip(), 'vosk_model':self.vosk.text().strip(),
@@ -1053,6 +1103,8 @@ class MainWindow(QMainWindow):
         self.config_path=default_data_dir()/'settings.json'
         self.config=self.load_settings()
         self.chat_id=None;self.worker=None;self.recorder=None;self.listener=None;self.speakers=[]
+        self._quick_stream_label = None
+        self._quick_stream_text = ''
         self.voice_muted=threading.Event()
         self.voice_speaking=threading.Event()
         self.voice_jobs=[]
@@ -1105,7 +1157,8 @@ class MainWindow(QMainWindow):
 
     def load_settings(self):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
-        settings={'model':'qwen3-coder:30b','ollama_url':'http://localhost:11434',
+        settings={'model':'qwen3-coder:30b','fast_model':FAST_MODEL,
+                   'ollama_url':'http://localhost:11434',
                   'model_context_tokens':0,
                   'vision_model':DEFAULT_VISION_MODEL,
                   'workspace':str(base/'projects'/'default'),'vosk_model':'',
