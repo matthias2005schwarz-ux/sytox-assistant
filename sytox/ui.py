@@ -946,6 +946,8 @@ class MainWindow(QMainWindow):
         self._progress_refresh.setInterval(1400)
         self._progress_refresh.timeout.connect(self.refresh_live_progress)
         self._progress_refresh.start()
+        # A failed swap reopens the previous EXE; show its rollback reason once.
+        QTimer.singleShot(1500, self._show_pending_update_result)
         QTimer.singleShot(700, self.check_model_status)
         if self.config.get('auto_check_updates', True):
             QTimer.singleShot(2200, self.check_for_updates)
@@ -2118,6 +2120,30 @@ class MainWindow(QMainWindow):
                 self.parallel_chat.config = dict(self.config, model_mode='fast')
             self.log('System','Einstellungen gespeichert.')
             self.check_model_status()
+
+    def _show_pending_update_result(self):
+        """Show a one-time update or rollback result from the detached helper."""
+        from .updater import update_cache_dir
+        result_file = update_cache_dir() / 'last_portable_update.json'
+        if not result_file.is_file():
+            return
+        try:
+            data = json.loads(result_file.read_text(encoding='utf-8'))
+            result_file.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            return
+        status = data.get('status') if isinstance(data, dict) else None
+        message = str(data.get('message') or '')[:500] if isinstance(data, dict) else ''
+        if status == 'rolled_back':
+            self.log('Update', message)
+            QMessageBox.warning(self, 'SYTOX Update wiederhergestellt',
+                                message or 'Das Update wurde zurückgesetzt.')
+        elif status == 'success':
+            self.log('Update', message or 'SYTOX wurde erfolgreich aktualisiert.')
+        elif status == 'failed':
+            self.log('Update', message)
+            QMessageBox.warning(self, 'SYTOX Update fehlgeschlagen',
+                                message or 'Das Update wurde nicht abgeschlossen.')
 
     def check_for_updates(self, manual=False):
         """Only query release metadata on a worker; never block the Qt interface."""
