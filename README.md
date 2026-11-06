@@ -15,6 +15,7 @@ Mit `Strg+L` gelangt der Tastaturfokus direkt ins Nachrichtenfeld.
 Ungesendete Entwürfe bleiben während der laufenden Sitzung pro Chat erhalten.
 Der Aufklappzustand von Sprachoptionen und Aktivitäten wird auch über Neustarts gespeichert.
 Die Suche in der Seitenleiste findet Titel und gespeicherte Nachrichten in Chats und Qwen-Projekten lokal.
+Beim Lesen älterer Nachrichten bleibt die Scrollposition erhalten; „Zur neuesten Nachricht“ führt wieder ans Ende.
 
 ## Direkt-Updates innerhalb von SYTOX (ab Version 0.3.9)
 

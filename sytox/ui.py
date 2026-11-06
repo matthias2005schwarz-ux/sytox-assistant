@@ -1153,6 +1153,18 @@ class MainWindow(QMainWindow):
         scroll.setWidget(self.msg_container)
         c.addWidget(scroll, 1)
         self.scroll = scroll
+        self.jump_to_latest = QPushButton('↓ Zur neuesten Nachricht')
+        self.jump_to_latest.setObjectName('subtle')
+        self.jump_to_latest.setAccessibleName('Zur neuesten Nachricht springen')
+        self.jump_to_latest.clicked.connect(self.jump_to_latest_message)
+        self.jump_to_latest.hide()
+        c.addWidget(self.jump_to_latest, 0, Qt.AlignRight)
+        self._follow_latest = True
+        self._scroll_follow_timer = QTimer(self)
+        self._scroll_follow_timer.setSingleShot(True)
+        self._scroll_follow_timer.timeout.connect(self._scroll_to_latest_if_following)
+        scroll.verticalScrollBar().valueChanged.connect(self._message_scroll_position_changed)
+        scroll.verticalScrollBar().rangeChanged.connect(self._message_scroll_range_changed)
         self.empty_widget = None
         self._rendering_history = False
 
@@ -1648,6 +1660,7 @@ class MainWindow(QMainWindow):
                 self._chat_drafts[self.chat_id] = self.input.toPlainText()
             self.input.setPlainText(self._chat_drafts.get(cid, ''))
         self.chat_id=cid
+        self._follow_latest = True
         project = current['kind'] == 'project'
         selected_mode = self.store.chat_model_mode(cid)
         self.model_mode.blockSignals(True)
@@ -1702,6 +1715,27 @@ class MainWindow(QMainWindow):
             item = self.msg_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+
+    def _message_scroll_position_changed(self, *_args):
+        bar = self.scroll.verticalScrollBar()
+        self._follow_latest = bar.maximum() - bar.value() <= 80
+        self.jump_to_latest.setVisible(not self._follow_latest)
+
+    def _message_scroll_range_changed(self, *_args):
+        if self._follow_latest:
+            self._scroll_follow_timer.start(0)
+        else:
+            self._message_scroll_position_changed()
+
+    def _scroll_to_latest_if_following(self):
+        if self._follow_latest:
+            self.jump_to_latest_message()
+
+    def jump_to_latest_message(self):
+        self._follow_latest = True
+        bar = self.scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        self.jump_to_latest.hide()
 
     def add_bubble(self, role, message):
         if self.empty_widget is not None:
@@ -1776,8 +1810,10 @@ class MainWindow(QMainWindow):
         self.msg_layout.addWidget(row)
         if not self._rendering_history and self.isVisible():
             self._animate_appearance(row, 200)
-        QTimer.singleShot(100, self, lambda: self.scroll.verticalScrollBar().setValue(
-            self.scroll.verticalScrollBar().maximum()))
+        if mine or self._rendering_history:
+            self._follow_latest = True
+        if self._follow_latest:
+            self._scroll_follow_timer.start(0)
         return label
 
     def log(self,kind,text):
@@ -1870,11 +1906,9 @@ class MainWindow(QMainWindow):
     def _flush_quick_tokens(self):
         if self._quick_turn is None or not self._quick_turn['text']:
             return
-        bar = self.scroll.verticalScrollBar()
-        follow = bar.maximum() - bar.value() < 80
         self._quick_turn['label'].setText(self._quick_turn['text'])
-        if follow:
-            bar.setValue(bar.maximum())
+        if self._follow_latest:
+            self._scroll_follow_timer.start(0)
 
     def _quick_metrics(self, metrics):
         self._last_chat_metrics = dict(metrics)
