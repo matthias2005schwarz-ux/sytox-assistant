@@ -225,6 +225,20 @@ class TransactionalUpdateTests(unittest.TestCase):
         launch.assert_called_once()
         self.assertEqual((self.target / portable_update.APP_EXE).read_bytes(), b"MZold")
 
+    def test_preflight_does_not_touch_live_appdata_and_rejects_broken_exe(self):
+        with patch.object(updater, "is_installed_app", return_value=True), \
+             patch.object(updater.subprocess, "run") as preflight:
+            preflight.return_value.returncode = 0
+            updater._preflight_staged_app(self.stage)
+            args = preflight.call_args.args[0]
+            self.assertEqual(args[-2:], ["--smoke-test", "--background"])
+            env = preflight.call_args.kwargs["env"]
+            self.assertNotEqual(env["APPDATA"], __import__("os").environ.get("APPDATA"))
+            self.assertFalse(Path(env["APPDATA"]).exists())
+            preflight.return_value.returncode = 9
+            with self.assertRaisesRegex(updater.UpdateError, "Vorab-Starttest"):
+                updater._preflight_staged_app(self.stage)
+
     def test_direct_upgrade_requires_installation_and_launches_staged_helper(self):
         with patch.object(updater, "is_installed_app", return_value=False), \
              patch.object(updater.subprocess, "Popen") as popen:
