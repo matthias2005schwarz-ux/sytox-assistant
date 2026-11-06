@@ -14,6 +14,10 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
+import zipfile
+import shutil
+from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
 import requests
@@ -25,6 +29,10 @@ REPOSITORY = "matthias2005schwarz-ux/sytox-assistant"
 RELEASES_API = "https://api.github.com/repos/" + REPOSITORY + "/releases/latest"
 RELEASES_PAGE = "https://github.com/" + REPOSITORY + "/releases"
 MAX_INSTALLER_BYTES = 600 * 1024 * 1024
+MAX_PORTABLE_BYTES = 1500 * 1024 * 1024
+MAX_PORTABLE_UNCOMPRESSED = 4 * 1024 * 1024 * 1024
+MAX_PORTABLE_FILES = 16000
+_PORTABLE = re.compile(r"^SYTOX_Assistant_Portable_\d+\.\d+\.\d+\.zip$")
 _VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-dev)?$")
 _INSTALLER = re.compile(r"^SYTOX_Assistant_Setup_\d+\.\d+\.\d+\.exe$")
 _ALLOWED_DOWNLOAD_HOSTS = frozenset((
@@ -43,6 +51,13 @@ class UpdateInfo:
     installer_url: str
     checksum_url: str
     filename: str
+    portable_url: str = ""
+    portable_checksum_url: str = ""
+    portable_filename: str = ""
+
+    @property
+    def has_portable(self):
+        return bool(self.portable_url and self.portable_checksum_url and self.portable_filename)
 
 
 def version_tuple(value):
@@ -125,17 +140,23 @@ def check_for_update(current_version=__version__):
               if isinstance(a, dict)}
     installer = assets.get(name)
     checksum = assets.get(name + ".sha256")
-    if not installer or not checksum:
-        return None  # Incomplete release: never install unverified binaries.
-    _trusted_download(installer)
-    _trusted_download(checksum)
+    portable_name = "SYTOX_Assistant_Portable_" + version + ".zip"
+    portable_url = assets.get(portable_name)
+    portable_checksum = assets.get(portable_name + ".sha256")
+    if not ((installer and checksum) or (portable_url and portable_checksum)):
+        return None  # Only verified, complete release formats are usable.
+    for address in (installer, checksum, portable_url, portable_checksum):
+        if address:
+            _trusted_download(address)
     release_url = "https://github.com/" + REPOSITORY + "/releases/tag/" + tag
-    return UpdateInfo(version, release_url, installer, checksum, name)
+    return UpdateInfo(version, release_url, installer or "", checksum or "", name,
+                      portable_url or "", portable_checksum or "",
+                      portable_name if portable_url and portable_checksum else "")
 
 
-def _expected_checksum(update):
-    _trusted_download(update.checksum_url)
-    with _request(update.checksum_url, stream=True) as response:
+def _checksum_from_sidecar(url, filename):
+    _trusted_download(url)
+    with _request(url, stream=True) as response:
         content = bytearray()
         for piece in response.iter_content(chunk_size=1024):
             content.extend(piece)
@@ -147,9 +168,13 @@ def _expected_checksum(update):
         raise UpdateError("Ungültige SHA-256-Datei.") from exc
     for line in text.splitlines():
         match = re.fullmatch(r"([0-9a-fA-F]{64})\s+\*?(.+)", line.strip())
-        if match and match.group(2) == update.filename:
+        if match and match.group(2) == filename:
             return match.group(1).lower()
     raise UpdateError("Passender SHA-256-Prüfwert fehlt im Release.")
+
+
+def _expected_checksum(update):
+    return _checksum_from_sidecar(update.checksum_url, update.filename)
 
 
 def download_verified_installer(update, progress=None):
@@ -187,6 +212,142 @@ def download_verified_installer(update, progress=None):
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
+
+
+
+def _verified_portable_archive(update, progress=None):
+    """Download and check the complete application package before extraction."""
+    if not update.has_portable or not _PORTABLE.fullmatch(update.portable_filename):
+        raise UpdateError("Das Release enthält kein geprüftes Direkt-Update.")
+    if not update.portable_filename.endswith(update.version + ".zip"):
+        raise UpdateError("Die Paketversion passt nicht zur Release-Version.")
+    expected = _checksum_from_sidecar(update.portable_checksum_url, update.portable_filename)
+    directory = update_cache_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = directory / update.portable_filename
+    fd, temporary = tempfile.mkstemp(prefix="sytox_portable_", suffix=".part", dir=directory)
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with os.fdopen(fd, "wb") as out, _request(update.portable_url, stream=True) as response:
+            length = int(response.headers.get("Content-Length") or 0)
+            if length > MAX_PORTABLE_BYTES:
+                raise UpdateError("Direkt-Update-Paket ist zu groß.")
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > MAX_PORTABLE_BYTES:
+                    raise UpdateError("Direkt-Update-Paket überschreitet die Größenbegrenzung.")
+                out.write(chunk)
+                digest.update(chunk)
+                if progress and length:
+                    progress(min(70, int(70 * size / length)))
+        if not size or not hmac.compare_digest(digest.hexdigest(), expected):
+            raise UpdateError("SHA-256-Prüfung des Direkt-Updates fehlgeschlagen.")
+        os.replace(temporary, archive)
+        if progress:
+            progress(70)
+        return archive
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _valid_archive_entry(info):
+    """Reject absolute paths, traversal, links and Windows-invalid names."""
+    raw = info.filename
+    if not raw or "\\" in raw or raw.startswith("/") or "\x00" in raw:
+        raise UpdateError("Unsicherer Dateipfad im Update-Paket.")
+    parts = PurePosixPath(raw).parts
+    if not parts or any(p in (".", "..") or ":" in p or p.endswith((" ", "."))
+                        or p.lower().split(".")[0] in (
+                            "con", "prn", "aux", "nul", "com1", "com2", "lpt1", "lpt2")
+                        for p in parts):
+        raise UpdateError("Unsicherer Windows-Dateiname im Update-Paket.")
+    # Unix zip symlinks would allow writing outside the staging root.
+    if info.create_system == 3 and (info.external_attr >> 16) & 0o170000 == 0o120000:
+        raise UpdateError("Symbolische Links sind in Update-Paketen unzulässig.")
+    return parts
+
+
+def extract_verified_portable(archive: Path, progress=None):
+    """Unpack one validated package into an isolated, newly created directory."""
+    from .portable_update import STAGE_PREFIX, APP_EXE
+    archive = Path(archive).resolve()
+    if archive.parent != update_cache_dir().resolve() or not _PORTABLE.fullmatch(archive.name):
+        raise UpdateError("Update-Archiv befindet sich außerhalb des Download-Caches.")
+    staging = archive.parent / (STAGE_PREFIX + uuid.uuid4().hex)
+    staging.mkdir(mode=0o700)
+    try:
+        with zipfile.ZipFile(archive, "r") as data:
+            infos = data.infolist()
+            if len(infos) > MAX_PORTABLE_FILES:
+                raise UpdateError("Zu viele Dateien im Direkt-Update.")
+            total = sum(i.file_size for i in infos)
+            if total > MAX_PORTABLE_UNCOMPRESSED:
+                raise UpdateError("Direkt-Update überschreitet die Entpackgrenze.")
+            seen = set()
+            for index, info in enumerate(infos):
+                parts = _valid_archive_entry(info)
+                key = "/".join(parts).casefold()
+                if key in seen:
+                    raise UpdateError("Mehrdeutige Dateinamen im Update-Paket.")
+                seen.add(key)
+                destination = staging.joinpath(*parts)
+                if info.is_dir():
+                    destination.mkdir(parents=True, exist_ok=True)
+                else:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with data.open(info) as src, destination.open("xb") as target:
+                        shutil.copyfileobj(src, target)
+                if progress and index % 80 == 0:
+                    progress(min(99, 70 + int(29 * (index + 1) / max(1, len(infos)))))
+        exe = staging / APP_EXE
+        if not exe.is_file() or not (staging / "_internal").is_dir():
+            raise UpdateError("Direkt-Update enthält keine vollständige SYTOX-Anwendung.")
+        with exe.open("rb") as check:
+            if check.read(2) != b"MZ":
+                raise UpdateError("Die neue SYTOX-EXE ist keine Windows-Anwendung.")
+        if progress:
+            progress(100)
+        return staging
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def download_verified_portable(update, progress=None):
+    archive = _verified_portable_archive(update, progress)
+    return extract_verified_portable(archive, progress)
+
+
+def _validated_staged_package(stage):
+    from .portable_update import _validated_stage
+    try:
+        return _validated_stage(stage)
+    except RuntimeError as exc:
+        raise UpdateError(str(exc)) from exc
+
+
+def schedule_portable_update(stage):
+    """Launch the staged EXE as detached update helper; no Inno installer."""
+    if not is_installed_app():
+        raise UpdateError("Das Direkt-Update benötigt eine installierte Windows-Version.")
+    stage = _validated_staged_package(stage)
+    current = Path(sys.executable).resolve()
+    target = current.parent
+    if not any(target.glob("unins*.dat")):
+        raise UpdateError("Die Installation wurde nicht erkannt. Keine Dateien verändert.")
+    staged_exe = stage / "SYTOX_Assistant.exe"
+    # The helper runs from the standalone staged bundle, outside the directory
+    # it will replace. The original executable is safe to rename once it exits.
+    subprocess.Popen(
+        [str(staged_exe), "--apply-portable-update", str(stage), str(target),
+         str(os.getpid())],
+        cwd=str(stage), close_fds=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
 
 
 def _valid_cached_installer(path):
