@@ -29,8 +29,9 @@ from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
 from .parallel_chat import ParallelChatDialog
-from .updater import (check_for_update, download_verified_installer, is_installed_app,
-                      schedule_installer, RELEASES_PAGE)
+from .updater import (check_for_update, download_verified_installer,
+                      download_verified_portable, is_installed_app,
+                      schedule_installer, schedule_portable_update, RELEASES_PAGE)
 from .work_intents import work_intent
 from .voice_diagnostics import microphone_probe
 from .ollama_setup import OllamaStatus, check_ollama_status, model_pull_command, OLLAMA_DOWNLOAD
@@ -183,7 +184,10 @@ class UpdateDownloadWorker(QThread):
 
     def run(self):
         try:
-            path = download_verified_installer(self.update, self.progress.emit)
+            if self.update.has_portable:
+                path = download_verified_portable(self.update, self.progress.emit)
+            else:
+                path = download_verified_installer(self.update, self.progress.emit)
             self.result_ready.emit(str(path), '')
         except Exception as exc:
             self.result_ready.emit('', str(exc))
@@ -2151,8 +2155,10 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(
                 self, 'SYTOX Update ' + info.version,
                 'SYTOX ' + info.version + ' ist verfügbar.\n'
-                'Installer von GitHub herunterladen und per SHA-256 überprüfen?\n'
-                'Eine Installation startet erst nach deiner zweiten Bestätigung.',
+                + ('Geprüftes Direkt-Update herunterladen und danach ohne Installer aktualisieren?\n'
+                   if info.has_portable else
+                   'Geprüftes Update herunterladen? Diese ältere Release-Version benötigt noch einmal den integrierten Installer.\n')
+                + 'Die Aktualisierung startet erst nach deiner zweiten Bestätigung.',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         self.update_button.setEnabled(False)
@@ -2173,7 +2179,11 @@ class MainWindow(QMainWindow):
         if error:
             QMessageBox.warning(self, 'SYTOX Update', 'Download abgebrochen: ' + error)
             return
-        self.log('Update', 'Installer heruntergeladen und SHA-256 geprüft.')
+        package = (self._update_download_worker.update
+                   if self._update_download_worker else None)
+        direct = bool(package and package.has_portable)
+        self.log('Update', ('Direkt-Update vorbereitet' if direct else 'Installer heruntergeladen')
+                 + ' und SHA-256 geprüft.')
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self, 'Auftrag läuft',
                 'Update sicher heruntergeladen. Bitte zuerst den laufenden Auftrag '
@@ -2181,13 +2191,20 @@ class MainWindow(QMainWindow):
             return
         if QMessageBox.question(
                 self, 'SYTOX aktualisieren',
-                'Der neue Installer wurde erfolgreich überprüft.\n'
-                'SYTOX jetzt beenden und das Update installieren?\n'
-                'Deine Chats und Einstellungen bleiben gespeichert.',
+                ('Das geprüfte Direkt-Update ist vorbereitet.\n'
+                 'SYTOX jetzt beenden, automatisch aktualisieren und neu starten?\n'
+                 'Bei einem Startfehler wird die vorige Version wiederhergestellt.\n'
+                 if direct else
+                 'Das geprüfte Legacy-Update wurde heruntergeladen.\n'
+                 'SYTOX jetzt beenden und den integrierten Installer starten?\n')
+                + 'Deine Chats, Projekte und Einstellungen bleiben gespeichert.',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
             return
         try:
-            schedule_installer(path)
+            if direct:
+                schedule_portable_update(path)
+            else:
+                schedule_installer(path)
         except Exception as exc:
             QMessageBox.warning(self, 'SYTOX Update', str(exc))
             return
