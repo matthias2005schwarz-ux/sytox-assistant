@@ -95,7 +95,7 @@ class OllamaClient:
         resp.raise_for_status()
         return [entry.get('name', '') for entry in resp.json().get('models', [])]
 
-    def chat(self, messages, tools=None, stop=None):
+    def chat(self, messages, tools=None, stop=None, on_text=None):
         payload = {'model': self.model, 'messages': messages, 'stream': True,
                    'options': ollama_generation_options(self.model, self.effective_context_tokens)}
         if tools:
@@ -132,6 +132,8 @@ class OllamaClient:
                     if not isinstance(content, str):
                         raise OllamaError('Ollama lieferte ungültigen Antworttext.')
                     reply['content'] += content
+                    if content and on_text is not None:
+                        on_text(content)  # UI-only streaming; no tools/PC actions
                     new_calls = msg.get('tool_calls')
                     if new_calls is not None:
                         if not isinstance(new_calls, list):
