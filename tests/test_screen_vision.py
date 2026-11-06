@@ -28,6 +28,7 @@ class ScreenVisionTests(unittest.TestCase):
 
     def test_screen_vision_stream_sends_image_only_to_local_ollama(self):
         response = MagicMock()
+        response.__enter__.return_value = response
         response.status_code = 200
         response.iter_lines.return_value = [
             json.dumps({'message': {'content': 'Editor '}}).encode(),
@@ -55,6 +56,7 @@ class ScreenVisionTests(unittest.TestCase):
 
     def test_missing_vision_model_returns_actionable_error(self):
         response = MagicMock()
+        response.__enter__.return_value = response
         response.status_code = 404
         with patch('sytox.screen_vision.capture_screen_base64', return_value='ZmFrZQ=='), \
              patch('sytox.screen_vision.requests.post', return_value=response):
