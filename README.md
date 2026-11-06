@@ -1,7 +1,7 @@
 ## Direkt-Updates innerhalb von SYTOX (in Entwicklung)
 
 Unter **Nach Updates suchen** erkennt die installierte Windows-App offizielle GitHub Releases.
-Neue Versionen koennen neben einem Erstinstallationsprogramm ein signiertes HTTPS-Release-
+Neue Versionen koennen neben einem Erstinstallationsprogramm ein offizielles HTTPS-Release-
 Paket `SYTOX_Assistant_Portable_VERSION.zip` mit separater SHA-256-Pruefdatei bereitstellen.
 Die App bevorzugt das direkte Paket: Nach **zweifacher ausdruecklicher Zustimmung** wird
 es heruntergeladen, vollstaendig geprueft und in einen isolierten Ordner entpackt.
