@@ -592,6 +592,11 @@ class PerformanceWorker(QThread):
 _ACTIVE_BENCHMARK_WORKERS = set()
 
 
+def _cancel_active_benchmarks():
+    for worker in tuple(_ACTIVE_BENCHMARK_WORKERS):
+        worker.cancel_event.set()
+
+
 class ModelBenchmarkWorker(QThread):
     measured = Signal(object)
     failed = Signal(str)
@@ -906,8 +911,9 @@ class SettingsDialog(QDialog):
         worker.finished.connect(self._benchmark_finished)
         worker.finished.connect(lambda: _ACTIVE_BENCHMARK_WORKERS.discard(worker))
         app = QApplication.instance()
-        if app is not None:
-            app.aboutToQuit.connect(worker.cancel_event.set)
+        if app is not None and not getattr(app, '_sytox_benchmark_shutdown_hooked', False):
+            app.aboutToQuit.connect(_cancel_active_benchmarks)
+            app._sytox_benchmark_shutdown_hooked = True
         self.benchmark_button.setEnabled(False)
         self.benchmark_cancel_button.setEnabled(True)
         self.benchmark_status.setText('Lokaler Benchmark läuft – zwei kurze Testaufgaben …')
