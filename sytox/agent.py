@@ -593,10 +593,14 @@ class Agent:
                                    'Andernfalls Blockade melden oder weitermachen.')
                         elif name not in ('record_progress', 'report_blocker', 'set_coding_plan', 'review_coding_changes', 'consult_specialist', 'start_coding_team'):
                             before_checks = toolkit.passed_checks
+                            before_writes = toolkit.writes
                             res = toolkit.call(name, args)
+                            if toolkit.writes > before_writes:
+                                team.changed()
                         # Verification must come after the LAST file edit, not before.
                         if name in ('run_command', 'selfdev_validate', 'project_build') and toolkit.passed_checks > before_checks:
                             validated_writes = previous_writes + toolkit.writes
+                            team.test_passed(not toolkit.unvalidated_paths)
                         private_result = name in (
                             'pc_find_apps', 'pc_list_windows', 'pc_select_window',
                             'pc_inspect_window', 'read_file', 'read_file_lines',
@@ -611,6 +615,19 @@ class Agent:
                         self.logger('Aktion', f'{name}: {safe_res[:180]}')
                         messages.append({'role': 'tool', 'tool_name': name, 'content': res})
                         if failed_test_result:
+                            if team.active and local_model_only(self.client.url) and team.test_failed(name, res):
+                                try:
+                                    diagnostic = ('Fehlgeschlagener lokaler Test ' + name +
+                                                  ':\n' + str(res)[:1400])
+                                    advice = self.client.chat(
+                                        specialist_messages('debugger', goal, diagnostic),
+                                        tools=None, stop=self.stop)
+                                    messages.append({'role': 'user', 'content':
+                                        'Separater Debugger-Vorschlag (kein Erfolgsnachweis):\n'
+                                        + specialist_summary('debugger', advice)})
+                                except (OllamaError, ValueError):
+                                    messages.append({'role': 'user', 'content':
+                                        'Debugger nicht verfügbar. Fehlgeschlagenen Test selbst untersuchen.'})
                             repair_state, repeated = update_failure_state(
                                 repair_state, name, res)
                             if repeated:
