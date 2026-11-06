@@ -2014,7 +2014,34 @@ class MainWindow(QMainWindow):
             hours=max(.02,min(float(duration.group(1).replace(',','.')),24.0))
             mode='timed'
         if re.search(r'\bbis (?:es |alles )?fertig\b',txt.lower()):mode='until_done'
-        self.start_worker(mode,hours)
+        if self.current_chat_mode() == QUICK:
+            if is_small_project_request(txt):
+                self.start_worker('once', 1.0)
+            else:
+                self.start_quick_reply()
+        else:
+            self.start_worker(mode,hours)
+
+    def start_quick_reply(self):
+        self.voice_muted.set()
+        self._quick_stream_text = ''
+        self._quick_stream_label = self.add_bubble('assistant', 'Antwort wird erstellt …')
+        settings = self.config.copy()
+        settings['fast_model'] = self.current_chat_model()
+        self.worker = QuickReplyWorker(self.store, self.chat_id, settings)
+        self.worker.partial.connect(self._quick_partial)
+        self.worker.completed.connect(self.worker_done)
+        self.stopbtn.setEnabled(True)
+        self.send_btn.setEnabled(True)
+        self.task_state.setText('⚡ Schnellchat · Antwort wird generiert …')
+        self.worker.start()
+
+    def _quick_partial(self, chunk):
+        if self._quick_stream_label is not None:
+            self._quick_stream_text += str(chunk)
+            self._quick_stream_label.setText(self._quick_stream_text[-25000:])
+
+
 
     def start_worker(self,mode='once',hours=1.0,task_id=None):
         # The Agent runs in its own thread. Listening for follow-up questions
@@ -2024,7 +2051,11 @@ class MainWindow(QMainWindow):
         else:
             self.voice_muted.set()
         self._agent_last_status='Auftrag gestartet; noch kein konkreter Fortschritt gemeldet.'
-        self.worker=Worker(self.store,self.chat_id,self.config.copy(),mode,hours,task_id)
+        worker_settings=self.config.copy()
+        worker_settings['model'] = self.current_chat_model()
+        if self.current_chat_mode() == QUICK:
+            worker_settings['model_context_tokens'] = 4096
+        self.worker=Worker(self.store,self.chat_id,worker_settings,mode,hours,task_id)
         self.worker.log_line.connect(self.log)
         self.worker.approval_request.connect(self.handle_approval)
         self.worker.completed.connect(self.worker_done)
@@ -2116,7 +2147,12 @@ class MainWindow(QMainWindow):
         self.stopbtn.setEnabled(False);self.send_btn.setEnabled(True)
         self.task_state.setText(result.get('status','unknown'))
         answer = result.get('content','')
-        self.add_bubble('assistant',answer)
+        if isinstance(self.worker, QuickReplyWorker) and self._quick_stream_label is not None:
+            self._quick_stream_label.setText(answer)
+            self._quick_stream_label = None
+            self._quick_stream_text = ''
+        else:
+            self.add_bubble('assistant',answer)
         self.log('Status','Aufgabe: '+result.get('status','unbekannt'))
         if result.get('status')=='failed' and ('Ollama' in answer or 'Modell' in answer):
             self.check_model_status()
