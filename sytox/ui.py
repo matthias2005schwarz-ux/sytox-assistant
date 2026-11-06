@@ -2081,6 +2081,8 @@ class MainWindow(QMainWindow):
             self.parallel_chat = ParallelChatDialog(self.config, self)
             self.parallel_chat.answer_ready.connect(self._parallel_answer_ready)
             self.parallel_chat.control_requested.connect(self.handle_work_control)
+            # Reuse the same explicit, user-visible approval dialog as the Agent.
+            self.parallel_chat.approval_request.connect(self.handle_approval)
         self.parallel_chat.show()
         self.parallel_chat.raise_()
         self.parallel_chat.activateWindow()
