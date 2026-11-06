@@ -26,6 +26,7 @@ from .windows_repair import (
 )
 from .work_intents import work_intent
 from .voice_features import agent_status_intent
+from .task_queue import is_change_request
 from .web_search import should_search, search_web, format_results
 
 
@@ -158,6 +159,7 @@ class ParallelChatDialog(QDialog):
     answer_ready = Signal(str, bool)
     control_requested = Signal(str, str, bool)
     status_requested = Signal(str, bool)
+    change_requested = Signal(str, bool)
     approval_request = Signal(str, str, object)
 
     def __init__(self, config, parent=None):
@@ -226,6 +228,9 @@ class ParallelChatDialog(QDialog):
             return True
         if agent_status_intent(text):
             self.status_requested.emit(text, bool(spoken))
+            return True
+        if is_change_request(text):
+            self.change_requested.emit(text, bool(spoken))
             return True
         if self.reply_worker is not None and self.reply_worker.isRunning():
             self.status_label.setText('Ich beantworte noch die vorherige Frage.')
