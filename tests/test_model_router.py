@@ -28,6 +28,19 @@ class AutomaticModelTests(unittest.TestCase):
         self.assertEqual(select_chat_model('Hallo', {'model':'old:7b'}),
                          ('old:7b', 'fast'))
 
+    def test_windows_program_error_keeps_fast_model(self):
+        self.assertEqual(select_chat_model(
+            'Bitte behebe den Fehler VCRUNTIME140.dll fehlt beim x64-Programm.',
+            self.settings), ('qwen3:4b', 'fast'))
+        self.assertEqual(select_chat_model(
+            'Windows-Programm startet nicht, Fehlercode 0xc000007b',
+            self.settings), ('qwen3:4b', 'fast'))
+
+    def test_explicit_request_to_build_program_uses_project_model(self):
+        self.assertEqual(select_chat_model(
+            'Erstelle mir ein Programm für Windows', self.settings),
+            ('qwen3-coder:30b', 'project'))
+
     def test_screen_request_works_with_fast_and_project_models(self):
         for question in (
             'Schau bitte auf meinen Bildschirm',
