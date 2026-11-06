@@ -23,12 +23,12 @@ from .agent import Agent,OllamaClient
 from .ram_saver import keep_alive_for_config, normalized_keep_alive_seconds
 from .task_eta import task_eta
 from .task_queue import is_change_request
-from .model_router import select_chat_model, wants_screen
+from .model_router import select_chat_model, wants_screen, requires_agent
 from .screen_vision import describe_screen
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
-from .parallel_chat import ParallelChatDialog
+from .parallel_chat import ParallelChatDialog, ParallelReplyWorker
 from .updater import (check_for_update, download_verified_installer,
                       download_verified_portable, is_installed_app,
                       schedule_installer, schedule_portable_update, RELEASES_PAGE)
@@ -806,9 +806,9 @@ class SettingsDialog(QDialog):
         self.ram_delay.setRange(0, 3600)
         self.ram_delay.setSuffix(' Sekunden')
         self.ram_delay.setSpecialValueText('Sofort nach Antwort')
-        self.ram_delay.setToolTip('Ab der fertigen Antwort. 60 Sekunden Standard; während der Antwort wird nichts entladen.')
+        self.ram_delay.setToolTip('Ab der fertigen Antwort. 300 Sekunden Standard vermeiden häufiges Neuladen bei Anschlussfragen; eigene Einstellungen bleiben erhalten.')
         self.ram_delay.setValue(normalized_keep_alive_seconds(
-            settings.get('ram_keep_alive_seconds', 60)))
+            settings.get('ram_keep_alive_seconds', 300)))
         self.ram_delay.setEnabled(self.ram_saver.isChecked())
         self.ram_saver.toggled.connect(self.ram_delay.setEnabled)
         self.auto_voice=QCheckBox('Beim App-Start automatisch auf „Hey Sytox“ hören (Mikrofon aktiv)')
@@ -904,6 +904,13 @@ class MainWindow(QMainWindow):
         self.config_path=default_data_dir()/'settings.json'
         self.config=self.load_settings()
         self.chat_id=None;self.worker=None;self.recorder=None;self.listener=None;self.speakers=[]
+        self.quick_worker = None
+        self._quick_turn = None
+        self._exit_after_quick = False
+        self._quick_reply_timer = QTimer(self)
+        self._quick_reply_timer.setSingleShot(True)
+        self._quick_reply_timer.setInterval(40)
+        self._quick_reply_timer.timeout.connect(self._flush_quick_tokens)
         self.voice_muted=threading.Event()
         self.voice_speaking=threading.Event()
         self.voice_jobs=[]
@@ -953,7 +960,7 @@ class MainWindow(QMainWindow):
         if self.config.get('auto_check_updates', True):
             QTimer.singleShot(2200, self.check_for_updates)
         if self.config.get('voice_auto_start', False):
-            QTimer.singleShot(1600, lambda: self.toggle_listener(auto=True))
+            QTimer.singleShot(1600, self, lambda: self.toggle_listener(auto=True))
 
     def load_settings(self):
         base=default_data_dir();base.mkdir(parents=True,exist_ok=True)
@@ -966,7 +973,7 @@ class MainWindow(QMainWindow):
                   'auto_check_updates':True,
                   'model_mode':'auto','fast_model':'qwen3:4b',
                   'project_model':'qwen3-coder:30b','vision_model':'qwen3-vl:4b',
-                  'ram_saver_enabled':True,'ram_keep_alive_seconds':60,
+                  'ram_saver_enabled':True,'ram_keep_alive_seconds':300,
                   'gmail_client_secrets':''}
         default_model=base/'models'/'vosk-model-small-de-0.15'
         if default_model.is_dir(): settings['vosk_model']=str(default_model)
@@ -1199,7 +1206,7 @@ class MainWindow(QMainWindow):
         card_row.addLayout(right_buttons)
         cbox.addWidget(input_card)
         # Animate only the initial appearance, not the typing experience.
-        QTimer.singleShot(70, lambda: self._animate_appearance(input_card, 220))
+        QTimer.singleShot(70, self, lambda: self._animate_appearance(input_card, 220))
         hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   KI LÄUFT LOKAL')
         hint.setObjectName('version')
         hint.setWordWrap(True)
@@ -1453,7 +1460,7 @@ class MainWindow(QMainWindow):
         outer_lay.addWidget(hero, 10)
         outer_lay.addStretch(1)
         self.msg_layout.addWidget(outer)
-        QTimer.singleShot(0, lambda: self._animate_appearance(outer) if not self._is_exiting else None)
+        QTimer.singleShot(0, self, lambda: self._animate_appearance(outer) if not self._is_exiting else None)
 
     def setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():return
@@ -1480,6 +1487,11 @@ class MainWindow(QMainWindow):
             self.hide()
             event.ignore()
             return
+        if self.quick_worker is not None:
+            self.quick_worker.stop_event.set()
+            self._exit_after_quick = True
+            event.ignore()
+            return
         if self.worker and self.worker.isRunning():
             QMessageBox.information(self,'Auftrag läuft','Bitte den Auftrag zuerst stoppen.')
             event.ignore()
@@ -1492,6 +1504,11 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def exit_app(self):
+        if self.quick_worker is not None:
+            self.quick_worker.stop_event.set()
+            self._exit_after_quick = True
+            self.state.setText('Antwort wird beendet …')
+            return
         if self._update_download_worker and self._update_download_worker.isRunning():
             QMessageBox.information(self, 'Update läuft',
                                     'Bitte den laufenden Update-Download erst abschließen.')
@@ -1545,7 +1562,7 @@ class MainWindow(QMainWindow):
                 widget.setCurrentItem(item)
 
     def create_chat(self):
-        if self.worker and self.worker.isRunning():
+        if self.quick_worker is not None or (self.worker and self.worker.isRunning()):
             QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
             return
         cid = self.store.create_chat(kind='chat')
@@ -1554,7 +1571,7 @@ class MainWindow(QMainWindow):
 
     def create_project(self):
         """Create a named, permanent large-model conversation in the sidebar."""
-        if self.worker and self.worker.isRunning():
+        if self.quick_worker is not None or (self.worker and self.worker.isRunning()):
             QMessageBox.information(self, 'Auftrag läuft', 'Bitte erst den laufenden Auftrag stoppen.')
             return
         title, accepted = QInputDialog.getText(self, 'Neues Qwen-Projekt', 'Projektname:')
@@ -1566,7 +1583,9 @@ class MainWindow(QMainWindow):
         self.select_chat(cid)
 
     def select_chat(self,cid):
-        if self.worker and self.worker.isRunning() and cid!=self.chat_id:
+        if self.quick_worker is not None and cid == self.chat_id:
+            return  # Keep the streaming bubble alive when its list item is clicked.
+        if (self.quick_worker is not None or (self.worker and self.worker.isRunning())) and cid!=self.chat_id:
             QMessageBox.information(self,'Auftrag läuft','Während der Ausführung kann der Chat nicht gewechselt werden.')
             return
         current=next((c for c in self.store.chats() if c['id']==cid),None)
@@ -1607,6 +1626,7 @@ class MainWindow(QMainWindow):
 
     def delete_chat(self):
         if not self.chat_id:return
+        if self.quick_worker is not None:return
         if self.worker and self.worker.isRunning():return
         if QMessageBox.question(self,'Chat löschen','Diesen Chat mit allen Nachrichten wirklich löschen?')!=QMessageBox.Yes:return
         self.store.delete_chat(self.chat_id);self.chat_id=None;self.reload_chats()
@@ -1655,8 +1675,9 @@ class MainWindow(QMainWindow):
         self.msg_layout.addWidget(row)
         if not self._rendering_history and self.isVisible():
             self._animate_appearance(row, 200)
-        QTimer.singleShot(100, lambda: self.scroll.verticalScrollBar().setValue(
+        QTimer.singleShot(100, self, lambda: self.scroll.verticalScrollBar().setValue(
             self.scroll.verticalScrollBar().maximum()))
+        return label
 
     def log(self,kind,text):
         self.logs.appendPlainText(f'{kind}: {text}')
@@ -1671,6 +1692,9 @@ class MainWindow(QMainWindow):
         if intent:
             self.input.clear()
             self.handle_work_control(intent, txt, spoken=False)
+            return
+        if self.quick_worker is not None:
+            self.state.setText('Die aktuelle Antwort läuft noch. Mit Stopp abbrechen.')
             return
         if self.worker and self.worker.isRunning():
             self.input.clear()
@@ -1694,13 +1718,112 @@ class MainWindow(QMainWindow):
         mode={'Einmal':'once','1 Stunde arbeiten':'timed','3 Stunden arbeiten':'timed','Bis fertig':'until_done'}[self.mode.currentText()]
         hours=3.0 if self.mode.currentText().startswith('3') else 1.0
         duration=re.search(r'\b(\d+(?:[,.]\d+)?)\s*(?:stunden?|h)\b',txt.lower())
-        if duration:
+        task_requested = (self.store.chat_kind(self.chat_id) == 'project' or
+                          requires_agent(txt) or
+                          re.search(r'\b(?:arbeite|arbeiten)\b', txt, re.IGNORECASE))
+        if duration and task_requested:
             hours=max(.02,min(float(duration.group(1).replace(',','.')),24.0))
             mode='timed'
         if re.search(r'\bbis (?:es |alles )?fertig\b',txt.lower()):mode='until_done'
         selected, _route = select_chat_model(txt, self._chat_runtime_config(), mode)
         self.model_name.setText(selected)
-        self.start_worker(mode,hours)
+        if self.store.chat_kind(self.chat_id) == 'project' or requires_agent(txt, mode):
+            self.start_worker(mode,hours)
+        else:
+            self.start_quick_reply(txt)
+
+    def start_quick_reply(self, question):
+        """Normal conversation never creates an Agent, Toolkit or task row."""
+        memory = ''
+        if len(question.strip()) > 8:
+            context = self.store.related_context(question, exclude_chat=self.chat_id, limit=3)
+            memory = '\n'.join(item['source'] + ': ' + item['content'] for item in context)[:2000]
+        worker = ParallelReplyWorker(
+            self._chat_runtime_config(), self.store.messages(self.chat_id, limit=12), self,
+            standalone=True, memory_context=memory)
+        self.quick_worker = worker
+        self._quick_turn = {'chat_id': self.chat_id, 'text': '',
+                            'label': self.add_bubble('assistant', 'SYTOX antwortet …'),
+                            'outcome': 'running', 'answer': ''}
+        worker.token.connect(self._quick_token)
+        worker.metrics.connect(self._quick_metrics)
+        worker.model_selected.connect(self.model_name.setText)
+        worker.approval_request.connect(self.handle_approval)
+        worker.completed.connect(self._quick_done)
+        worker.finished.connect(self._quick_finished)
+        self.send_btn.setEnabled(False)
+        self.stopbtn.setEnabled(True)
+        self.model_mode.setEnabled(False)
+        self.state.setText('SYTOX antwortet …')
+        self.task_state.setText('Gespräch · kein Programmierauftrag')
+        worker.start()
+
+    def _quick_token(self, text):
+        if self._quick_turn is None:
+            return
+        self._quick_turn['text'] += text
+        if not self._quick_reply_timer.isActive():
+            self._quick_reply_timer.start()
+
+    def _flush_quick_tokens(self):
+        if self._quick_turn is None or not self._quick_turn['text']:
+            return
+        bar = self.scroll.verticalScrollBar()
+        follow = bar.maximum() - bar.value() < 80
+        self._quick_turn['label'].setText(self._quick_turn['text'])
+        if follow:
+            bar.setValue(bar.maximum())
+
+    def _quick_metrics(self, metrics):
+        self._last_chat_metrics = dict(metrics)
+        parts = []
+        for key, title in (('queue_wait_s', 'Wartezeit'), ('load_s', 'Modell laden'),
+                           ('time_to_first_token_s', 'Erstes Token'),
+                           ('request_s', 'Modellanfrage')):
+            value = metrics.get(key)
+            if value is not None:
+                parts.append(f'{title}: {value:.2f} s')
+        speed = metrics.get('tokens_per_second')
+        if speed is not None:
+            parts.append(f'{speed:.1f} Token/s')
+        details = ' · '.join(parts)
+        self.model_name.setToolTip(details)
+        self.log('Leistung', details)
+
+    def _quick_done(self, answer):
+        if self._quick_turn is None:
+            return
+        self._quick_reply_timer.stop()
+        turn = self._quick_turn
+        outcome = self.quick_worker.outcome
+        # The reply worker marks partial/error output explicitly incomplete.
+        turn.update(answer=answer, outcome=outcome)
+        turn['label'].setText(answer)
+        self.store.add_message(turn['chat_id'], 'assistant', answer)
+        self.state.setText({'done': 'Antwort fertig', 'cancelled': 'Antwort abgebrochen',
+                            'failed': 'Antwort fehlgeschlagen'}.get(outcome, 'Antwort beendet'))
+
+    def _quick_finished(self):
+        worker, turn = self.quick_worker, self._quick_turn
+        self.quick_worker = None
+        self._quick_turn = None
+        self._quick_reply_timer.stop()
+        if worker is not None:
+            worker.deleteLater()
+        self.stopbtn.setEnabled(False)
+        self.send_btn.setEnabled(True)
+        self.model_mode.setEnabled(self.store.chat_kind(self.chat_id) != 'project')
+        if self._exit_after_quick:
+            self._exit_after_quick = False
+            self.exit_app()
+            return
+        if (turn and turn['outcome'] == 'done' and turn['answer'] and
+                (self.config.get('voice_enabled') or
+                 (self.listener and self.listener.isRunning()))):
+            self.start_speech(turn['answer'])
+        else:
+            self._conversation_ready()
+        self.input.setFocus()
 
     def queue_project_change(self, instruction, spoken=False):
         """Accept a new project instruction without stopping or sending a build."""
@@ -1795,6 +1918,10 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def stop_work(self):
+        if self.quick_worker is not None:
+            self.quick_worker.stop_event.set()
+            self.state.setText('Antwort wird abgebrochen …')
+            return
         if self.worker and self.worker.isRunning():
             self.worker.stop_event.set();self.log('Status','Stopp angefordert …')
 
@@ -1811,6 +1938,9 @@ class MainWindow(QMainWindow):
 
     def handle_work_control(self, intent, original='', spoken=False):
         """Interpret conversational task controls without altering side questions."""
+        if self.quick_worker is not None and intent == 'pause':
+            self.stop_work()
+            return 'Ich breche die aktuelle Antwort ab.'
         active = bool(self.worker and self.worker.isRunning())
         stopping = bool(active and self.worker.stop_event.is_set())
         if intent == 'silence':
@@ -1975,6 +2105,7 @@ class MainWindow(QMainWindow):
 
 
     def resume_task(self):
+        if self.quick_worker is not None:return
         if self.worker and self.worker.isRunning():return
         tasks=[t for t in self.store.tasks(self.chat_id) if t['status'] in ('paused','failed','time_elapsed')]
         if not tasks:
@@ -2211,7 +2342,7 @@ class MainWindow(QMainWindow):
         direct = bool(package and package.has_portable)
         self.log('Update', ('Direkt-Update vorbereitet' if direct else 'Installer heruntergeladen')
                  + ' und SHA-256 geprüft.')
-        if self.worker and self.worker.isRunning():
+        if self.quick_worker is not None or (self.worker and self.worker.isRunning()):
             QMessageBox.information(self, 'Auftrag läuft',
                 'Update sicher heruntergeladen. Bitte zuerst den laufenden Auftrag '
                 'abschließen oder stoppen und dann erneut nach Updates suchen.')

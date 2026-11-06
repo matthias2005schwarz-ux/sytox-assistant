@@ -7,6 +7,7 @@ No model files are deleted, and this does not terminate the Ollama server.
 from __future__ import annotations
 
 DEFAULT_KEEP_ALIVE_SECONDS = 60
+FAST_KEEP_ALIVE_SECONDS = 300
 MAX_KEEP_ALIVE_SECONDS = 3600
 
 
@@ -21,11 +22,10 @@ def normalized_keep_alive_seconds(value):
     return parsed
 
 
-def keep_alive_for_config(config):
+def keep_alive_for_config(config, route=None):
     """Ollama keep_alive: 0 for immediate unload, '<n>s', or None when off."""
     if not config.get('ram_saver_enabled', True):
         return None
-    seconds = normalized_keep_alive_seconds(
-        config.get('ram_keep_alive_seconds', DEFAULT_KEEP_ALIVE_SECONDS)
-    )
+    default = FAST_KEEP_ALIVE_SECONDS if route == 'fast' else DEFAULT_KEEP_ALIVE_SECONDS
+    seconds = normalized_keep_alive_seconds(config.get('ram_keep_alive_seconds', default))
     return 0 if seconds == 0 else f'{seconds}s'

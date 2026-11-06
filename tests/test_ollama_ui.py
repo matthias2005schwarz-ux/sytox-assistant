@@ -7,12 +7,26 @@ import unittest
 from unittest.mock import patch
 
 try:
+    from PySide6.QtCore import QCoreApplication, QEvent
     from PySide6.QtWidgets import QApplication
     from sytox.ui import MainWindow, OllamaHelpDialog
     from sytox.ollama_setup import OllamaStatus
     QT_AVAILABLE = True
 except ImportError:
     QT_AVAILABLE = False
+
+
+def dispose_qt_widget(widget, app):
+    """Delete native fixtures while QApplication and their Python slots live.
+
+    These tests pump events without app.exec(). processEvents() alone does not
+    guarantee DeferredDelete delivery, so leaving it to interpreter shutdown can
+    destroy the application before its dialogs and finished QThreads.
+    """
+    widget.close()
+    widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
 
 
 @unittest.skipUnless(QT_AVAILABLE, 'PySide6 is unavailable on this platform')
@@ -31,8 +45,7 @@ class OllamaQtOnboardingTests(unittest.TestCase):
         self.window._is_exiting = True
         if self.window.tray:
             self.window.tray.hide()
-        self.window.close()
-        self.window.deleteLater()
+        dispose_qt_widget(self.window, self.app)
         self.environ.stop()
         self.home.cleanup()
 
@@ -69,10 +82,10 @@ class OllamaQtOnboardingTests(unittest.TestCase):
     def test_ram_saver_defaults_and_settings_are_persistable(self):
         from sytox.ui import SettingsDialog
         self.assertTrue(self.window.config['ram_saver_enabled'])
-        self.assertEqual(self.window.config['ram_keep_alive_seconds'], 60)
+        self.assertEqual(self.window.config['ram_keep_alive_seconds'], 300)
         dialog = SettingsDialog(self.window.config, self.window)
         self.assertTrue(dialog.ram_saver.isChecked())
-        self.assertEqual(dialog.ram_delay.value(), 60)
+        self.assertEqual(dialog.ram_delay.value(), 300)
         dialog.ram_delay.setValue(300)
         self.assertEqual(dialog.values()['ram_keep_alive_seconds'], 300)
         dialog.ram_saver.setChecked(False)
@@ -359,26 +372,36 @@ class OllamaAutoSetupQtTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication(['sytox-unit-test'])
 
+    def setUp(self):
+        self.dialog = OllamaHelpDialog('qwen2.5-coder:7b', None)
+
+    def tearDown(self):
+        worker = self.dialog.worker
+        if worker is not None and worker.isRunning():
+            worker.cancel_event.set()
+            self.assertTrue(worker.wait(4000), 'setup worker must stop before dialog disposal')
+        # Deliver result/finished before releasing their native receiver.
+        self.app.processEvents()
+        dispose_qt_widget(self.dialog, self.app)
+
     def test_model_selector_exposes_low_ram_option(self):
-        dialog = OllamaHelpDialog('qwen2.5-coder:7b', None)
+        dialog = self.dialog
         self.assertEqual(dialog.chosen_model(), 'qwen2.5-coder:7b')
         dialog.model_choice.setCurrentIndex(dialog.model_choice.findData('qwen2.5-coder:3b'))
         self.assertEqual(dialog.chosen_model(), 'qwen2.5-coder:3b')
         self.assertIn('qwen2.5-coder:3b', dialog.command_box.text())
-        dialog.close()
 
     def test_cancelled_consent_never_starts_download(self):
         from PySide6.QtWidgets import QMessageBox
-        dialog = OllamaHelpDialog('qwen2.5-coder:7b', None)
+        dialog = self.dialog
         with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.No), \
              patch('sytox.ui.OllamaSetupWorker') as worker:
             dialog.begin_install()
             worker.assert_not_called()
-        dialog.close()
 
     def test_accepted_consent_runs_real_qthread_without_network(self):
         from PySide6.QtWidgets import QMessageBox
-        dialog = OllamaHelpDialog('qwen2.5-coder:7b', None)
+        dialog = self.dialog
         dialog.model_choice.setCurrentIndex(dialog.model_choice.findData('qwen2.5-coder:3b'))
         with patch('sytox.ui.QMessageBox.question', return_value=QMessageBox.Yes), \
              patch('sytox.ui.setup_local_ollama', return_value='qwen2.5-coder:3b') as setup:
@@ -390,6 +413,3 @@ class OllamaAutoSetupQtTests(unittest.TestCase):
             self.assertEqual(setup.call_args.args[1], 'qwen2.5-coder:3b')
         self.assertEqual(dialog.installed_model, 'qwen2.5-coder:3b')
         self.assertFalse(dialog.worker.isRunning())
-        dialog.close()
-        dialog.deleteLater()
-        self.app.processEvents()

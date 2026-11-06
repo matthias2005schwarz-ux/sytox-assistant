@@ -1,3 +1,11 @@
+## Schnellchat-Optimierung im Entwicklungszweig
+
+Normale Gespräche verwenden einen eigenen, gestreamten Antwortpfad ohne
+Aufgaben-Agent. Qwen3-Thinking bleibt dabei aus; allgemeine Definitionen werden
+direkt lokal beantwortet. Details zu Abbruch, Modellwahl, RAM und überprüfbaren
+Zeitmessungen: [Schnellchat und Leistung](docs/quickchat-performance.md).
+Noch kein neuer Installer oder Release; echte Ollama-/Windows-Praxistests bleiben offen.
+
 ## Direkt-Updates innerhalb von SYTOX (ab Version 0.3.9)
 
 Unter **Nach Updates suchen** erkennt die installierte Windows-App offizielle GitHub Releases.
