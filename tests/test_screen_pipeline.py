@@ -46,7 +46,8 @@ class ScreenQuestionRoutingTests(unittest.TestCase):
         analyze.assert_called_once_with(
             image, "Was ist hier?", "http://localhost:11434",
             "qwen3-vl:4b", cancel=owner.screen_cancel)
-        self.assertIsInstance(owner.screen_cancel, threading.Event)
+        self.assertIsNotNone(owner.screen_cancel)
+        self.assertFalse(owner.screen_cancel.is_set())
         self.assertEqual(owner.answers, [(5, "Ein Fenster.")])
         owner.store.add_message.assert_called_once_with("sample", "user", "Was ist hier?")
 
