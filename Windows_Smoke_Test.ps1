@@ -38,6 +38,7 @@ try {
     Invoke-Native 'Python-Komponententests ohne native Qt-Fenster' $python @('tools/run_nonqt_tests.py')
     $env:PYTHONPATH = (Join-Path $PSScriptRoot 'tests') + ';' + $PSScriptRoot
     Invoke-Native 'KI-End-to-End Integration: Qwen3, Agenten, Speicher, Bild und Sprache' $python @('-m','unittest','-v','test_system_integration.SystemIntegrationTests')
+    Invoke-Native 'Qt-Schnellchat und Qwen-Projekt-Modus (2 Modelle)' $python @('-m','unittest','-v','test_chat_modes_ui.ChatModesQtTests')
     Invoke-Native 'Qt-Hauptfenster-Verbindungstests' $python @('-m','unittest','-v','test_ollama_ui.OllamaQtOnboardingTests')
     Invoke-Native 'Qt-Benchmarkdialog und Worker-Tests' $python @('-m','unittest','-v','test_model_benchmark_ui.BenchmarkUiTests')
     Invoke-Native 'Qt-Sprachlistener-V2 mit simulierten Vosk-Audioframes' $python @('-m','unittest','-v','test_voice_listener_v2.VoiceListenerV2Tests')
