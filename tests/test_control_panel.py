@@ -5,8 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtCore import QCoreApplication, QEvent, QUrl
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QApplication, QPushButton, QTextBrowser, QPlainTextEdit
 from sytox.ui import MainWindow
 
 
@@ -111,6 +112,33 @@ class ControlPanelTests(unittest.TestCase):
     def test_user_bubble_has_no_reply_copy_button(self):
         self.window.add_bubble('user', 'Meine Nachricht')
         self.assertEqual(self.window.findChildren(QPushButton, 'copyReplyButton'), [])
+
+    def test_assistant_bubble_renders_markdown_and_readonly_code_in_the_real_window(self):
+        source = '**Wichtig:** Eine kurze Erklärung.\n\n- Erster Punkt\n- Zweiter Punkt\n\n```python\nprint("Grüße")\n```'
+        content = self.window.add_bubble('assistant', source)
+        self.app.processEvents()
+        prose = content.findChild(QTextBrowser, 'markdownProse')
+        editor = content.findChild(QPlainTextEdit, 'codeEditor')
+        self.assertIsNotNone(prose)
+        self.assertIsNotNone(editor)
+        self.assertNotIn('**', prose.toPlainText())
+        self.assertGreaterEqual(prose.document().find('Wichtig').charFormat().fontWeight(), QFont.Bold)
+        self.assertIn('Zweiter Punkt', prose.toPlainText())
+        self.assertTrue(editor.isReadOnly())
+        self.assertIn('print("Grüße")', editor.toPlainText())
+        self.assertEqual(content.text(), source)
+
+    def test_answer_links_only_open_web_urls_after_explicit_request(self):
+        content = self.window.add_bubble('assistant', '[Python](https://www.python.org/)')
+        with patch('sytox.ui.QDesktopServices.openUrl', return_value=True) as open_url:
+            self.app.processEvents()
+            open_url.assert_not_called()
+            for target in ('file:///tmp/private.txt', 'javascript:alert(1)',
+                           'data:text/plain,private', 'https://user:pass@example.org/'):
+                content.url_requested.emit(QUrl(target))
+            open_url.assert_not_called()
+            content.url_requested.emit(QUrl('https://www.python.org/'))
+            open_url.assert_called_once_with(QUrl('https://www.python.org/'))
 
     def test_chat_export_writes_utf8_saved_messages_without_unsent_draft(self):
         self.window.store.add_message(self.window.chat_id, 'user', 'Grüße 👋\n```python\nprint(1)\n```')

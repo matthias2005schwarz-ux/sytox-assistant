@@ -132,6 +132,18 @@ QLabel#bubbleHeadingAssistant {{ background: transparent; border: none;
     color: #F2808B; font-size: 11px; font-weight: 800; }}
 QLabel#bubbleContent {{ background: transparent; border: none;
     color: #F3EDEF; font-size: 13px; }}
+QTextBrowser#markdownProse {{ background: transparent; border: none;
+    padding: 0; color: #F3EDEF; font-size: 14px;
+    selection-background-color: #8D2632; }}
+QFrame#codeBlock {{ background: #111116; border: 1px solid #44303A;
+    border-radius: 11px; }}
+QWidget#codeHeader {{ background: #241A21; border: none; }}
+QLabel#codeLanguage {{ color: #F097A0; font-size: 11px; font-weight: 700;
+    background: transparent; border: none; }}
+QPlainTextEdit#codeEditor {{ background: #111116; color: #E9E5EF;
+    border: none; border-radius: 0; padding: 10px 12px;
+    selection-background-color: #71333F; }}
+QPlainTextEdit#codeEditor:focus {{ border: none; }}
 QProgressBar {{ background: #241D22; border: 1px solid #49353F;
     color: #EEE4E8; border-radius: 8px; text-align: center; min-height: 15px; }}
 QProgressBar::chunk {{ background: #CE3B47; border-radius: 7px; }}

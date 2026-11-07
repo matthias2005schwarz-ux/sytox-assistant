@@ -1,3 +1,11 @@
+## Lesbare Antworten und Code im Desktop-Chat
+
+Antworten werden jetzt als Markdown mit Überschriften, Listen und Tabellen
+dargestellt. Code erhält eigene dunkle Karten, Syntaxfarben, eine Schrift mit
+fester Zeichenbreite und einen Kopierbutton direkt am Block. Die Darstellung
+aktualisiert sich bereits während der Generierung; Originaltext und Export
+bleiben erhalten. [Darstellung und native Vorschau](docs/chat-rendering.md).
+
 ## Verbesserte Aufgabenerkennung und lokaler Kontext
 
 Ausdrückliche Aufträge bleiben auch nach einer Erklärungsfrage erkennbar.
