@@ -53,8 +53,8 @@ class TestStore(unittest.TestCase):
         with patch('sytox.agent.search_web') as search:
             agent = self.agent('Programmiere ein privates Python-Projekt', [
                 {'role': 'assistant', 'content': 'Ich beginne.'}
-            ])
-            self.assertEqual(agent.run(self.cid, 'once')['status'], 'done')
+            ] * 3)
+            self.assertEqual(agent.run(self.cid, 'once')['status'], 'paused')
             search.assert_not_called()
 
     def test_chat_crud(self):

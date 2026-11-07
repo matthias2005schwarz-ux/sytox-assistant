@@ -31,6 +31,42 @@ Begrüßungen überspringen den Gedächtnisabruf weiterhin. Persönliche Erinner
 Projekt-, Konto- und Gerätefragen lösen keine automatische öffentliche Websuche
 aus. Ausdrückliche Rechercheaufträge bleiben möglich; Offline-Wünsche haben Vorrang.
 
+## Programmieraufträge abschließen und fortsetzen
+
+Auch der Modus „Einmal“ führt Programmieraufträge durch Werkzeugschritte,
+Prüfungen und eine ausdrückliche Abschlussmeldung. Ein bloßes „Fertig“ reicht
+nicht. Fehlgeschlagene Prüfungen werden pro normalisiertem Befehl gespeichert
+und bleiben bei einer Fortsetzung offen. Ein anderer grüner Test oder eine
+Syntaxprüfung beseitigt einen fehlgeschlagenen Funktionstest nicht. Der
+ursprüngliche Prüfaufruf muss erfolgreich wiederholt werden; veränderte
+Prüfbefehle werden konservativ als andere Prüfung behandelt.
+
+Eine Abschlussmeldung vor weiteren angekündigten Werkzeugaufrufen wird
+abgelehnt. Nachfolgende Änderungen werden ausgeführt und brauchen erneut einen
+Nachweis. Freigaben, Backups, Abbruch und vorhandene Arbeitszeitmodi bleiben
+erhalten. Leere, nur gesammelte oder vollständig übersprungene Tests gelten
+nicht als bestandener Funktionstest.
+
+Bei langen Aufgaben ersetzt eine protokollgerechte Kontextkürzung das bisherige
+Abschneiden nach Nachrichtenanzahl. Ursprünglicher Auftrag, neuere echte
+Nutzeranweisungen, Zusatzauftrag und offene Prüfanforderungen bleiben verfügbar.
+Werkzeugaufrufe und ihre Ergebnisse werden zusammengehalten. Historische Daten
+aus Dateien, Bildschirm oder Suche werden nicht zu neuen Nutzeranweisungen
+erklärt. Diese Zuordnung verbessert die Kontextaufbereitung, ist aber keine
+Garantie gegen Prompt-Injection durch ein lokales Modell.
+
+Lange Werkzeugausgaben behalten Anfang und Ende mit sichtbarer Kürzungsmarkierung,
+damit terminale Fehlermeldungen nicht verloren gehen. Das Zeichenbudget ist eine
+Heuristik, kein exakter Tokenzähler; unverzichtbare Anweisungen werden dafür nicht
+still gekürzt. Ein zu großer Pflichtkontext kann weiterhin das Modellfenster
+überschreiten. Es wurde kein neues Gesamtlaufzeitlimit für Programmieraufträge
+eingeführt.
+
+Python-Dateiänderungen verwerfen nur zugehörige, im Projekt liegende generierte
+Bytecode-Dateien. Damit verwenden Reparaturtests auch bei gleich großen Änderungen
+innerhalb einer Sekunde den aktuellen Quelltext. Exklusiv erzeugte temporäre Dateien
+schützen den Schreibpfad vor vorbereiteten temporären Symlinks.
+
 ## Grenzen der Prüfung
 
 Automatisierte Tests prüfen, welche Vorgaben und Daten das lokale Modell erhält,

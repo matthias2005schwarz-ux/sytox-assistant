@@ -4,6 +4,8 @@ Ausdrückliche Aufträge bleiben auch nach einer Erklärungsfrage erkennbar.
 Gedächtnisabruf und ältere Chat-Vorgaben werden gezielter ausgewählt; aktuelle
 Korrekturen und Projektgrenzen erhalten Vorrang. Details und Prüfgrenzen:
 [KI-Qualität im Entwicklungszweig](docs/ai-quality.md).
+Programmieraufträge brauchen auch im Modus „Einmal“ einen geprüften Abschluss.
+Offene Prüfungen und wesentliche Vorgaben bleiben bei längeren Aufgaben erhalten.
 
 ## Schnellchat-Optimierung im Entwicklungszweig
 

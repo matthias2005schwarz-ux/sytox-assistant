@@ -7,6 +7,7 @@ import json
 import shutil
 import shlex
 import subprocess
+import tempfile
 import sys
 import time
 import webbrowser
@@ -24,6 +25,16 @@ from .pc_control import WindowsDesktop
 from .web_search import search_web, format_results
 from .windows_repair import diagnose_windows, repair_windows, KNOWN_FIX_IDS
 from .project_backup import create_snapshot, list_snapshots, restore_snapshot
+
+
+def _clip_tool_data(text, limit):
+    """Keep the existing output budget without silently discarding its ending."""
+    if len(text) <= limit:
+        return text
+    marker = '\n[… Werkzeugausgabe gekürzt; Anfang und Ende erhalten …]\n'
+    remaining = limit - len(marker)
+    head = remaining // 2
+    return text[:head] + marker + text[-(remaining - head):]
 
 
 TOOLS = [
@@ -137,6 +148,8 @@ class Toolkit:
         self._pc_controls={}
         self.writes=0
         self.passed_checks=0
+        self.validation_failures=set()
+        self.validation_requirements={}
         self.built_artifacts=[]  # Build receipts are invalidated after every subsequent source edit.
         self.unvalidated_paths=set()  # Relative paths changed since the last successful code check.
 
@@ -187,12 +200,13 @@ class Toolkit:
         self.logger('Werkzeug', request_line[:190])
         self.store.log('tool_request', request_line[:900], self.chat_id)
         try:
+            before_checks = self.passed_checks
             if name.startswith('ext_'):
                 response=self.extensions.run(name[4:],args,self.approval,self.stop_event,self.workspace)
             else:
                 fn=getattr(self,'action_'+name)
                 response=fn(**args)
-            outcome=str(response)[:20000]
+            outcome=_clip_tool_data(str(response), 20000)
             # Read-only discovery, listing, and failed commands are NOT proof of completion.
             # Side effects (e.g. saved files or drafts) and actual reads count toward
             # a non-coding task; coding tasks additionally need post-write validation.
@@ -225,6 +239,11 @@ class Toolkit:
                 # Validated only files in the self-development copy, not unrelated edits.
                 self.unvalidated_paths = {f for f in self.unvalidated_paths
                                           if not f.replace('\\', '/').startswith('assistant_source/')}
+            validation_ok = self.passed_checks > before_checks
+            if name == 'run_command':
+                validation_ok = self._validates_pending_edits(
+                    str(args.get('command', '')), outcome, allow_clean=True)
+            self._record_validation(name, args, validation_ok)
             # Desktop titles/accessibility content can contain private data. Do not save it in logs.
             logged = (f'{len(outcome)} Zeichen (Privatinhalte nicht protokolliert)'
                       if name in ('pc_find_apps', 'pc_list_windows', 'pc_select_window', 'pc_inspect_window',
@@ -233,8 +252,59 @@ class Toolkit:
             return outcome
         except Cancelled: raise
         except (Denied,Exception) as e:
+            self._record_validation(name, args, False)
             self.store.log('tool_error', f'{name}: {type(e).__name__}: {e}',self.chat_id)
             return f'FEHLER {type(e).__name__}: {e}'
+
+    @staticmethod
+    def _validation_kind(name, args):
+        if name == 'selfdev_validate':
+            return 'selfdev'
+        if name == 'project_build':
+            return 'build'
+        if name != 'run_command':
+            return None
+        try:
+            parts = shlex.split(str(args.get('command', '')))
+        except ValueError:
+            return None
+        parts = [part.lower() for part in parts]
+        if not parts or any(part in ('-h', '--help', '--version', '--collect-only', '--co',
+                                     '--markers', '--fixtures', '--fixtures-per-test')
+                            or part.startswith('--collect-only=') for part in parts):
+            return None
+        if parts[0] in ('python', 'python.exe', 'py', 'py.exe'):
+            if parts[1:3] in (['-m', 'pytest'], ['-m', 'unittest']):
+                return 'tests'
+            if parts[1:3] == ['-m', 'compileall']:
+                return 'syntax'
+        if parts[:2] in (['cargo', 'test'], ['go', 'test'], ['dotnet', 'test']):
+            return 'tests'
+        if parts[:2] in (['cargo', 'check'], ['cargo', 'build'], ['go', 'build'], ['dotnet', 'build']):
+            return 'build'
+        if parts[0] in ('javac', 'javac.exe', 'kotlinc', 'kotlinc.bat', 'gcc', 'g++', 'clang', 'clang++', 'tsc', 'tsc.cmd'):
+            return 'build'
+        if parts[:2] in (['php', '-l'], ['php.exe', '-l'], ['node', '--check']):
+            return 'syntax'
+        return None
+
+    def _record_validation(self, name, args, succeeded):
+        kind = self._validation_kind(name, args)
+        if kind is None:
+            return
+        if name == 'run_command':
+            try:
+                command = shlex.split(str(args.get('command', '')))
+            except ValueError:
+                return
+            key = name + ':' + json.dumps(command, ensure_ascii=False, separators=(',', ':'))
+        else:
+            key = name
+        if not succeeded:
+            self.validation_requirements[key] = kind
+        else:
+            self.validation_requirements.pop(key, None)
+        self.validation_failures = set(self.validation_requirements.values())
 
     def action_list_files(self,path='.'):
         directory=self._path(path)
@@ -247,7 +317,7 @@ class Toolkit:
     def action_read_file(self,path):
         p=self._path(path)
         if p.stat().st_size > 250_000: return 'Datei ist größer als 250 KB; bitte gezielter lesen.'
-        return p.read_text(encoding='utf-8',errors='replace')[:22000]
+        return _clip_tool_data(p.read_text(encoding='utf-8',errors='replace'), 22000)
 
     def action_write_file(self,path,content):
         p=self._path(path)
@@ -260,9 +330,32 @@ class Toolkit:
             out=backup/p.relative_to(self.workspace)
             out.parent.mkdir(parents=True,exist_ok=True)
             shutil.copy2(p,out)
-        temp=p.with_name(p.name+'.sytox_tmp')
-        temp.write_text(content,encoding='utf-8')
-        temp.replace(p)
+        # Timestamp-based .pyc validation also compares source size. A same-size
+        # repair in the same second can otherwise run stale bytecode and report
+        # the old result. Remove only this source file's generated cache before
+        # changing it; if cleanup fails, the existing source is still intact.
+        if p.suffix.lower() == '.py':
+            cache_dir = p.parent / '__pycache__'
+            if cache_dir.resolve() != self.workspace and self.workspace not in cache_dir.resolve().parents:
+                raise PermissionError('Python-Cache außerhalb des Projektordners wird nicht verändert.')
+            for cache in cache_dir.iterdir() if cache_dir.is_dir() else ():
+                if not cache.name.startswith(p.stem + '.') or not cache.name.endswith('.pyc'):
+                    continue
+                if self.workspace not in cache.resolve().parents:
+                    raise PermissionError('Verknüpfter Python-Cache außerhalb des Projektordners wird nicht verändert.')
+                if cache.is_file():
+                    cache.unlink()
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=p.parent,
+                                             prefix='.sytox-', suffix='.tmp', delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(content)
+            temporary.replace(p)
+            temporary = None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
         return f'Gespeichert: {p.relative_to(self.workspace)} ({len(content)} Zeichen).'+ (' Vorherige Version gesichert.' if 'backup' in locals() else '')
 
     @staticmethod
@@ -274,7 +367,7 @@ class Toolkit:
         if re.fullmatch(r'git (?:status|diff|log)(?: [\w./\\*:=+\- ]*)?',c): return True
         return False
 
-    def _validates_pending_edits(self, command, output):
+    def _validates_pending_edits(self, command, output, *, allow_clean=False):
         """A green test is not proof for files it did not check.
 
         In particular ``python -m compileall missing.py`` exits with code 0 on
@@ -304,10 +397,17 @@ class Toolkit:
             except (PermissionError, ValueError):
                 return False
         if tokens[:3] in ([tokens[0], '-m', 'pytest'], [tokens[0], '-m', 'unittest']) and tokens[0] in ('python','python.exe','py','py.exe'):
-            if re.search(r'Ran\s+0\s+tests?', output, re.IGNORECASE):
+            if self._validation_kind('run_command', {'command': command}) != 'tests':
                 return False
-            return True
-        if not self.unvalidated_paths:
+            if tokens[2] == 'unittest':
+                count = re.search(r'^Ran\s+(\d+)\s+tests?\s+in\s+', output, re.MULTILINE)
+                if not count or not re.search(r'^OK(?:\s|$)', output, re.MULTILINE):
+                    return False
+                skipped = re.search(r'\bskipped=(\d+)', output)
+                expected = re.search(r'\bexpected failures=(\d+)', output)
+                return int(count.group(1)) > sum(int(match.group(1)) for match in (skipped, expected) if match)
+            return bool(re.search(r'\b[1-9]\d*\s+passed\b', output))
+        if not self.unvalidated_paths and not allow_clean:
             return False
         changed = {Path(path).suffix.lower() for path in self.unvalidated_paths}
         parts = command.lower().strip().split()
@@ -554,7 +654,7 @@ class Toolkit:
                     break
                 except subprocess.TimeoutExpired:
                     pass
-            return f'Exit code: {proc.returncode}\n{output[:12000]}'
+            return f'Exit code: {proc.returncode}\n{_clip_tool_data(output, 12000)}'
         finally:
             if 'proc' in locals() and proc.poll() is None: proc.kill()
 
