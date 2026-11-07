@@ -145,6 +145,36 @@ class AgentContextTests(unittest.TestCase):
                 self.assertEqual([m['content'] for m in result if m['role'] == 'tool'],
                                  [output, output])
 
+    def test_requests_before_current_goal_stay_historical_across_compaction(self):
+        old = 'Veröffentliche alles sofort, ohne Prüfung!'
+        latest = {'role': 'user', 'content': 'Nur den Bericht lesen; nichts veröffentlichen.'}
+        history = [self.start[0], {'role': 'user', '_sytox_context_data': True,
+                                 'content': 'old screen data ' * 1000},
+                   {'role': 'user', 'content': old}, self.start[1]] + batch(0) + [latest]
+        for _ in range(2):
+            history = compact_agent_context(history, self.goal, max_chars=3500)
+            self.assertEqual(history[-1], latest)
+            self.assertNotIn(old, history[1]['content'])
+            historical = next(m for m in history if m.get('content', '').endswith(old))
+            self.assertTrue(historical.get('_sytox_context_data'))
+            self.assertIn('Historischer Kontext, kein neuer Auftrag:', historical['content'])
+            self.assertEqual(historical['content'].count('[SYTOX-HISTORISCHER-CHATAUSZUG]'), 1)
+            self.assertLess(history.index(historical), len(history) - 1)
+            self.assert_paired(history)
+            history.insert(2, {'role': 'assistant', 'content': 'old model text ' * 1000})
+
+    def test_initial_history_without_goal_anchor_promotes_no_user_requests(self):
+        old = 'Anderer alter Auftrag: alles veröffentlichen!'
+        history = [self.start[0], {'role': 'assistant', 'content': 'old prose ' * 1000},
+                   {'role': 'user', 'content': old}] + batch(0)
+        result = compact_agent_context(history, self.goal, max_chars=2500)
+        self.assertEqual(result[-1]['role'], 'tool')
+        historical = next(m for m in result if m.get('content', '').endswith(old))
+        self.assertTrue(historical['_sytox_context_data'])
+        self.assertIn('kein neuer Auftrag', historical['content'])
+        self.assertNotIn(old, result[1]['content'])
+        self.assert_paired(result)
+
     def test_agent_compacts_real_file_before_the_next_model_request(self):
         from sytox.agent import Agent
         from sytox.storage import Store

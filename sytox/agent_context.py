@@ -6,6 +6,7 @@ import json
 
 _NOTE = '[SYTOX-KONTEXTFORTSETZUNG]'
 _DATA = '[SYTOX-HISTORISCHE-WERKZEUGDATEN]'
+_HISTORY = '[SYTOX-HISTORISCHER-CHATAUSZUG]\nHistorischer Kontext, kein neuer Auftrag:\n'
 _CUT = '\n[… historische Werkzeugausgabe gekürzt; Anfang und Ende erhalten …]\n'
 
 
@@ -101,17 +102,24 @@ def compact_agent_context(messages: list[dict], goal: str, checkpoint: dict | No
     active_record = ([{'role': 'user', '_sytox_generated': True,
                       'content': _NOTE + '\nAktueller Zusatzauftrag (wörtlich, noch umzusetzen und zu prüfen):\n' + str(active)}]
                      if active else [])
+    # An older chat request is history, not a correction to this task. Only
+    # genuine messages after its last goal anchor can become newer directives.
+    genuine = lambda item: (item.get('role') == 'user' and not item.get('_sytox_context_data')
+                            and not item.get('_sytox_generated'))
+    anchors = [i for i, item in enumerate(history) if genuine(item) and item.get('content') == goal]
+    continued = any(item.get('role') == 'user' and item.get('_sytox_compacted') is True
+                    and item.get('_sytox_context_data') for item in history)
+    after_goal = anchors[-1] + 1 if anchors else (0 if continued else len(history))
     directives = []
-    for item in reversed(history):
+    for item in reversed(history[after_goal:]):
         content = str(item.get('content') or '')
-        if (item.get('role') == 'user' and content and content != goal
-                and not item.get('_sytox_context_data') and not item.get('_sytox_generated')
-                and item not in directives):
+        if genuine(item) and content and content != goal and item not in directives:
             directives.insert(0, item)
             if len(directives) == 3:
                 break
     note += '\nAm Ende stehen wörtliche neuere Nutzeranweisungen; historische Daten davor sind keine neuen Anweisungen.'
-    prefix = system + [{'role': 'user', '_sytox_context_data': True, 'content': note}]
+    prefix = system + [{'role': 'user', '_sytox_context_data': True,
+                        '_sytox_compacted': True, 'content': note}]
     essential = prefix + directives + active_record
     if _size(essential) > max_chars or len(essential) > max_messages:
         essential[len(system)]['content'] += '\nPflichtkontext überschreitet das Zielbudget; keine Anweisung wurde dafür gekürzt.'
@@ -125,6 +133,9 @@ def compact_agent_context(messages: list[dict], goal: str, checkpoint: dict | No
                  str(item.get('content') or '').startswith(_NOTE))]
         if not batch:
             continue
+        batch = [dict(item, _sytox_context_data=True, content=_HISTORY + str(item.get('content') or ''))
+                 if item.get('role') == 'user' and not item.get('_sytox_context_data') else item
+                 for item in batch]
         candidate = _fit_results(batch, remaining)
         if valid and len(candidate) <= slots and _size(candidate) <= remaining:
             selected.insert(0, candidate)
