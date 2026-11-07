@@ -43,10 +43,6 @@ _EXPLANATION = re.compile(
     r"beschreib\w*|what\b|why\b|how\b|explain\b|describe\b)",
     re.IGNORECASE,
 )
-_ACTION_NEGATION = re.compile(
-    r"^\s+(?:bitte\s+)?(?:nicht|niemals|nie|kein(?:e|en|em|er|es)?)\b",
-    re.IGNORECASE,
-)
 _PROJECT_CONTINUATION = re.compile(
     r"\b(?:mach\w*|setz\w*|arbeite)\b.{0,80}\b(?:projekt|project|programmier\w*)\b"
     r".{0,45}\b(?:weiter|fort)\b",
@@ -54,7 +50,7 @@ _PROJECT_CONTINUATION = re.compile(
 )
 _TOOL_ACTION = re.compile(
     r"\b(?:öffne\w*|oeffne\w*|starte\w*|lies|lese|zeige?\w*|liste\w*|"
-    r"erstell\w*|schreib\w*|"
+    r"erstell\w*|schreib\w*|bearbeit\w*|änder\w*|aender\w*|verbesser\w*|"
     r"lösch\w*|loesch\w*|speicher\w*|verschieb\w*|kopier\w*|such\w*|"
     r"open|launch|read|list|delete|save|move|copy)\b"
     r".{0,100}\b(?:datei\w*|ordner\w*|verzeichnis\w*|notepad|editor|"
@@ -91,9 +87,86 @@ _SCREEN_NEGATION = re.compile(
 )
 
 
+def _prose(question):
+    """Quoted examples and code are data, not direct action requests."""
+    text = str(question or '')
+    text = re.sub(r'(?ms)^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[ \t]*(?:\n|$)|\Z)', ' ', text)
+
+    def inert_target(match):
+        content = match.group()[1:-1].strip()
+        # Keep target types for routing, never verbs from the quoted text.
+        # The original untouched message is what the selected model receives.
+        if re.fullmatch(r'https?://\S+', content, re.I):
+            return ' Webziel https://quoted.invalid '
+        suffix = re.search(r'\.([a-z][a-z0-9]{0,11})$', content, re.I)
+        if suffix:
+            return ' Dateiziel.' + suffix.group(1) + ' '
+        return ' Dateiziel ' if '/' in content or '\\' in content else ' '
+
+    return re.sub(r"\"[^\"\n]*\"|„[^“\n]*“|«[^»\n]*»|`[^`\n]*`|(?<!\w)'[^'\n]*'(?!\w)", inert_target, text)
+
+
+def _negated(text):
+    # Scope negation to one clause; "nicht nur" is an additive request.
+    text = re.sub(r'\bnicht nur\b', '', text, flags=re.I)
+    # Later relative clauses describe constraints, not a negated main action.
+    main_clause = text.split(',', 1)[0]
+    if re.search(r'\b(?:nicht|niemals|nie|kein\w*)\b', main_clause, re.I):
+        return True
+    return bool(re.search(
+        r'^(?:bitte\s+)?(?:nicht|niemals|nie|kein\w*)\b|'
+        r'^\w+\s+(?:bitte\s+)?(?:nicht|niemals|nie|kein\w*)\b|'
+        r'\b(?:nicht|niemals|nie)\s*(?:[,;.!?]|$)|'
+        r'\b(?:auf keinen fall|unter keinen umständen)\b', text, re.I))
+
+
+def _action_clauses(question):
+    """Recognize explicit request framing, including a command after a question.
+
+    This is conservative local routing, not permission to execute an action.
+    The Agent still performs its ordinary approval and validation checks.
+    """
+    for sentence in re.split(r'[?!;\n]+|(?<=\.)\s+', _prose(question)):
+        sentence = sentence.strip()
+        if re.match(r'^(?:zum beispiel|beispiel|angenommen|wenn ich|falls ich|'
+                    r'ich (?:habe|hatte|kann|konnte|lerne)|der (?:satz|befehl|nutzer))\b', sentence, re.I):
+            continue
+        how_question = bool(re.match(r'^(?:bitte\s+)?(?:wie|how)\b', sentence, re.I))
+        for index, clause in enumerate(re.split(
+                r'\s+(?:und|aber)\s+|,\s*(?:danach|dann|anschließend|anschliessend)\s+', sentence, flags=re.I)):
+            clause = clause.strip(' ,:')
+            # "Wie öffne ich ... und lösche Dateien?" remains an explanation.
+            if index and how_question and not re.match(r'^(?:bitte|kannst|könntest|würdest)\b', clause, re.I):
+                continue
+            clause = re.sub(r'^(?:(?:hey\s+)?sytox[, ]+)?(?:(?:bitte|danach|dann|anschließend|anschliessend)[, ]+)*', '', clause, flags=re.I)
+            if not clause or _negated(clause) or _EXPLANATION.match(clause):
+                continue
+            polite = re.match(r'^(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+', clause, re.I)
+            desired = re.match(r'^ich\s+(?:möchte|moechte|will|wünsche|wuensche)\b.*?\bdass du\s+', clause, re.I)
+            if polite or desired:
+                clause = clause[(polite or desired).end():].strip()
+                clause = re.sub(r'^(?:bitte\s+)?', '', clause, flags=re.I)
+                if (_EXPLANATION.match(re.sub(r'^mir\s+', '', clause, flags=re.I))
+                        or _negated(clause)):
+                    continue
+                # A broad capability question is not an instruction to build.
+                if re.fullmatch(r'(?:auch\s+)?(?:(?:in|mit)\s+)?(?:\w+\s+)?programmieren', clause, re.I):
+                    continue
+                yield clause
+            elif re.match(r'^(?:hilf|helfe|unterstütze|unterstuetze)\s+(?:mir|mich)\b', clause, re.I):
+                if not re.search(r'\b(?:verstehen|lernen|erklären|erklaeren)\b', clause, re.I):
+                    yield clause
+            elif (_DEVELOPMENT_ACTION.match(clause) or _PROJECT_ACTION.match(clause)
+                  or _TOOL_ACTION.match(clause) or _OTHER_TOOL_ACTION.match(clause)
+                  or _PROJECT_CONTINUATION.match(clause)):
+                # Verb-first questions or reported actions are not imperatives.
+                if not re.match(r'^\w+\s+(?:ich|wir|man|er|sie|es|ist|sind|war|macht|hilft)\b', clause, re.I):
+                    yield clause
+
+
 def wants_screen(question: str) -> bool:
     """Require an explicit, positive request. Mentions alone never start capture."""
-    text = re.sub(r"\s+", " ", str(question or "")).strip().lower()
+    text = re.sub(r"\s+", " ", _prose(question)).strip().lower()
     if not _SCREEN_SUBJECT.search(text) or not _LIVE_SCREEN_REFERENCE.search(text):
         return False
     if any(phrase in text for phrase in (
@@ -101,53 +174,39 @@ def wants_screen(question: str) -> bool:
         "wie kann ich einen screenshot", "wie erstelle ich",
     )):
         return False
-    if _SCREEN_NEGATION.search(text):
+    if _SCREEN_NEGATION.search(text) or re.search(
+            r'\b(?:bildschirm|screen|monitor|desktop)\b.{0,35}\bnicht\s*(?:an)?[.!?]*$', text):
         return False
     return bool(_SCREEN_ACTION.search(text))
 
 
 def is_project_request(question: str, task_mode: str = "once") -> bool:
-    """Use the project route for development work, not technical small talk."""
+    """Use the project route for requested development work, not quoted topics."""
     if task_mode != "once":
         return True
-    text = re.sub(r"\s+", " ", str(question or "")).strip()
-    if _EXPLANATION.search(text):
-        return False
-    if _PROJECT_CONTINUATION.search(text):
-        return True
-    for action in _DEVELOPMENT_ACTION.finditer(text):
-        # "Kannst du programmieren?" asks about a capability, not for a job.
-        if re.fullmatch(r"kannst du (?:auch )?programmieren\??", text, re.IGNORECASE):
-            return False
-        if not _ACTION_NEGATION.search(text[action.end():]):
+    for clause in _action_clauses(question):
+        if _PROJECT_CONTINUATION.search(clause) or _DEVELOPMENT_ACTION.search(clause):
             return True
-    if not _PROJECT_SUBJECT.search(text):
-        return False
-    for action in _PROJECT_ACTION.finditer(text):
-        if _ACTION_NEGATION.search(text[action.end():]):
+        if not _PROJECT_SUBJECT.search(clause):
             continue
-        if re.match(r"(?:beheb|reparier|fix)", action.group(), re.IGNORECASE):
-            # Repairing a Windows app/DLL is handled by the existing diagnosis
-            # service; it is not source development unless code is named.
-            if not _CODE_SUBJECT.search(text):
+        if re.match(r'^(?:hilf|helfe|unterstütze|unterstuetze)\b', clause, re.I):
+            if _CODE_SUBJECT.search(clause) and re.search(r'\b(?:fehler|bug|traceback|exception|absturz)\b', clause, re.I):
+                return True
+        for action in _PROJECT_ACTION.finditer(clause):
+            # Windows app/DLL repair remains in the scoped diagnosis service.
+            if re.match(r'(?:beheb|reparier|fix)', action.group(), re.I) and not _CODE_SUBJECT.search(clause):
                 continue
-        return True
+            return True
     return False
 
 
 def requires_agent(question: str, task_mode: str = "once") -> bool:
-    """Keep explicit file/PC actions available without tool-enabling small talk.
-
-    Model choice is independent: a manually selected small model can still
-    execute a requested project task through the existing approval workflow.
-    Explicit screen observations remain in the conversational vision path.
-    """
+    """Tool need is independent of manual model choice and screen observations."""
     if is_project_request(question, task_mode):
         return True
-    text = re.sub(r"\s+", " ", str(question or "")).strip()
-    if _EXPLANATION.search(text) or wants_screen(text):
-        return False
-    return bool(_TOOL_ACTION.search(text) or _OTHER_TOOL_ACTION.search(text))
+    return any(not wants_screen(clause) and
+               (_TOOL_ACTION.search(clause) or _OTHER_TOOL_ACTION.search(clause))
+               for clause in _action_clauses(question))
 
 
 def select_chat_model(question: str, config: dict, task_mode: str = "once") -> tuple[str, str]:
