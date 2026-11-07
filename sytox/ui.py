@@ -1913,13 +1913,9 @@ class MainWindow(QMainWindow):
 
     def start_quick_reply(self, question):
         """Normal conversation never creates an Agent, Toolkit or task row."""
-        memory = ''
-        if len(question.strip()) > 8:
-            context = self.store.related_context(question, exclude_chat=self.chat_id, limit=3)
-            memory = '\n'.join(item['source'] + ': ' + item['content'] for item in context)[:2000]
         worker = ParallelReplyWorker(
-            self._chat_runtime_config(), self.store.messages(self.chat_id, limit=12), self,
-            standalone=True, memory_context=memory)
+            self._chat_runtime_config(), [], self, standalone=True,
+            store=self.store, chat_id=self.chat_id)
         self.quick_worker = worker
         self._quick_turn = {'chat_id': self.chat_id, 'text': '',
                             'label': self.add_bubble('assistant', 'SYTOX antwortet …'),

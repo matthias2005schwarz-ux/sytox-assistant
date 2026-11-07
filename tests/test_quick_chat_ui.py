@@ -172,14 +172,17 @@ class QuickChatUiTests(unittest.TestCase):
 
     def test_relevant_memory_is_context_without_starting_a_project(self):
         self.window.store.add_memory('Meine Lieblingsfarbe ist Dunkelrot.')
-        with patch('sytox.ui.ParallelReplyWorker') as worker:
+        with patch('sytox.parallel_chat.OllamaClient') as client, \
+             patch('sytox.parallel_chat.search_web') as search, \
+             patch('sytox.ui.Agent') as agent:
+            client.return_value.chat.return_value = {'content': 'Deine Lieblingsfarbe ist Dunkelrot.'}
             self.window.input.setPlainText('Welche Lieblingsfarbe habe ich?')
             self.window.send()
-            self.assertIn('Dunkelrot', worker.call_args.kwargs['memory_context'])
-            self.assertTrue(worker.call_args.kwargs['standalone'])
-        # No real QThread was started by this test's fake worker.
-        self.window.quick_worker = None
-        self.window._quick_turn = None
+            self.wait_for(lambda: self.window.quick_worker is None)
+            sent = client.return_value.chat.call_args.args[0]
+            self.assertIn('Dunkelrot', sent[0]['content'])
+            search.assert_not_called()
+            agent.assert_not_called()
 
     def test_old_explicit_ram_delay_is_preserved(self):
         self.window.config['ram_keep_alive_seconds'] = 60

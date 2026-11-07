@@ -1,10 +1,13 @@
 """Quick and side conversations stream without constructing a task Agent."""
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 
 from sytox.actions import Cancelled
+from sytox.storage import Store
 from sytox.parallel_chat import (
     ParallelReplyWorker, ParallelChatDialog, bounded_history, MAX_CONTEXT_CHARS,
 )
@@ -141,6 +144,46 @@ class QuickReplyTests(unittest.TestCase):
         result = bounded_history(history, max_chars=100)
         self.assertEqual(result, [history[-1]])
         self.assertEqual(len(history[0]['content']), 30000)
+
+    def test_context_keeps_complete_turns_instead_of_orphan_assistant_replies(self):
+        history = [{'role': 'assistant', 'content': 'Antwort ohne Frage'},
+                   {'role': 'user', 'content': 'Frage 1'},
+                   {'role': 'assistant', 'content': 'Antwort 1'},
+                   {'role': 'user', 'content': 'Frage 2'}]
+        self.assertEqual(bounded_history(history, max_messages=2), [history[-1]])
+        self.assertEqual(bounded_history(history, max_messages=3), history[1:])
+
+    def test_recent_dialogue_survives_large_background_memory_and_observations(self):
+        previous = {'role': 'assistant', 'content': 'Die Option heißt Bernstein. ' * 20}
+        question = {'role': 'user', 'content': 'Warum diese Option? ' + 'x' * 10000}
+        worker = self.worker([{'role': 'user', 'content': 'Welche Option?'}, previous, question],
+                             memory_context='Alte Randnotiz. ' * 300)
+        supplied = ([{'role': 'system', 'content': 'Du bist SYTOX.'}] + worker.history +
+                    [{'role': 'user', 'content': 'Zusatzbeobachtung. ' * 500}])
+        result = worker._fit_context(supplied)
+        self.assertIn(previous, result)
+        self.assertIn(question, result)
+        self.assertLessEqual(sum(len(entry['content']) for entry in result), MAX_CONTEXT_CHARS)
+
+    def test_older_user_constraint_is_recalled_from_current_chat_without_model_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'assistant.db')
+            chat = store.create_chat()
+            store.add_message(chat, 'user', 'Nutze Tastaturbedienung für alle Buttons.')
+            for i in range(8):
+                store.add_message(chat, 'user', f'Erkläre mir die Sortierung Nummer {i}')
+                store.add_message(chat, 'assistant', f'Hier ist Erklärung {i}')
+            store.add_message(chat, 'user', 'Wie sollen meine Buttons bedienbar bleiben?')
+            worker = self.worker([], store=store, chat_id=chat)
+            with patch('sytox.parallel_chat.OllamaClient') as client, \
+                 patch('sytox.parallel_chat.search_web') as search:
+                client.return_value.chat.return_value = {'content': 'Mit Tastaturbedienung.'}
+                worker.run()
+                supplied = client.return_value.chat.call_args.args[0]
+                self.assertIn('Tastaturbedienung', supplied[0]['content'])
+                self.assertIn('unverifiziert', supplied[0]['content'])
+                search.assert_not_called()
+            self.assertEqual(worker.outcome, 'done')
 
     def test_local_memory_is_bounded_and_labeled_untrusted(self):
         worker = self.worker(memory_context='Rot ist meine Lieblingsfarbe. ' * 500)
