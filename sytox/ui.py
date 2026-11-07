@@ -2387,6 +2387,8 @@ class MainWindow(QMainWindow):
 
     def check_model_status(self):
         """Check the selected chat model without blocking mouse/keyboard UI."""
+        if self._is_exiting:
+            return
         if self.ollama_probe and self.ollama_probe.isRunning():
             self._probe_again = True
             return
@@ -2398,6 +2400,8 @@ class MainWindow(QMainWindow):
         self.ollama_probe.start()
 
     def _model_status_checked(self, status: OllamaStatus):
+        if self._is_exiting:
+            return
         if self.ollama_probe and (self.ollama_probe.url != self.config['ollama_url'] or
                                   self.ollama_probe.model != self._preferred_status_model()):
             self._probe_again = True
@@ -2415,6 +2419,9 @@ class MainWindow(QMainWindow):
                     'border:1px solid #6A4235;border-radius:11px;padding:5px 11px;')
                 self.log('System', status.details)
     def _model_probe_finished(self):
+        if self._is_exiting:
+            self._probe_again = False
+            return
         if self._probe_again:
             self._probe_again = False
             QTimer.singleShot(0, self.check_model_status)

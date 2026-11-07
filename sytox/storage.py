@@ -100,7 +100,7 @@ class Store:
         if kind not in ('chat', 'project'):
             raise ValueError('Unbekannter Chattyp')
         if model_mode is None:
-            model_mode = 'project' if kind == 'project' else 'fast'
+            model_mode = 'project' if kind == 'project' else 'auto'
         if model_mode not in ('auto', 'fast', 'project'):
             raise ValueError('Unbekannter Modellmodus')
         cid = uuid.uuid4().hex

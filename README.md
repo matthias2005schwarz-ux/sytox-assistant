@@ -6,6 +6,8 @@ Korrekturen und Projektgrenzen erhalten Vorrang. Details und Prüfgrenzen:
 [KI-Qualität im Entwicklungszweig](docs/ai-quality.md).
 Programmieraufträge brauchen auch im Modus „Einmal“ einen geprüften Abschluss.
 Offene Prüfungen und wesentliche Vorgaben bleiben bei längeren Aufgaben erhalten.
+Neue normale Chats verwenden die automatische Modellauswahl: kurze Gespräche mit
+`qwen3:4b`, Programmieraufträge mit `qwen3-coder:30b`. Bestehende manuelle Auswahlen bleiben erhalten.
 
 ## Schnellchat-Optimierung im Entwicklungszweig
 

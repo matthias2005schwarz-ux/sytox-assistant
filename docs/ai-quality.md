@@ -6,6 +6,11 @@ einen Programmierauftrag. Zitierte Befehle oder „Starte das Programm nicht neu
 lösen dagegen keine entsprechende Werkzeugroute aus. Manuelle Modellwahl und
 die feste Projektmodell-Auswahl bleiben erhalten. Die Erkennung verwendet lokale
 Regeln; mehrdeutige natürliche Sprache kann weiterhin falsch eingeordnet werden.
+Neue normale Chats starten mit „Automatisch“: Begrüßungen bleiben beim kleinen
+Gesprächsmodell, erkannte Programmieraufträge wählen das Projektmodell. Vorhandene
+Chats und manuelle Auswahlen werden nicht umgestellt. Für einen bestehenden Chat
+kann „Automatisch“ im Modellmenü gewählt werden. Das gewählte Modell muss bereits
+in Ollama verfügbar sein; es erfolgt kein automatischer Modelldownload.
 
 ## Relevante lokale Erinnerungen
 

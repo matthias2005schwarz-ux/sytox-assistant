@@ -132,12 +132,24 @@ class QuickChatUiTests(unittest.TestCase):
             self.assertEqual(self.window.store.messages(other), [])
 
     def test_coding_request_keeps_agent_even_with_manual_fast_model(self):
+        self.window.model_mode.setCurrentIndex(self.window.model_mode.findData('fast'))
         with patch.object(self.window, 'start_worker') as agent, \
              patch.object(self.window, 'start_quick_reply') as quick:
             self.window.input.setPlainText('Programmiere ein Python-Plugin')
             self.window.send()
             agent.assert_called_once_with('once', 1.0)
             quick.assert_not_called()
+            self.assertEqual(self.window.model_name.text(), 'qwen3:4b')
+
+    def test_new_chat_automatically_selects_project_model_for_coding(self):
+        self.assertEqual(self.window.model_mode.currentData(), 'auto')
+        with patch.object(self.window, 'start_worker') as agent, \
+             patch.object(self.window, 'start_quick_reply') as quick:
+            self.window.input.setPlainText('Programmiere ein Python-Plugin')
+            self.window.send()
+            agent.assert_called_once_with('once', 1.0)
+            quick.assert_not_called()
+            self.assertEqual(self.window.model_name.text(), 'qwen3-coder:30b')
 
     def test_clicking_current_chat_does_not_delete_live_streaming_bubble(self):
         with patch('sytox.parallel_chat.OllamaClient') as client:
@@ -203,6 +215,19 @@ class QuickChatUiTests(unittest.TestCase):
             started = time.monotonic()
             self.wait_for(lambda: time.monotonic() - started >= .15)
         self.assertEqual(errors, [])
+
+    def test_late_model_status_after_exit_does_not_read_closed_database_or_retry(self):
+        from sytox.ollama_setup import OllamaStatus
+        self.window._is_exiting = True
+        self.window._probe_again = True
+        with patch.object(self.window.store, 'chat_model_mode',
+                          side_effect=AssertionError('Closed database must not be read')), \
+             patch.object(self.window, 'check_model_status') as retry:
+            self.window._model_status_checked(OllamaStatus('offline', 'Offline', 'Nicht erreichbar'))
+            self.window._model_probe_finished()
+            self.app.processEvents()
+            retry.assert_not_called()
+        self.assertFalse(self.window._probe_again)
 
 
 if __name__ == '__main__':
