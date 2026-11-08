@@ -804,6 +804,21 @@ class SettingsDialog(QDialog):
         self.vision_model=QLineEdit(settings.get('vision_model') or 'qwen3-vl:4b')
         self.vision_model.setToolTip('Internes Bildmodell, verwendet in jedem Chat bei ausdrücklicher Bildschirm-Anfrage.')
         self.url=QLineEdit(settings['ollama_url'])
+        self.cloud_chat=QCheckBox(
+            'Cloud-KI für normale Chats (sendet Chatverlauf und ggf. Erinnerungen an OpenAI)')
+        self.cloud_chat.setChecked(settings.get('cloud_chat_enabled') is True)
+        self.cloud_agent=QCheckBox(
+            'Cloud-KI für Programmieraufträge (sendet dafür nötige Projektdateien und Werkzeugergebnisse an OpenAI)')
+        self.cloud_agent.setChecked(settings.get('cloud_agent_enabled') is True)
+        self.cloud_chat_model=QLineEdit(settings.get('cloud_chat_model') or DEFAULT_CHAT_MODEL)
+        self.cloud_coding_model=QLineEdit(settings.get('cloud_coding_model') or DEFAULT_CODING_MODEL)
+        self.cloud_key=QLineEdit()
+        self.cloud_key.setEchoMode(QLineEdit.Password)
+        self.cloud_key.setPlaceholderText('Neuer API-Schlüssel – leer lassen, um gespeicherten zu behalten')
+        self.cloud_key.setToolTip(
+            'Der Schlüssel wird ausschließlich im Windows-Anmeldedatenspeicher '
+            'gesichert, nicht in der settings.json. Ein ChatGPT-Abo enthält '
+            'keinen automatischen API-Zugang; die API kann zusätzliche Kosten verursachen.')
         self.folder=QLineEdit(settings['workspace'])
         choose=QPushButton('…');choose.setMaximumWidth(38)
         choose.clicked.connect(self.browse_workspace)
@@ -859,6 +874,14 @@ class SettingsDialog(QDialog):
         form.addRow('Projekt-/Coding-Modell',self.project_model)
         form.addRow('Bildmodell (in beiden Chats)',self.vision_model)
         form.addRow('Ollama-Adresse',self.url)
+        form.addRow('Cloud-KI (optional, separate API-Abrechnung)', QLabel(
+            'Ohne Aktivierung bleiben Chats und Projekte lokal. '
+            'Der API-Schlüssel benötigt ein eigenes OpenAI-API-Konto.'))
+        form.addRow('',self.cloud_chat)
+        form.addRow('Cloud-Chatmodell',self.cloud_chat_model)
+        form.addRow('',self.cloud_agent)
+        form.addRow('Cloud-Codingmodell',self.cloud_coding_model)
+        form.addRow('OpenAI-API-Schlüssel',self.cloud_key)
         form.addRow('',self.ram_saver)
         form.addRow('Modell nach Inaktivität entladen',self.ram_delay)
         form.addRow('Projektordner',row)
@@ -882,6 +905,31 @@ class SettingsDialog(QDialog):
         save.clicked.connect(self.validate_and_save);outer.addWidget(save)
 
     def validate_and_save(self):
+        if self.cloud_chat.isChecked() or self.cloud_agent.isChecked():
+            for entry in (self.cloud_chat_model, self.cloud_coding_model):
+                model = entry.text().strip()
+                if not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', model):
+                    QMessageBox.warning(self, 'Cloud-KI',
+                                        'Bitte einen gültigen Cloud-Modellnamen eingeben.')
+                    return
+            try:
+                secret = self.cloud_key.text().strip()
+                if secret:
+                    save_api_key(secret)
+                elif not get_api_key():
+                    QMessageBox.warning(self, 'Cloud-KI',
+                                        'Bitte einen OpenAI-API-Schlüssel hinterlegen. '
+                                        'Die Cloud bleibt bis dahin deaktiviert.')
+                    return
+            except CloudAIError as exc:
+                QMessageBox.warning(self, 'Cloud-KI', str(exc))
+                return
+        elif self.cloud_key.text().strip():
+            try:
+                save_api_key(self.cloud_key.text().strip())
+            except CloudAIError as exc:
+                QMessageBox.warning(self, 'Cloud-KI', str(exc))
+                return
         if self.speech_engine.currentData()=='edge' and not self.edge_consent.isChecked():
             QMessageBox.warning(self,'Online-Stimme',
                                 'Bitte der Datenübertragung ausdrücklich zustimmen oder eine Offline-Stimme auswählen.')
@@ -913,6 +961,10 @@ class SettingsDialog(QDialog):
                 'fast_model':self.fast_model.text().strip(),
                 'project_model':self.project_model.text().strip(),
                 'vision_model':self.vision_model.text().strip(),
+                'cloud_chat_enabled':self.cloud_chat.isChecked(),
+                'cloud_agent_enabled':self.cloud_agent.isChecked(),
+                'cloud_chat_model':self.cloud_chat_model.text().strip(),
+                'cloud_coding_model':self.cloud_coding_model.text().strip(),
                 'model_mode':self.original.get('model_mode', 'auto'),
                 'workspace':self.folder.text().strip(), 'vosk_model':self.vosk.text().strip(),
                 'piper_exe':self.piperexe.text().strip(),'piper_model':self.pipermodel.text().strip(),
@@ -1019,6 +1071,9 @@ class MainWindow(QMainWindow):
                   'reduced_motion':False,
                   'model_mode':'auto','fast_model':'qwen3:4b',
                   'project_model':'qwen3-coder:30b','vision_model':'qwen3-vl:4b',
+                  'cloud_chat_enabled':False,'cloud_agent_enabled':False,
+                  'cloud_chat_model':DEFAULT_CHAT_MODEL,
+                  'cloud_coding_model':DEFAULT_CODING_MODEL,
                   'ram_saver_enabled':True,'ram_keep_alive_seconds':300,
                   'gmail_client_secrets':''}
         default_model=base/'models'/'vosk-model-small-de-0.15'
@@ -1489,6 +1544,8 @@ class MainWindow(QMainWindow):
         label = (self.config.get('project_model') if route == 'project'
                  else self.config.get('fast_model') if route == 'fast'
                  else 'Automatische Modellauswahl')
+        if self.config.get('cloud_chat_enabled') is True:
+            label = 'Cloud: ' + (self.config.get('cloud_chat_model') or DEFAULT_CHAT_MODEL)
         self.model_name.setText(label or self.config['model'])
         self.check_model_status()
 
@@ -2456,8 +2513,18 @@ class MainWindow(QMainWindow):
         return select_chat_model('', self._chat_runtime_config())[0]
 
     def check_model_status(self):
-        """Check the selected chat model without blocking mouse/keyboard UI."""
+        """Display active cloud mode or probe Ollama off the GUI thread."""
         if self._is_exiting:
+            return
+        if self.config.get('cloud_chat_enabled') is True:
+            self.status_chip.setText('●  Cloud-KI ausgewählt')
+            self.model_status_label.setText(
+                'OpenAI API – Chatmodell: ' +
+                (self.config.get('cloud_chat_model') or DEFAULT_CHAT_MODEL) +
+                '. Nur bei Freigabe aktiv; Verbindung beim ersten Chat prüfen.')
+            self.status_chip.setStyleSheet(
+                'color:#86E1BD;background:#173027;'
+                'border:1px solid #316049;border-radius:11px;padding:5px 11px;')
             return
         if self.ollama_probe and self.ollama_probe.isRunning():
             self._probe_again = True
@@ -2470,7 +2537,7 @@ class MainWindow(QMainWindow):
         self.ollama_probe.start()
 
     def _model_status_checked(self, status: OllamaStatus):
-        if self._is_exiting:
+        if self._is_exiting or self.config.get('cloud_chat_enabled') is True:
             return
         if self.ollama_probe and (self.ollama_probe.url != self.config['ollama_url'] or
                                   self.ollama_probe.model != self._preferred_status_model()):
@@ -2516,6 +2583,8 @@ class MainWindow(QMainWindow):
             self.config['model_mode'] = self.model_mode.currentData()
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
             self.model_name.setText(
+                'Cloud: ' + (self.config.get('cloud_chat_model') or DEFAULT_CHAT_MODEL)
+                if self.config.get('cloud_chat_enabled') is True else
                 'Automatische Auswahl' if self.config.get('model_mode') == 'auto'
                 else self._preferred_status_model())
             if self.parallel_chat is not None:
