@@ -63,6 +63,63 @@ jobs:
           name: sytox-windows-portable-0.3.11
           path: dist/SYTOX_Assistant_Portable_CI.zip
           if-no-files-found: error
+      # Dedicated app release gate: unit, EXE, direct-update, rollback and installer.
+      # Extra toolchain integration checks run independently, never block shipping.
+      - name: Make sure Inno Setup 6 is installed
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (!(Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+          }
+          if (!(Test-Path $iscc)) { throw 'Inno Setup 6 missing' }
+      - name: Compile Windows installer from tested EXE
+        shell: powershell
+        run: |
+          .\Build_Installer.ps1 -SkipExeBuild
+          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.11.exe')) { throw 'Installer was not built' }
+      - name: Install, launch, uninstall and verify user data on Windows runner
+        shell: powershell
+        run: .\Installer_Install_Smoke_Test.ps1
+      - name: Windows build checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            'installer/SYTOX_Assistant_Setup_0.3.11.exe',
+            'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
+          )
+          foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
+      - name: Archive Windows standalone app (CI artifact only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sytox-windows-app-0.3.11
+          path: dist/SYTOX_Assistant/
+          if-no-files-found: error
+      - name: Archive Windows installer (CI artifact only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sytox-windows-setup-0.3.11
+          path: installer/SYTOX_Assistant_Setup_0.3.11.exe
+          if-no-files-found: error
+
+  extra-language-builds:
+    name: Additional compiler integration checks (separate from app release)
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies for compiler integration
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          & .\\.venv\\Scripts\\python.exe -m pip install --upgrade pip
+          & .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Extra-language Python setup failed' }
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -113,43 +170,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'TypeScript setup failed' }
           & .\.venv\Scripts\python.exe tools/windows_multilang_smoke.py
           if ($LASTEXITCODE -ne 0) { throw 'One of the 8 extra language build/run checks failed' }
-      - name: Make sure Inno Setup 6 is installed
-        shell: pwsh
-        run: |
-          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
-          if (!(Test-Path $iscc)) {
-            choco install innosetup --yes --no-progress
-            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
-          }
-          if (!(Test-Path $iscc)) { throw 'Inno Setup 6 missing' }
-      - name: Compile Windows installer from tested EXE
-        shell: powershell
-        run: |
-          .\Build_Installer.ps1 -SkipExeBuild
-          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.11.exe')) { throw 'Installer was not built' }
-      - name: Install, launch, uninstall and verify user data on Windows runner
-        shell: powershell
-        run: .\Installer_Install_Smoke_Test.ps1
-      - name: Windows build checksums
-        shell: pwsh
-        run: |
-          $files = @(
-            'installer/SYTOX_Assistant_Setup_0.3.11.exe',
-            'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
-          )
-          foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
-      - name: Archive Windows standalone app (CI artifact only)
-        uses: actions/upload-artifact@v4
-        with:
-          name: sytox-windows-app-0.3.11
-          path: dist/SYTOX_Assistant/
-          if-no-files-found: error
-      - name: Archive Windows installer (CI artifact only)
-        uses: actions/upload-artifact@v4
-        with:
-          name: sytox-windows-setup-0.3.11
-          path: installer/SYTOX_Assistant_Setup_0.3.11.exe
-          if-no-files-found: error
 
   publish-verified-0311:
     name: Publish SYTOX 0.3.11 after verified Windows upgrade and rollback
