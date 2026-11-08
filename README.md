@@ -1,3 +1,12 @@
+## Programmieren mit Projektquellen und echten Testergebnissen
+
+Vor Programmieränderungen erhält die KI passende lokale Quelldateien, zugehörige
+Tests und erkennbare Imports mit Zeilenangaben. Sie kann gezielt nach Bezeichnern
+suchen und einzelne Zeilenbereiche nachlesen. Vor der Fertigmeldung werden
+erkannte Projektprüfungen über die vorhandenen Befehlsfreigaben ausgeführt.
+Fehlerausgaben gehen zur Korrektur an die KI zurück; nach Änderungen zählen alte
+Prüfergebnisse nicht mehr. [Ablauf und Grenzen](docs/programming-workflow.md).
+
 ## Lesbare Antworten und Code im Desktop-Chat
 
 Antworten werden jetzt als Markdown mit Überschriften, Listen und Tabellen
