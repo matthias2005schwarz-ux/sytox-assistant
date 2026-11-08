@@ -409,13 +409,16 @@ CONTROL_TOOLS = [
 
 
 class Agent:
+    MAX_CLOUD_STEPS = 20  # Hard per-run cap against unattended API bills.
     RETRY_DELAYS = (1, 2, 4)  # Seconds; configurable in unit tests.
     MAX_STEPS = 10000  # Additional guard for unattended runs.
     def __init__(self, store, model, base_url, workspace, approve, logger, stop_event=None, gmail_client_secrets='', ram_keep_alive=None, screen_context='', cloud_config=None):
         self.store = store
         # Explicit user opt-in only: project snippets and tool results can
         # contain private files. Existing local Agent remains the default.
-        if cloud_config and cloud_config.get('cloud_agent_enabled') is True:
+        self._cloud_agent_enabled = bool(
+            cloud_config and cloud_config.get('cloud_agent_enabled') is True)
+        if self._cloud_agent_enabled:
             cloud_model = cloud_config.get('cloud_coding_model') or DEFAULT_CODING_MODEL
             self.client = CloudChatClient(model=cloud_model)
             self.review_client = CloudChatClient(model=cloud_model)
@@ -694,6 +697,13 @@ class Agent:
                     status, result = ('time_elapsed',
                         'Arbeitszeit abgelaufen. Fortschritt gespeichert; Auftrag kann fortgesetzt werden.')
                     break
+                if self._cloud_agent_enabled and steps - previous_steps >= self.MAX_CLOUD_STEPS:
+                    status, result = (
+                        'paused', 'Cloud-Kostenlimit erreicht: maximal '
+                        f'{self.MAX_CLOUD_STEPS} KI-Schritte pro Arbeitsdurchlauf. '
+                        'Der aktuelle Stand wurde gespeichert. Nur bei Bedarf '
+                        'und nach Prüfung der API-Kosten fortsetzen.')
+                    break
                 steps += 1
                 step_started = time.monotonic()
                 self.logger('Status', f'{mode}: Schritt {steps} – Modell arbeitet …')
@@ -721,6 +731,11 @@ class Agent:
                         'unvalidated_paths': sorted(toolkit.unvalidated_paths),
                         'progress_notes': progress_notes[-8:]}
                     persist_task('running', checkpoint)
+                    # Authentication, API limits and cloud billing errors should
+                    # never trigger a series of automatic billed retries.
+                    if isinstance(exc, CloudAIError):
+                        status, result = 'paused', 'Cloud-KI nicht verfügbar: ' + str(exc)
+                        break
                     if model_failures >= len(self.RETRY_DELAYS):
                         status, result = ('paused', 'KI-Dienst nach mehreren Versuchen nicht erreichbar: '
                                           + str(exc) + '\nFortschritt gespeichert. Später fortsetzen.')
