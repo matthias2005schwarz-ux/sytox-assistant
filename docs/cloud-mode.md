@@ -37,6 +37,7 @@ Fehlermeldung; die Anwendung schaltet nicht heimlich auf einen anderen Anbieter 
 - Ein Cloud-Modell hat keine garantierte Antwortzeit und nicht automatisch
   alle Funktionen der ChatGPT-App. API-Ausfälle, Kontolimits, Modellzugriff
   und weitere Kosten bleiben möglich.
+- Zum Kostenschutz pausiert der Cloud-Programmier-Agent nach höchstens **20 Modellschritten pro Arbeitsdurchlauf**. Eine Fortsetzung muss vom Nutzer bewusst gestartet werden; jeder API-Aufruf kann Kosten verursachen.
 - Für die OpenAI-Chat-Completions-Anfragen setzt SYTOX `store: false`.
   Prüfe gegebenenfalls die Daten- und Aufbewahrungsrichtlinien deines API-Kontos.
 - Nicht aktivierte Funktionen senden **keine** OpenAI-API-Anfragen.
