@@ -21,7 +21,7 @@ class QuickReplyTests(unittest.TestCase):
     def worker(self, history=None, **kwargs):
         return ParallelReplyWorker(
             {'fast_model': 'qwen3:4b', 'ollama_url': 'http://localhost:11434'},
-            history or [{'role': 'user', 'content': 'Hallo'}], standalone=True,
+            history or [{'role': 'user', 'content': 'Hallo, wie geht es dir?'}], standalone=True,
             **kwargs,
         )
 
@@ -60,6 +60,22 @@ class QuickReplyTests(unittest.TestCase):
         self.assertEqual(selected, ['qwen3:4b'])
         self.assertEqual(events[-1], ('done', 'Hallo!'))
         self.assertEqual(worker.outcome, 'done')
+
+    def test_standalone_hi_completes_without_loading_any_model(self):
+        for phrase in ('hi', 'Hallo!', 'Hey Sytox, guten Morgen'):
+            with self.subTest(phrase=phrase):
+                worker = self.worker([{'role': 'user', 'content': phrase}])
+                answers, visible = [], []
+                worker.completed.connect(answers.append)
+                worker.token.connect(visible.append)
+                with patch('sytox.parallel_chat.OllamaClient') as client, \
+                     patch('sytox.parallel_chat.search_web') as search:
+                    worker.run()
+                client.assert_not_called()
+                search.assert_not_called()
+                self.assertEqual(answers, ['Hallo! Wie kann ich dir helfen?'])
+                self.assertEqual(visible, answers)
+                self.assertEqual(worker.outcome, 'done')
 
     def test_precancelled_reply_completes_without_model_or_side_effects(self):
         worker = self.worker()
