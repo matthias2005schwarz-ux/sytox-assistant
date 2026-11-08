@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .agent import OllamaClient
+from .cloud_ai import CloudChatClient, DEFAULT_CHAT_MODEL
 from .fast_interaction import instant_reply
 from .actions import Cancelled
 from .ram_saver import keep_alive_for_config
@@ -245,10 +246,17 @@ class ParallelReplyWorker(QThread):
                 return
             model, route = select_chat_model(question, self.config)
             self.model_selected.emit(model)
-            client = OllamaClient(
-                self.config['ollama_url'], model,
-                keep_alive=keep_alive_for_config(self.config, route=route)
-            )
+            # Cloud is off by default, enabled explicitly per user preferences.
+            # Local PC actions and app launching never move into the cloud.
+            if self.config.get('cloud_chat_enabled') is True:
+                model = self.config.get('cloud_chat_model') or DEFAULT_CHAT_MODEL
+                self.model_selected.emit('Cloud: ' + model)
+                client = CloudChatClient(model=model)
+            else:
+                client = OllamaClient(
+                    self.config['ollama_url'], model,
+                    keep_alive=keep_alive_for_config(self.config, route=route)
+                )
             system = QUICK_SYSTEM_PROMPT if self.standalone else SYSTEM_PROMPT
             messages = [{'role': 'system', 'content': system}] + self.history
             screen_requested = wants_screen(question)
