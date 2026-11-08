@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 )
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
+from .cloud_ai import (CloudChatClient, CloudAIError, get_api_key, save_api_key,
+                       DEFAULT_CHAT_MODEL, DEFAULT_CODING_MODEL)
 from .ram_saver import keep_alive_for_config, normalized_keep_alive_seconds
 from .task_eta import task_eta
 from .task_queue import is_change_request
@@ -161,6 +163,8 @@ class Worker(QThread):
             question = next((item['content'] for item in reversed(messages)
                              if item['role'] == 'user'), '')
             model, route = select_chat_model(question, self.settings, self.mode)
+            if self.settings.get('cloud_agent_enabled') is True:
+                model = self.settings.get('cloud_coding_model') or DEFAULT_CODING_MODEL
             self.log_line.emit('System', 'Verwendetes Modell: ' + model
                                + (' (Projekt)' if route == 'project' else ' (Schnellchat)'))
             screen_context = ''
@@ -171,7 +175,7 @@ class Worker(QThread):
                     self.settings['workspace'],self.request_approval,self.log_line.emit,self.stop_event,
                     self.settings.get('gmail_client_secrets',''),
                     ram_keep_alive=keep_alive_for_config(self.settings),
-                    screen_context=screen_context)
+                    screen_context=screen_context, cloud_config=self.settings)
             result=a.run(self.chat_id,self.mode,self.hours,self.task_id)
             self.completed.emit(result)
         except Exception as e:
