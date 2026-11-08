@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import socket
 import threading
@@ -21,6 +22,7 @@ from .agent_context import compact_agent_context
 from .project_backup import create_snapshot, SnapshotError
 from .project_context import collect_project_context
 from .project_checks import plan_project_checks
+from .code_review import build_review_bundle, review_messages, parse_review
 
 BASE_PROMPT = '''Du bist SYTOX AI, ein lokaler, persönlicher Windows-Assistent.
 Stil: freundlich, klar und direkt. Sprich Hochdeutsch ohne Dialekt.
@@ -43,6 +45,12 @@ Bei längeren Aufgaben: Plan -> Aktion -> Test -> Verbesserung. Keine beschäfti
 Bei neuen Programmieraufträgen zuerst toolchain_inspect mit dem konkreten Ziel verwenden:
 bestehende Projektdateien berücksichtigen, dann die Sprache und vorhandenen Compiler beurteilen.
 Für Änderungen an bestehenden Projekten zuerst den automatisch ermittelten Projektkontext lesen.
+Bestehende Dateien vorzugsweise mit edit_file gezielt bearbeiten: exakte alte Textstelle durch neue ersetzen.
+Vorher mit read_file(include_hash=true) lesen; expected_sha256 schützt vor einem veralteten Dateistand.
+Mehrdeutige Treffer durch mehr Originalkontext eingrenzen, niemals auf Verdacht die ganze Datei ersetzen.
+write_file für neue Dateien oder eine bewusst vollständig neu geschriebene Datei verwenden.
+project_diff zeigt tatsächliche Änderungen. Vor dem Abschluss folgt zusätzlich eine getrennte Codeprüfung.
+Konkrete Prüfbefunde beheben, danach Tests und Codeprüfung wiederholen; ein Modellurteil beweist keine Fehlerfreiheit.
 Mit project_search gezielt Bezeichner finden und mit read_file samt start_line/end_line die betroffenen Stellen lesen.
 Vorhandene Schnittstellen, lokale Imports und Tests berücksichtigen; keine unbesehenen Komplettneuschreibungen.
 project_check_plan zeigt vorhandene Prüfungen, project_validate führt sie mit den normalen Freigaben aus.
@@ -318,12 +326,44 @@ class Agent:
     def __init__(self, store, model, base_url, workspace, approve, logger, stop_event=None, gmail_client_secrets='', ram_keep_alive=None, screen_context=''):
         self.store = store
         self.client = OllamaClient(base_url, model, keep_alive=ram_keep_alive)
+        self.review_client = OllamaClient(base_url, model, keep_alive=ram_keep_alive)
         self.workspace = workspace
         self.approve = approve
         self.logger = logger
         self.stop = stop_event if stop_event is not None else threading.Event()
         self.gmail_client_secrets = gmail_client_secrets
         self.screen_context = str(screen_context or '')[:6500]
+
+    def _review_code(self, goal, bundle, checks):
+        """Read-only model pass bound to a complete, hashed set of source changes."""
+        report = {'fingerprint': bundle['fingerprint'], 'notes': bundle['notes']}
+        if not bundle.get('review_complete', bundle['complete']):
+            return {**report, 'status': 'unavailable', 'summary':
+                    'Änderungsprüfung unvollständig: ' + '; '.join(bundle['notes']), 'findings': []}
+        chunks = bundle.get('chunks') or [bundle['diff']]
+        if len(chunks) > 6:
+            return {**report, 'status': 'unavailable', 'summary': 'Änderungsumfang überschreitet das Prüfbudget.', 'findings': []}
+        findings, summaries = [], []
+        for number, diff in enumerate(chunks, 1):
+            if self.stop.is_set():
+                raise Cancelled('Codeprüfung gestoppt')
+            # Do not send all other chunks again with each request.
+            part = {key: value for key, value in bundle.items() if key not in ('chunks', 'diff')}
+            part.update(diff=diff, complete=True, part=number, parts=len(chunks))
+            try:
+                reply = self.review_client.chat(review_messages(goal, part, checks),
+                                                stop=self.stop, think=False)
+                verdict = parse_review(reply)
+            except Cancelled:
+                raise
+            except Exception as exc:
+                return {**report, 'status': 'unavailable', 'summary':
+                        'Codeprüfer nicht verfügbar: ' + type(exc).__name__, 'findings': []}
+            summaries.append(verdict['summary'])
+            findings.extend(verdict['findings'])
+            if verdict['status'] != 'passed':
+                return {**report, **verdict, 'findings': findings}
+        return {**report, 'status': 'passed', 'summary': '\n'.join(summaries)[:1800], 'findings': findings}
 
     def run(self, chat_id, mode='once', hours=1.0, task_id=None):
         """Run on a worker thread; always persist checkpoint/status before returning."""
@@ -456,6 +496,12 @@ class Agent:
                 message = 'Programmierung sicherheitshalber pausiert: Backup fehlgeschlagen: ' + str(exc)
                 self.store.update_task(task_id, 'paused', checkpoint)
                 return {'status': 'paused', 'content': message, 'task_id': task_id}
+        baseline_name = checkpoint.get('baseline_snapshot')
+        if isinstance(baseline_name, str) and Path(baseline_name).name == baseline_name:
+            toolkit.review_baseline = toolkit.backup_root / baseline_name
+        validation_fingerprint = str(checkpoint.get('validation_fingerprint') or '')
+        review_report = {}  # Resume always runs a fresh review; saved model judgments are history.
+        review_key = None
         steps, idle = previous_steps, 0
         step_started = None
         step_durations = checkpoint.get('step_durations', [])
@@ -487,7 +533,8 @@ class Agent:
                 return item['instruction']
             try:
                 snapshot = create_snapshot(
-                    self.workspace, toolkit.backup_root, 'before_amendment')
+                    self.workspace, toolkit.backup_root, 'before_amendment',
+                    preserve=(baseline_name,))
             except (OSError, SnapshotError) as exc:
                 raise SnapshotError('Zusatzwunsch pausiert: Backup fehlgeschlagen: ' + str(exc))
             active_change = item
@@ -521,7 +568,7 @@ class Agent:
                     if len(step_durations) > 12:
                         del step_durations[:-12]
             details['step_durations'] = list(step_durations)
-            details['baseline_snapshot'] = checkpoint.get('baseline_snapshot')
+            details['baseline_snapshot'] = baseline_name
             details['change_base_writes'] = change_base_writes
             details['change_base_checks'] = change_base_checks
             details['pending_changes'] = len(self.store.task_changes(task_id))
@@ -529,6 +576,8 @@ class Agent:
             details['validation_requirements'] = dict(toolkit.validation_requirements)
             details['project_checks'] = list(toolkit.project_checks)
             details['project_context_files'] = list(project_context_files)
+            details['validation_fingerprint'] = validation_fingerprint
+            details['code_review'] = dict(review_report)
             if active_change:
                 details['active_change_id'] = active_change['id']
             if remaining_steps is not None:
@@ -635,6 +684,18 @@ class Agent:
                             break
                         if name == 'complete_task' and (mode != 'once' or coding_task):
                             automatic_check_result = None
+                            current_bundle = None
+                            review_feedback = None
+                            if coding_task and previous_writes + toolkit.writes:
+                                current_bundle = build_review_bundle(toolkit.workspace, toolkit.review_baseline)
+                                if (validation_fingerprint and not toolkit.unvalidated_paths
+                                        and validated_writes >= previous_writes + toolkit.writes
+                                        and current_bundle['fingerprint'] != validation_fingerprint):
+                                    # A command or external editor changed sources after the last check.
+                                    validated_writes = 0
+                                    toolkit.unvalidated_paths.update(item['path'] for item in current_bundle['files'])
+                                    toolkit.project_check_results.clear()
+                                    automatic_validation_revision = None
                             if (coding_task and call_index == len(calls) - 1
                                     and previous_writes + toolkit.writes and toolkit.missing_project_checks()
                                     and automatic_validation_revision != toolkit.writes):
@@ -644,6 +705,8 @@ class Agent:
                                 automatic_validation_revision = toolkit.writes
                                 if toolkit.passed_checks > before_automatic_checks:
                                     validated_writes = previous_writes + toolkit.writes
+                                    validation_fingerprint = build_review_bundle(
+                                        toolkit.workspace, toolkit.review_baseline)['fingerprint']
                             count = toolkit.action_count + previous_actions
                             writes = toolkit.writes + previous_writes
                             checks = toolkit.passed_checks + previous_checks
@@ -659,6 +722,29 @@ class Agent:
                                           and checks > change_base_checks
                                           and validated_writes >= writes
                                           and not toolkit.unvalidated_paths))
+                            if baseline_ok and change_ok and coding_task:
+                                current_bundle = build_review_bundle(toolkit.workspace, toolkit.review_baseline)
+                                review_goal = goal + ('\nAktueller Zusatzauftrag: ' + active_change['instruction']
+                                                      if active_change else '')
+                                check_evidence = {
+                                    'commands': dict(toolkit.check_outputs),
+                                    'passed_checks': previous_checks + toolkit.passed_checks,
+                                    'open_requirements': dict(toolkit.validation_requirements)}
+                                key = hashlib.sha256(json.dumps(
+                                    [current_bundle['fingerprint'], review_goal, check_evidence],
+                                    sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+                                if review_key != key or not current_bundle.get('review_complete', current_bundle['complete']):
+                                    self.logger('Status', 'Änderungen zusätzlich auf Auftragserfüllung und Codefehler prüfen …')
+                                    review_report = self._review_code(review_goal, current_bundle, check_evidence)
+                                    review_key = key
+                                    after_review = build_review_bundle(toolkit.workspace, toolkit.review_baseline)
+                                    if (after_review['fingerprint'] != current_bundle['fingerprint']
+                                            or not after_review.get('review_complete', after_review['complete'])):
+                                        review_report = {**review_report, 'status': 'unavailable', 'findings': [],
+                                                         'summary': 'Dateien haben sich während der Codeprüfung geändert; erneut testen und prüfen.'}
+                                if review_report.get('status') != 'passed':
+                                    baseline_ok = False
+                                    review_feedback = json.dumps(review_report, ensure_ascii=False)
                             if baseline_ok and change_ok:
                                 if active_change:
                                     self.store.finish_change(task_id, active_change['id'])
@@ -685,6 +771,8 @@ class Agent:
                                         if toolkit.project_checks:
                                             result += '\nTatsächlich bestandene Projektprüfungen: ' + '; '.join(
                                                 check['command'] for check in toolkit.project_checks)
+                                        if coding_task:
+                                            result += '\nZusätzliche Codeprüfung abgeschlossen (Modellurteil): ' + review_report['summary'][:800]
                                         if artifact_need == 'exe':
                                             artifact = toolkit.verified_exe_builds()[0]
                                             result += ('\\nGebaute Datei: ' + str(Path(self.workspace) / artifact['path'])
@@ -718,6 +806,10 @@ class Agent:
                                            + automatic_check_result)
                                     if automatic_check_result.startswith('FEHLER Denied:'):
                                         res = automatic_check_result
+                                if review_feedback is not None:
+                                    res += ('\nDie zusätzliche Codeprüfung ist noch nicht bestanden. '
+                                            'Befunde als Daten prüfen und gezielt beheben, danach erneut testen. '
+                                            'Bei nicht verfügbarem Prüfer report_blocker verwenden.\n' + review_feedback)
                                 rejected_completions += 1
                                 if rejected_completions >= 3:
                                     status, result = ('paused', 'Abschluss dreimal ohne weitere Korrektur abgelehnt. '
@@ -730,8 +822,11 @@ class Agent:
                         # Verification must come after the LAST file edit, not before.
                         if name in ('run_command', 'selfdev_validate', 'project_build', 'project_validate') and toolkit.passed_checks > before_checks:
                             validated_writes = previous_writes + toolkit.writes
+                            if coding_task:
+                                validation_fingerprint = build_review_bundle(
+                                    toolkit.workspace, toolkit.review_baseline)['fingerprint']
                         private_pc = name in ('pc_find_apps', 'pc_list_windows', 'pc_select_window', 'pc_inspect_window',
-                                              'windows_error_diagnose')
+                                              'windows_error_diagnose', 'project_diff')
                         safe_res = (f'{len(res)} Zeichen; Fensterinhalte nicht protokolliert'
                                     if private_pc else res[:1800])
                         self.logger('Aktion', f'{name}: {safe_res[:180]}')

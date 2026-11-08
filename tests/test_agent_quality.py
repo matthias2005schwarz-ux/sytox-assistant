@@ -33,6 +33,8 @@ class AgentQualityTests(unittest.TestCase):
         self.store.add_message(self.chat, 'user', 'Programmiere eine Python-Funktion')
         agent = Agent(self.store, 'mock', 'http://unused', self.workspace,
                       lambda *_: True, lambda *_: None, threading.Event())
+        agent.review_client.chat = MagicMock(return_value={'role': 'assistant', 'content': json.dumps({
+            'status': 'passed', 'summary': 'Kontrollierter Prüfbefund', 'findings': []})})
         agent.client.chat = MagicMock(side_effect=replies)
         return agent
 
@@ -62,6 +64,8 @@ class AgentQualityTests(unittest.TestCase):
         self.store.add_message(self.chat, 'user', 'Füge einen Button hinzu')
         agent = Agent(self.store, 'mock', 'http://unused', self.workspace,
                       lambda *_: True, lambda *_: None)
+        agent.review_client.chat = MagicMock(return_value={'role': 'assistant', 'content': json.dumps({
+            'status': 'passed', 'summary': 'Kontrollierter Prüfbefund', 'findings': []})})
         agent.client.chat = MagicMock(side_effect=[{'role': 'assistant', 'content': 'Fertig!'}] * 3)
         self.assertEqual(agent.run(self.chat, 'once')['status'], 'paused')
         self.assertEqual(agent.client.chat.call_count, 3)

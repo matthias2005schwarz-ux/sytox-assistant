@@ -204,6 +204,8 @@ class CompletionGateTests(unittest.TestCase):
         self.store.add_message(self.chat, 'user', goal)
         worker = Agent(self.store, 'mock', 'http://unused', self.root / 'project',
                        lambda *_: True, lambda *_: None)
+        worker.review_client.chat = MagicMock(return_value={'role': 'assistant', 'content': json.dumps({
+            'status': 'passed', 'summary': 'Kontrollierter Prüfbefund', 'findings': []})})
         worker.client.chat = Mock(side_effect=responses)
         return worker
 

@@ -21,6 +21,26 @@ keinen zusätzlichen Suchdienst und keinen automatischen Paketdownload.
 
 ## Prüfungen und Fehlerkorrektur
 
+### Gezielte Änderungen an bestehenden Dateien
+
+`edit_file` ersetzt genau einen vorhandenen Textausschnitt. Die alte Stelle muss
+eindeutig sein; fehlende oder mehrdeutige Treffer werden abgelehnt. Die KI soll
+dann mehr Originalkontext nachlesen. `write_file` bleibt für neue Dateien oder
+bewusst vollständig neu geschriebene Dateien verfügbar.
+
+`read_file` kann mit `include_hash: true` den SHA-256-Hash der tatsächlichen Bytes
+ausgeben. Dieser lässt sich als `expected_sha256` an `edit_file` übergeben. Ein
+abweichender Dateistand wird nicht überschrieben. Gezielt bearbeitete Dateien
+behalten UTF-8-BOM, unberührte Zeilenenden, Einrückung und Dateirechte. Vorherige
+Versionen werden gesichert. Eine Ersetzung durch identischen Text zählt nicht
+als Änderung und macht keine gültigen Test- oder Buildnachweise ungültig.
+
+Die Bearbeitung ist auf Dateien bis 1 MiB begrenzt. Nummerierte Leseauszüge können
+innerhalb dieses Limits bis zu 400 Zeilen umfassen. Dateiinhalte in Anfragen für
+gezielte Änderungen werden im Aktivitätsprotokoll durch Längenangaben ersetzt.
+
+### Tatsächliche Projektprüfungen
+
 `project_check_plan` zeigt erkannte Prüfungen, ohne etwas auszuführen:
 
 - Python: vorhandene unittest-Suiten oder durch Testcode/Konfiguration belegtes
@@ -56,6 +76,35 @@ Eine erfolgreiche Prüfung beweist nur den geprüften Umfang: Syntaxprüfung ist
 kein Funktionstest, ein Build kein erfolgreicher Lauf der Anwendung. Bei begrenzter
 Dateiauswahl, fehlenden Werkzeugen oder projektspezifischen Importpfaden meldet
 der Plan die Einschränkungen, statt Abhängigkeiten auf Verdacht zu installieren.
+
+### Zusätzlicher Codeprüfer
+
+Nach bestandenen Prüfungen erhält ein separater Prüfdurchlauf am bereits
+konfigurierten Modell den Auftrag, den tatsächlichen Unterschied zur ursprünglichen
+Sicherheitskopie und die echten Prüfausgaben. `project_diff` macht diese Änderungen
+auch als rein lesendes Werkzeug zugänglich. Der Prüfer bekommt keine Werkzeuge,
+ändert keine Dateien und erhält eine eigene Unterhaltung. Er untersucht konkrete
+Logikfehler, übersehene Anforderungen, unbeabsichtigte Änderungen und wichtige
+fehlende Tests. Ein zweiter Modelltyp wird dafür nicht vorausgesetzt.
+
+Konkrete Befunde verhindern die Fertigmeldung und gehen als strukturierte Daten
+an den arbeitenden Agenten zurück. Nach Korrekturen sind neue Tests und ein neues
+Review nötig. Auch ein zusätzlicher Testlauf ohne Codeänderung kann ein neues
+Review auslösen, wenn ein vorheriger Befund nur einen fehlenden Testnachweis betraf.
+Ungültige Antworten oder ein nicht verfügbarer Prüfer gelten nicht als bestanden.
+
+Die Auswertung bindet Prüfnachweise an Datei-Hashes. Änderungen während der
+Codeprüfung oder nach einem Test machen den betreffenden Nachweis ungültig. Beim
+Fortsetzen bleibt die ursprüngliche Vergleichsbasis erhalten; ein gespeichertes
+Modellurteil wird nicht als frische Prüfung übernommen. Aktive Vergleichskopien
+bleiben bei der Aufbewahrungsbereinigung weiterer Zusatzaufträge geschützt.
+
+Größere Diffs werden in höchstens sechs begrenzte Abschnitte aufgeteilt. Nicht
+vollständig erfasste Quelländerungen bekommen kein vollständiges Review. Typische
+Geheimnisdateien werden nicht als Text übertragen; Binärdateien und Assets werden
+als Metadaten erfasst und nicht als inhaltlich geprüft bezeichnet. Das Modellurteil
+bleibt eine zusätzliche Kontrolle innerhalb dieses Umfangs und beweist keine
+Fehlerfreiheit. Der Schnellchat löst diesen Prüfdurchlauf nicht aus.
 
 ## Verifikation dieser Änderung
 

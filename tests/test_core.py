@@ -29,6 +29,8 @@ class TestStore(unittest.TestCase):
         self.store.add_message(self.cid, 'user', user_prompt)
         instance = Agent(self.store, 'mock', 'http://unused', str(self.path / 'work'),
                          lambda *args: True, lambda *args: None, threading.Event())
+        instance.review_client.chat = MagicMock(return_value={'role': 'assistant', 'content': json.dumps({
+            'status': 'passed', 'summary': 'Kontrollierter Prüfbefund', 'findings': []})})
         instance.client.chat = MagicMock(side_effect=list(responses))
         return instance
 
@@ -219,6 +221,8 @@ class TestStore(unittest.TestCase):
         self.store.add_message(self.cid, 'user', 'Bitte sende eine E-Mail')
         agent = Agent(self.store, 'mock', 'http://unused', str(self.path / 'work'),
                       lambda *_: False, lambda *_: None, threading.Event())
+        agent.review_client.chat = MagicMock(return_value={'role': 'assistant', 'content': json.dumps({
+            'status': 'passed', 'summary': 'Kontrollierter Prüfbefund', 'findings': []})})
         agent.client.chat = MagicMock(side_effect=[
             call_tool('gmail_send', to='bob@example.com', subject='Hallo', body='Hi'),
         ])

@@ -1,3 +1,12 @@
+## Gezielte Codeänderungen mit zusätzlicher Prüfung
+
+Bestehender Code kann jetzt über eindeutige Textstellen geändert werden. Die
+Bearbeitung erhält den übrigen Dateiinhalt und kann einen veralteten Dateistand
+am SHA-256-Hash erkennen. Nach den Tests prüft ein getrennter Durchlauf am
+konfigurierten Modell den tatsächlichen Diff auf Auftragserfüllung und konkrete
+Fehler. Befunde gehen zur Korrektur zurück, bevor der Auftrag abgeschlossen wird.
+[Ablauf und Prüfgrenzen](docs/programming-workflow.md).
+
 ## Programme direkt per Sprachbefehl öffnen
 
 „Hey Sytox, öffne Spotify“ öffnet ein eindeutig gefundenes Programm direkt, ohne

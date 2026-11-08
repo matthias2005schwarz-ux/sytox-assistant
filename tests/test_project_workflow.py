@@ -61,6 +61,8 @@ class ProjectWorkflowTests(unittest.TestCase):
         self.store.add_message(self.chat, 'user', 'Behebe die Python-Funktion add in app.py')
         agent = Agent(self.store, 'mock', 'http://unused', self.workspace,
                       approval or self.approve, lambda *_: None, threading.Event())
+        agent.review_client.chat = MagicMock(return_value={'role': 'assistant', 'content': json.dumps({
+            'status': 'passed', 'summary': 'Kontrollierter Prüfbefund', 'findings': []})})
         self.set_replies(agent, replies, before_reply=before_reply)
         return agent
 
