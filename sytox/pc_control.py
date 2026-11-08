@@ -8,8 +8,30 @@ from __future__ import annotations
 
 import ctypes
 import os
+import unicodedata
 from ctypes import wintypes
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+
+
+def _app_key(name):
+    """Compare whole names, without guessing from words in a window title."""
+    return ''.join(character for character in unicodedata.normalize('NFKC', name).casefold()
+                   if character.isalnum())
+
+
+_APP_EXECUTABLES = {}
+for _display, _queries, _stems in (
+        ('Spotify', ('spotify',), ('spotify',)),
+        ('Discord', ('discord',), ('discord',)),
+        ('Google Chrome', ('chrome', 'google chrome'), ('chrome',)),
+        ('Firefox', ('firefox', 'mozilla firefox'), ('firefox',)),
+        ('Microsoft Edge', ('edge', 'microsoft edge'), ('msedge',)),
+        ('Visual Studio Code', ('visual studio code', 'vs code', 'vscode'), ('code',)),
+        ('Rechner', ('rechner', 'taschenrechner', 'calculator'), ('calculatorapp', 'calculator', 'calc')),
+        ('Editor', ('editor', 'notepad'), ('notepad',)),
+):
+    for _query in _queries:
+        _APP_EXECUTABLES[_app_key(_query)] = (_display, frozenset(_stems))
 
 
 class DesktopUnavailable(EnvironmentError):
@@ -79,6 +101,81 @@ class WindowsDesktop:
         return result
 
     @staticmethod
+    def _window_executable(hwnd):
+        """Read the owning process image with limited rights; never execute it.
+
+        Protected/closed processes can disappear between enumeration and this
+        query. They are unavailable evidence, not a reason to guess from titles.
+        """
+        if os.name != 'nt':
+            raise DesktopUnavailable('App-Fenstersuche ist nur unter Windows verfügbar.')
+        handle = None
+        kernel32 = None
+        try:
+            user32 = ctypes.WinDLL('user32', use_last_error=True)
+            kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+            user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+            user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.QueryFullProcessImageNameW.argtypes = [
+                wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+            kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            process_id = wintypes.DWORD()
+            if not user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id)) or not process_id.value:
+                return None
+            handle = kernel32.OpenProcess(0x1000, False, process_id.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return None
+            length = wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(length.value)
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(length)):
+                return None
+            executable = buffer.value
+            return executable if executable and len(executable) <= length.value else None
+        except (OSError, AttributeError, ValueError):
+            return None
+        finally:
+            if handle and kernel32 is not None:
+                kernel32.CloseHandle(handle)
+
+    def find_app_windows(self, query):
+        """Find existing app windows by their owning executable, never title text.
+
+        A browser tab called Spotify is a Chrome window, not a Spotify match.
+        Unknown app names require an exact normalized executable stem. Multiple
+        matching windows remain separate so the caller can ask the user.
+        """
+        query = str(query or '').strip()
+        if not 2 <= len(query) <= 80:
+            raise ValueError('Programmname muss zwischen 2 und 80 Zeichen lang sein.')
+        key = _app_key(query)
+        if not key:
+            raise ValueError('Ein Programmname wird benötigt.')
+        display, stems = _APP_EXECUTABLES.get(key, (query, frozenset((key,))))
+        matches, seen = [], set()
+        for entry in self.windows()[:100]:
+            hwnd = entry['id']
+            if hwnd in seen:
+                continue
+            seen.add(hwnd)
+            try:
+                executable = self._window_executable(hwnd)
+            except (OSError, ValueError, AttributeError):
+                continue
+            if not executable:
+                continue
+            image = PureWindowsPath(executable)
+            if image.suffix.casefold() != '.exe' or _app_key(image.stem) not in stems:
+                continue
+            matches.append({**entry, 'app_name': display, 'executable': executable})
+            if len(matches) >= 30:
+                break
+        return matches
+
+    @staticmethod
     def find_apps(query):
         """Search Start Menu/Desktop shortcuts without executing or crawling drives."""
         if os.name != 'nt':
@@ -86,12 +183,14 @@ class WindowsDesktop:
         query = str(query or '').strip().casefold()
         if not 2 <= len(query) <= 80:
             raise ValueError('Suchbegriff muss zwischen 2 und 80 Zeichen lang sein.')
-        roots = (
-            Path(os.environ.get('APPDATA', '')) / 'Microsoft/Windows/Start Menu/Programs',
-            Path(os.environ.get('PROGRAMDATA', '')) / 'Microsoft/Windows/Start Menu/Programs',
-            Path(os.environ.get('USERPROFILE', '')) / 'Desktop',
-            Path(os.environ.get('PUBLIC', '')) / 'Desktop',
-        )
+        roots = []
+        for variable, relative in (
+                ('APPDATA', 'Microsoft/Windows/Start Menu/Programs'),
+                ('PROGRAMDATA', 'Microsoft/Windows/Start Menu/Programs'),
+                ('USERPROFILE', 'Desktop'), ('PUBLIC', 'Desktop')):
+            value = os.environ.get(variable)
+            if value and Path(value).is_absolute():
+                roots.append(Path(value) / relative)
         found = []
         seen = set()
         for root in roots:

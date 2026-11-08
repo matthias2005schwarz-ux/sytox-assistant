@@ -1,3 +1,10 @@
+## Programme direkt per Sprachbefehl öffnen
+
+„Hey Sytox, öffne Spotify“ führt jetzt ohne Modellanfrage zu einer konkreten
+Startbestätigung. Bereits geöffnete Programme können nach Bestätigung nach vorne
+geholt werden; mehrere passende Treffer bleiben zur Auswahl. Auch kompakte
+getippte Startbefehle verwenden diesen Weg. [Bedienung und Grenzen](docs/app-launch.md).
+
 ## Ruhigere Animationen und direkteres Feedback
 
 Buttons reagieren sanft auf Maus und Tastaturfokus. Neue Nachrichten und

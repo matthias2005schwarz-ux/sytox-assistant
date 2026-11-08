@@ -28,6 +28,8 @@ from .screen_vision import describe_screen
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
+from .app_launch import app_open_intent
+from .app_launch_ui import AppLaunchDialog
 from .parallel_chat import ParallelChatDialog, ParallelReplyWorker
 from .chat_content import MessageContent
 from .motion import MotionManager, ActivityIndicator
@@ -949,6 +951,8 @@ class MainWindow(QMainWindow):
         self.voice_download_dialog=None
         self.voice_diagnostic_dialog=None
         self.desktop_tools_dialog=None
+        self.app_launch_dialog = None
+        self._pending_app_exit = None
         self.parallel_chat=None
         self._update_check_worker=None
         self._update_download_worker=None
@@ -1624,6 +1628,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self,'Auftrag läuft','Bitte den Auftrag zuerst stoppen.')
             event.ignore()
             return
+        if not self._close_app_request('close'):
+            event.ignore()
+            return
         if self.listener and self.listener.isRunning():
             self.listener.stop_event.set()
             self.listener.wait(3000)
@@ -1638,6 +1645,8 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def exit_app(self):
+        if not self._close_app_request('quit'):
+            return
         if self.quick_worker is not None:
             self.quick_worker.stop_event.set()
             self._exit_after_quick = True
@@ -1917,6 +1926,11 @@ class MainWindow(QMainWindow):
             return
         if self.quick_worker is not None:
             self.state.setText('Die aktuelle Antwort läuft noch. Mit Stopp abbrechen.')
+            return
+        app_query = app_open_intent(txt)
+        if app_query:
+            self.input.clear()
+            self.show_app_request(app_query)
             return
         if self.worker and self.worker.isRunning():
             self.input.clear()
@@ -2737,6 +2751,45 @@ class MainWindow(QMainWindow):
         dialog.raise_()
         dialog.activateWindow()
 
+    def show_app_request(self, query):
+        """Resolve a compact app command locally; execution remains an explicit click."""
+        if self._is_exiting:
+            return
+        current = self.app_launch_dialog
+        if current is not None and (current.lookup_running or
+                                    (current.isVisible() and current.pending_confirmation)):
+            self.log('Windows', 'Es wartet bereits eine Programmanfrage. Bitte zuerst bestätigen oder schließen.')
+            if current.isVisible():
+                current.raise_()
+                current.activateWindow()
+            return
+        if current is not None:
+            current.prepare_close()
+            current.deleteLater()
+        dialog = AppLaunchDialog(query, parent=self)
+        self.app_launch_dialog = dialog
+        dialog.feedback.connect(lambda text: self.log('Windows', text))
+        dialog.lookup_finished.connect(self._app_lookup_finished)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _close_app_request(self, action):
+        dialog = self.app_launch_dialog
+        if dialog is None:
+            return True
+        if not dialog.prepare_close():
+            self._pending_app_exit = action
+            return False
+        dialog.close()
+        return True
+
+    def _app_lookup_finished(self):
+        action = self._pending_app_exit
+        self._pending_app_exit = None
+        if action:
+            QTimer.singleShot(0, self, self.exit_app if action == 'quit' else self.close)
+
     def open_voice_diagnostics(self):
         if self.listener and self.listener.isRunning():
             QMessageBox.information(self,'Mikrofon belegt',
@@ -2810,6 +2863,11 @@ class MainWindow(QMainWindow):
             return
         if agent_status_intent(text):
             self.report_agent_status(text, spoken=True)
+            return
+        app_query = app_open_intent(text)
+        if app_query:
+            self.show_app_request(app_query)
+            self._conversation_ready()
             return
         intent = desktop_voice_intent(text)
         if intent:
