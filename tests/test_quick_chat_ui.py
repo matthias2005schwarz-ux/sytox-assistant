@@ -66,7 +66,7 @@ class QuickChatUiTests(unittest.TestCase):
         return {'role': 'assistant', 'content': 'Hallo zurück!'}
 
     def send_greeting(self):
-        self.window.input.setPlainText('Hallo')
+        self.window.input.setPlainText('Hallo, wie geht es dir?')
         self.window.send()
         self.wait_for(lambda: self.window._quick_turn is not None and
                       self.window._quick_turn['label'].text() == 'Hallo')
@@ -166,16 +166,28 @@ class QuickChatUiTests(unittest.TestCase):
             self.wait_for(lambda: self.window.quick_worker is None)
             self.assertEqual(label.text(), 'Hallo zurück!')
 
-    def test_project_greeting_keeps_permanent_project_model(self):
+    def test_project_greeting_uses_fast_reply_not_large_agent(self):
         project = self.window.store.create_chat('Qwen-Projekt', kind='project')
         self.window.select_chat(project)
         with patch.object(self.window, 'start_worker') as agent, \
              patch.object(self.window, 'start_quick_reply') as quick:
             self.window.input.setPlainText('Hallo')
             self.window.send()
-            agent.assert_called_once()
-            quick.assert_not_called()
-            self.assertEqual(self.window.model_name.text(), 'qwen3-coder:30b')
+            agent.assert_not_called()
+            quick.assert_called_once_with('Hallo')
+            self.assertEqual(self.window.model_mode.currentData(), 'project')
+
+    def test_hi_in_normal_chat_never_calls_ollama(self):
+        with patch('sytox.parallel_chat.OllamaClient') as client, \
+             patch.object(self.window, 'start_worker') as agent:
+            self.window.input.setPlainText('hi')
+            self.window.send()
+            self.wait_for(lambda: self.window.quick_worker is None)
+        client.assert_not_called()
+        agent.assert_not_called()
+        messages = self.window.store.messages(self.window.chat_id)
+        self.assertEqual([m['role'] for m in messages], ['user', 'assistant'])
+        self.assertEqual(messages[-1]['content'], 'Hallo! Wie kann ich dir helfen?')
 
     def test_ordinary_time_question_does_not_create_timed_task(self):
         with patch.object(self.window, 'start_worker') as agent, \

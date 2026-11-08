@@ -1,3 +1,12 @@
+## SYTOX 0.3.12 – schnelle JARVIS-Basis
+
+- **Hi und andere reine Begrüßungen:** Sofortantwort ohne Ollama-Modellstart (auch im Projektchat).
+- **Chat-Ausgabe:** Interne `<think>`- und `<analysis>`-Abschnitte werden im Streaming ausgeblendet, selbst wenn Ollama sie über mehrere Fragmente sendet. Unmarkierte Gedankengänge lassen sich technisch nicht zuverlässig erkennen.
+- **Windows-Befehle:** Zusätzlich zu „Öffne Spotify“ erkennt SYTOX nun eindeutige höfliche Sätze wie „Hey Sytox, kannst du bitte Spotify öffnen?“ – ohne Modellaufruf, mit der bestehenden Programmidentitätsprüfung. Verkettete, unklare und riskante Befehle bleiben ausgeschlossen.
+- **Leistung:** Auf lokalen Geräten bleibt die Geschwindigkeit *normaler KI-Antworten* von der eingesetzten Hardware und dem ausgewählten Modell abhängig. Kein Cloudkonto und keine zusätzlichen API-Kosten erforderlich.
+
+---
+
 ## SYTOX 0.3.11 – integrierte Codex-Erweiterungen
 
 Integriert Projektverständnis mit quellcodebezogener Suche, echte Projektprüfungen und Fehlerkorrektur, gezielte quellcodeschonende Änderungen, zusätzliche unabhängige Codeprüfung, direkte Programmstarts, verbesserte Aufgabenerkennung, native Markdown-/Code-Darstellung und dezente UI-Animationen. Behält die stabilisierte direkte Ollama-Streaming-Abbruchlogik aus 0.3.10 und den sicheren In-App-Updater mit Hashprüfung und Rollback bei.

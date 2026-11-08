@@ -17,6 +17,6 @@ if (-not $iscc) {
 if (-not $iscc) { throw 'Inno Setup 6 ist nicht installiert. Installer-Compiler: https://jrsoftware.org/isinfo.php' }
 & $iscc (Join-Path $PSScriptRoot 'Windows_Installer.iss')
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup fehlgeschlagen: $LASTEXITCODE" }
-$installer=Join-Path $PSScriptRoot 'installer\SYTOX_Assistant_Setup_0.3.11.exe'
+$installer=Join-Path $PSScriptRoot 'installer\SYTOX_Assistant_Setup_0.3.12.exe'
 if (!(Test-Path $installer)) { throw "Installer-Ausgabe fehlt: $installer" }
 Write-Host "Installer erstellt: $installer" -ForegroundColor Green

@@ -17,6 +17,7 @@ from .actions import Toolkit, tool_schema, Cancelled
 from .web_search import should_search, search_web, format_results
 from .program_build import needs_compiled_artifact
 from .ram_saver import keep_alive_for_config
+from .fast_interaction import VisibleReplyFilter
 from .model_resources import model_gate
 from .model_router import is_project_request
 from .agent_context import compact_agent_context
@@ -276,6 +277,7 @@ class OllamaClient:
                                                    name='sytox-ollama-cancel', daemon=True)
                         watcher.start()
                     reply = {'role': 'assistant', 'content': '', 'tool_calls': []}
+                    visible_filter = VisibleReplyFilter() if interactive else None
                     terminal = None
                     # requests otherwise waits for a 512-byte block on streams
                     # without HTTP chunking, hiding the first few short tokens.
@@ -300,12 +302,16 @@ class OllamaClient:
                         if not isinstance(content, str):
                             raise OllamaError('Ollama hat ungültigen Antworttext gesendet.')
                         if content:
-                            if not first_token.is_set():
-                                metrics['time_to_first_token_s'] = time.perf_counter() - request_started
-                                first_token.set()
-                            reply['content'] += content
-                            if on_token is not None:
-                                on_token(content)
+                            # Some Ollama/Qwen builds still embed <think> text
+                            # in content even with think=False. Never stream it.
+                            visible = visible_filter.feed(content) if visible_filter else content
+                            if visible:
+                                if not first_token.is_set():
+                                    metrics['time_to_first_token_s'] = time.perf_counter() - request_started
+                                    first_token.set()
+                                reply['content'] += visible
+                                if on_token is not None:
+                                    on_token(visible)
                         if msg.get('tool_calls'):
                             reply['tool_calls'].extend(msg['tool_calls'])
                         if chunk.get('done') is True:
@@ -317,6 +323,15 @@ class OllamaClient:
                     if terminal is None:
                         raise OllamaError('Die Verbindung zu Ollama wurde vor dem Ende der '
                                           'Antwort unterbrochen. Bitte erneut versuchen.')
+                    if visible_filter is not None:
+                        remainder = visible_filter.finish()
+                        if remainder:
+                            if not first_token.is_set():
+                                metrics['time_to_first_token_s'] = time.perf_counter() - request_started
+                                first_token.set()
+                            reply['content'] += remainder
+                            if on_token is not None:
+                                on_token(remainder)
                     if not reply['tool_calls']:
                         reply.pop('tool_calls')
                     metrics['load_s'] = self._duration(terminal, 'load_duration')

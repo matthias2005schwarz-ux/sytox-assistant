@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .agent import OllamaClient
+from .fast_interaction import instant_reply
 from .actions import Cancelled
 from .ram_saver import keep_alive_for_config
 from .model_router import select_chat_model, wants_screen
@@ -51,6 +52,7 @@ SYSTEM_PROMPT = (
 QUICK_SYSTEM_PROMPT = (
     "Du bist SYTOX, ein lokaler persönlicher Assistent. Antworte direkt, "
     "freundlich und auf Deutsch. Bei einfachen Nachrichten genügen wenige Sätze. "
+    "Zeige keine internen Überlegungen oder Analyse-Texte. Schreibe nur die fertige Antwort. "
     "Du hast hier KEINE Werkzeuge für Projektdateien oder freie PC-Aktionen. "
     "Behaupte keine ausgeführten Aktionen oder erfolgreich behobenen Fehler. "
     "Nur ausdrücklich angeforderte Bildschirmbeobachtungen und gesondert "
@@ -147,8 +149,13 @@ class ParallelReplyWorker(QThread):
             raise ValueError('Diese Nachricht ist für den Schnellchat zu lang '
                              '(mehr als 12.000 Zeichen). Bitte teile sie auf.')
         self.context_error = ''
-        if re.fullmatch(r'\s*(?:hallo|hi|hey|guten (?:tag|morgen|abend))[!.\s]*',
-                        question, re.IGNORECASE):
+        # Greetings and short social check-ins do not need memory search
+        # or project history. Avoid unnecessary local SQLite/FTS work.
+        if instant_reply(question) is not None or re.fullmatch(
+                r"\s*(?:(?:hallo|hi|hey)[,!.\s]+)?"
+                r"(?:wie\s+geht(?:'s|\s+es)\s+dir|"
+                r"wie\s+läuft(?:'s|\s+es)|alles\s+klar)[?!. ]*",
+                question, re.IGNORECASE):
             return
         self._check_cancelled()
         older = self.store.current_chat_context(question, self.chat_id, limit=3)
@@ -227,6 +234,15 @@ class ParallelReplyWorker(QThread):
                 raise ValueError(self.context_error)
             question = next((entry['content'] for entry in reversed(self.history)
                              if entry.get('role') == 'user'), '')
+            # A standalone greeting is a deterministic conversation reply.
+            # Never wake Ollama (or a 30B project model) just to say hello.
+            immediate = instant_reply(question)
+            if immediate is not None:
+                self.model_selected.emit('Sofortantwort')
+                self._receive_token(immediate)
+                self.outcome = 'done'
+                self.completed.emit(immediate)
+                return
             model, route = select_chat_model(question, self.config)
             self.model_selected.emit(model)
             client = OllamaClient(

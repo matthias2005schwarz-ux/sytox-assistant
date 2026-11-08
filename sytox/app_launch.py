@@ -31,9 +31,17 @@ _ALIASES = {
 _WAKE_PREFIX = re.compile(
     r'^(?:hey|hei|he)\s+(?:sytox|saitox|seitox|sytoks|seitoks)(?:\s*,\s*|\s+)', re.I)
 _OPEN = re.compile(
-    r'^(?:bitte\s+)?(?:öffne|oeffne|starte)\s+'
+    r'^(?:bitte\s+)?(?:öffne|oeffne|starte|open|launch)\s+'
     r'(?:(?:bitte|mir)\s+){0,2}(?:(?:das|die|den)\s+)?'
     r'(?:(?:programm|app|anwendung)\s+)?(.+)$', re.I)
+_POLITE_OPEN = re.compile(
+    r'^(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+'
+    r'(?:(?:bitte|mir)\s+){0,2}(?:(?:das|die|den)\s+)?'
+    r'(?:(?:programm|app|anwendung)\s+)?(.+?)'
+    r'(?:\s+bitte)?\s+(?:öffnen|oeffnen|starten)$', re.I)
+_POLITE_ENGLISH = re.compile(
+    r'^(?:can|could)\s+you\s+(?:please\s+)?'
+    r'(?:open|launch)\s+(.+)$', re.I)
 _UNSUITABLE = re.compile(
     r'\b(?:nicht|nie|niemals|kein\w*|ohne|und|oder|dann|danach|anschließend|'
     r'anschliessend|sowie|falls|wenn|datei\w*|ordner\w*|verzeichnis\w*|'
@@ -79,18 +87,23 @@ def _maintenance_name(value):
 
 
 def app_open_intent(phrase):
-    """Recognize one explicit app-opening command after normal wake routing.
+    """Recognize safe, unambiguous app requests without asking a language model.
 
-    This is intentionally narrower than natural-language understanding. Search,
-    questions, files and compound requests stay on their existing UI/agent paths.
+    Only whole-sentence imperatives and simple polite questions are eligible.
+    Files, shell commands, negation, chains and other unclear instructions
+    are rejected and handled by the regular conversation path.
     """
     if not isinstance(phrase, str) or not phrase or len(phrase) > 180:
         return None
-    if any(ord(character) < 32 for character in phrase) or '?' in phrase:
+    if any(ord(character) < 32 for character in phrase):
         return None
     text = _WAKE_PREFIX.sub('', phrase.strip(), count=1)
-    text = ' '.join(text.split()).rstrip(' .!')
-    match = _OPEN.fullmatch(text)
+    text = ' '.join(text.split()).rstrip(' .!?')
+    if '?' in phrase and (phrase.count('?') != 1 or not phrase.rstrip().endswith('?')):
+        return None
+    match = _OPEN.fullmatch(text) if '?' not in phrase else None
+    if match is None:
+        match = _POLITE_OPEN.fullmatch(text) or _POLITE_ENGLISH.fullmatch(text)
     if not match:
         return None
     name = re.sub(r'\s+bitte$', '', match.group(1).strip(), flags=re.I)
