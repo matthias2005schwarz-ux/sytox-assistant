@@ -82,6 +82,7 @@ class QuickChatUiTests(unittest.TestCase):
             self.assertEqual([m['role'] for m in self.window.store.messages(self.window.chat_id)], ['user'])
             self.assertFalse(self.window.send_btn.isEnabled())
             self.assertTrue(self.window.stopbtn.isEnabled())
+            self.assertTrue(self.window.activity_indicator._active)
             self.assertNotIn('once', self.window.task_state.text())
             self.assertEqual(client.call_args.args[1], 'qwen3:4b')
             args = client.return_value.chat.call_args.kwargs
@@ -93,6 +94,7 @@ class QuickChatUiTests(unittest.TestCase):
             self.assertEqual(self.window.store.messages(self.window.chat_id)[-1]['content'], 'Hallo zurück!')
             self.assertEqual(len(self.window.store.messages(self.window.chat_id)), 2)
             self.assertTrue(self.window.send_btn.isEnabled())
+            self.assertFalse(self.window.activity_indicator._active)
             self.assertIn('Erstes Token: 0.03 s', self.window.model_name.toolTip())
             agent.assert_not_called()
             task.assert_not_called()
@@ -110,6 +112,7 @@ class QuickChatUiTests(unittest.TestCase):
             self.assertIn('Hallo', answer)
             self.assertIn('abgebrochen', answer)
             self.assertIn('abgebrochen', self.window.state.text())
+            self.assertFalse(self.window.activity_indicator._active)
             speech.assert_not_called()
             self.assertFalse(self.window.stopbtn.isEnabled())
 

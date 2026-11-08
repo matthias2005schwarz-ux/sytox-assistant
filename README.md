@@ -1,3 +1,11 @@
+## Ruhigere Animationen und direkteres Feedback
+
+Buttons reagieren sanft auf Maus und Tastaturfokus. Neue Nachrichten und
+eingeblendete Bereiche erhalten kurze Übergänge; dezente Punkte zeigen laufende
+Antworten und Aufträge. Kopieren wird direkt bestätigt. Unter Einstellungen lässt
+sich die Bewegung reduzieren. Die Einstellungen sind scrollbar, „Speichern“ bleibt
+sichtbar. [Darstellung und native Video-Vorschau](docs/motion-ui.md).
+
 ## Programmieren mit Projektquellen und echten Testergebnissen
 
 Vor Programmieränderungen erhält die KI passende lokale Quelldateien, zugehörige
