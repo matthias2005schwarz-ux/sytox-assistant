@@ -9,14 +9,14 @@ import time
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QPropertyAnimation, QEasingCurve, QSaveFile, QIODevice
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QUrl, QSaveFile, QIODevice, QEvent
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QKeyEvent, QKeySequence, QShortcut, QTextCursor, QDesktopServices, QLinearGradient, QPen
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication,QWidget,QMainWindow,QVBoxLayout,QHBoxLayout,QPushButton,QLabel,
     QTextEdit,QPlainTextEdit,QListWidget,QListWidgetItem,QScrollArea,QSplitter,
     QMessageBox,QFileDialog,QLineEdit,QDialog,QFormLayout,QCheckBox,QComboBox,
-    QSystemTrayIcon,QMenu,QInputDialog,QSpinBox,QFrame,QProgressBar, QGraphicsOpacityEffect, QGraphicsDropShadowEffect
+    QSystemTrayIcon,QMenu,QInputDialog,QSpinBox,QFrame,QProgressBar, QGraphicsDropShadowEffect, QSizePolicy
 )
 from .theme import STYLE as QSS, BACKGROUND as BG, PANEL, SURFACE, ACCENT as RED, TEXT as LIGHT, MUTED
 from .agent import Agent,OllamaClient
@@ -28,8 +28,11 @@ from .screen_vision import describe_screen
 from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
+from .app_launch import app_open_intent
+from .app_launch_ui import AppLaunchDialog
 from .parallel_chat import ParallelChatDialog, ParallelReplyWorker
-from .chat_content import MessageLabel, fenced_code_blocks
+from .chat_content import MessageContent
+from .motion import MotionManager, ActivityIndicator
 from .updater import (check_for_update, download_verified_installer,
                       download_verified_portable, is_installed_app,
                       schedule_installer, schedule_portable_update, RELEASES_PAGE)
@@ -777,7 +780,19 @@ class SettingsDialog(QDialog):
     def __init__(self,settings,parent=None):
         super().__init__(parent);self.setWindowTitle('Einstellungen');self.setMinimumWidth(560)
         self.original=settings.copy()
-        form=QFormLayout(self)
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setObjectName('settingsScroll')
+        scroll.setAccessibleName('Einstellungen durchsuchen')
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        form=QFormLayout(content)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+        available = self.screen().availableGeometry()
+        self.resize(max(560, min(820, available.width() - 60)),
+                    max(380, min(720, available.height() - 100)))
         self.model=QLineEdit(settings['model'])
         self.fast_model=QLineEdit(settings.get('fast_model') or settings['model'])
         self.project_model=QLineEdit(settings.get('project_model') or settings['model'])
@@ -810,6 +825,9 @@ class SettingsDialog(QDialog):
         self.edge_consent.setChecked(settings.get('edge_consent',False))
         self.auto_updates=QCheckBox('Automatisch nach neuen SYTOX-Versionen suchen (keine Installation ohne Zustimmung)')
         self.auto_updates.setChecked(settings.get('auto_check_updates', True))
+        self.reduce_motion = QCheckBox('Animationen reduzieren')
+        self.reduce_motion.setChecked(settings.get('reduced_motion') is True)
+        self.reduce_motion.setToolTip('Übergänge und bewegte Ladepunkte durch ruhige, direkte Zustände ersetzen.')
         self.ram_saver=QCheckBox('RAM-Sparmodus: ungenutzte Ollama-Modelle entladen')
         self.ram_saver.setChecked(settings.get('ram_saver_enabled', True))
         self.ram_delay=QSpinBox()
@@ -848,6 +866,7 @@ class SettingsDialog(QDialog):
         form.addRow('',self.voice)
         form.addRow('',self.auto_voice)
         form.addRow('',self.auto_updates)
+        form.addRow('Darstellung',self.reduce_motion)
         form.addRow('',self.interruption)
         form.addRow('',self.no_wake)
         form.addRow('Zeitfenster für Anschlussfrage',self.follow_up)
@@ -855,7 +874,7 @@ class SettingsDialog(QDialog):
         check=QPushButton('Ollama-Verbindung testen')
         check.clicked.connect(self.check_ollama);form.addRow('',check)
         save=QPushButton('Speichern');save.setObjectName('primary')
-        save.clicked.connect(self.validate_and_save);form.addRow('',save)
+        save.clicked.connect(self.validate_and_save);outer.addWidget(save)
 
     def validate_and_save(self):
         if self.speech_engine.currentData()=='edge' and not self.edge_consent.isChecked():
@@ -885,7 +904,7 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, status.title, message)
 
     def values(self):
-        return {'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
+        return {**self.original, 'model':self.model.text().strip(),'ollama_url':self.url.text().strip(),
                 'fast_model':self.fast_model.text().strip(),
                 'project_model':self.project_model.text().strip(),
                 'vision_model':self.vision_model.text().strip(),
@@ -900,6 +919,7 @@ class SettingsDialog(QDialog):
                 'voice_no_wake':self.no_wake.isChecked(),
                 'voice_auto_start':self.auto_voice.isChecked(),
                 'auto_check_updates':self.auto_updates.isChecked(),
+                'reduced_motion':self.reduce_motion.isChecked(),
                 'ram_saver_enabled':self.ram_saver.isChecked(),
                 'ram_keep_alive_seconds':self.ram_delay.value(),
                 'voice_interruptible':self.interruption.isChecked(),
@@ -913,6 +933,7 @@ class MainWindow(QMainWindow):
         self.store=Store();self.store.interrupted_tasks()
         self.config_path=default_data_dir()/'settings.json'
         self.config=self.load_settings()
+        self.motion = MotionManager(self, reduced_motion=self.config.get('reduced_motion') is True)
         self.chat_id=None;self.worker=None;self.recorder=None;self.listener=None;self.speakers=[]
         self._chat_drafts = {}  # Unsent text stays in this session, outside chat history.
         self._chat_draft_cursors = {}
@@ -930,6 +951,8 @@ class MainWindow(QMainWindow):
         self.voice_download_dialog=None
         self.voice_diagnostic_dialog=None
         self.desktop_tools_dialog=None
+        self.app_launch_dialog = None
+        self._pending_app_exit = None
         self.parallel_chat=None
         self._update_check_worker=None
         self._update_download_worker=None
@@ -954,6 +977,8 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(app_icon());self.resize(1390,860);self.setMinimumSize(960,630)
         self.setStyleSheet(QSS)
         self.build_ui()
+        for button in self.findChildren(QPushButton):
+            self.motion.attach_button(button)
         if self.config.get('focus_mode') is True:
             self.toggle_focus_mode(True)
         self.setup_tray();self.reload_chats()
@@ -986,6 +1011,7 @@ class MainWindow(QMainWindow):
                   'edge_consent':False,'voice_no_wake':False,'voice_followup_seconds':25,
                   'voice_auto_start':False,'voice_interruptible':True,
                   'auto_check_updates':True,
+                  'reduced_motion':False,
                   'model_mode':'auto','fast_model':'qwen3:4b',
                   'project_model':'qwen3-coder:30b','vision_model':'qwen3-vl:4b',
                   'ram_saver_enabled':True,'ram_keep_alive_seconds':300,
@@ -1093,7 +1119,7 @@ class MainWindow(QMainWindow):
         update_button.clicked.connect(lambda: self.check_for_updates(manual=True))
         l.addWidget(update_button)
         self.update_button = update_button
-        version = QLabel('SYTOX  /  VERSION 0.3.10')
+        version = QLabel('SYTOX  /  VERSION 0.3.11')
         version.setObjectName('version')
         version.setAlignment(Qt.AlignCenter)
         l.addSpacing(7)
@@ -1198,13 +1224,20 @@ class MainWindow(QMainWindow):
         self.mode.setMaximumWidth(192)
         self.mode.setToolTip('Wähle, wie lange SYTOX an deiner Aufgabe arbeiten soll.')
         upper.addWidget(self.mode)
-        self.state = QLabel('●  Bereit für deine Aufgabe')
-        self.state.setObjectName('muted')
-        upper.addWidget(self.state)
+        self.state = QLabel('Bereit für deine Aufgabe')
+        self.state.setObjectName('responseState')
+        self.state.setMinimumWidth(0)
+        self.state.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.activity_indicator = ActivityIndicator()
+        self.activity_indicator.set_reduced_motion(self.config.get('reduced_motion') is True)
+        upper.addWidget(self.activity_indicator)
+        upper.addWidget(self.state, 1)
         upper.addStretch(1)
         cbox.addLayout(upper)
         input_card = QFrame()
+        self.input_card = input_card
         input_card.setObjectName('inputCard')
+        input_card.setProperty('composing', False)
         card_row = QHBoxLayout(input_card)
         card_row.setContentsMargins(9, 5, 9, 5)
         card_row.setSpacing(9)
@@ -1212,6 +1245,7 @@ class MainWindow(QMainWindow):
         self.input.setObjectName('chatInput')
         self.input.setPlaceholderText('Schreib SYTOX, was er für dich tun soll …')
         self.input.setFixedHeight(76)
+        self.input.installEventFilter(self)
         self.input.send.connect(self.send)
         card_row.addWidget(self.input, 1)
         # One horizontal composer toolbar: microphone directly beside Send.
@@ -1229,6 +1263,8 @@ class MainWindow(QMainWindow):
         right_buttons.addWidget(self.mic_btn)
         self.send_btn = QPushButton('Senden')
         self.send_btn.setObjectName('primary')
+        self.send_btn.setAccessibleName('Nachricht senden')
+        self.send_btn.setToolTip('Nachricht senden (Enter)')
         self.send_btn.clicked.connect(self.send)
         self.send_btn.setMinimumWidth(106)
         self.send_btn.setMinimumHeight(46)
@@ -1238,7 +1274,7 @@ class MainWindow(QMainWindow):
         # Animate only the initial appearance, not the typing experience.
         QTimer.singleShot(70, self, lambda: self._animate_appearance(input_card, 220))
         hint = QLabel('ENTER SENDEN   ·   SHIFT + ENTER ZEILENUMBRUCH   ·   STRG + L EINGABE')
-        hint.setObjectName('version')
+        hint.setObjectName('motionHint')
         hint.setWordWrap(True)
         cbox.addWidget(hint)
         c.addWidget(compose)
@@ -1288,6 +1324,8 @@ class MainWindow(QMainWindow):
             def expand(expanded):
                 body.setVisible(expanded)
                 toggle.setText(('▾ ' if expanded else '▸ ') + title)
+                if expanded and body.isVisible():
+                    self._animate_appearance(body, 160)
 
             initially_expanded = self.config.get(setting, False) is True
             toggle.setChecked(initially_expanded)
@@ -1468,22 +1506,46 @@ class MainWindow(QMainWindow):
             panel_width = getattr(self, '_utility_last_width', 296)
             center_width = max(450, self.splitter.width() - sidebar_width - panel_width - 2)
             self.splitter.setSizes([sidebar_width, center_width, panel_width])
+            self._animate_appearance(self.utility_panel, 170)
         if self.config.get('focus_mode', False) != checked:
             self._save_panel_state('focus_mode', checked)
         self.input.setFocus()
 
     def _animate_appearance(self, widget, duration=260):
-        """A short non-blocking fade; never animate ongoing voice/agent tasks."""
-        effect = QGraphicsOpacityEffect(widget)
-        widget.setGraphicsEffect(effect)
-        animation = QPropertyAnimation(effect, b'opacity', widget)
-        animation.setDuration(duration)
-        animation.setStartValue(0.10)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.OutCubic)
-        animation.start()
-        # Animation is owned by its widget; no detached Qt objects or timers.
-        widget._intro_animation = animation
+        """Short transitions release their effects before typing/streaming continues."""
+        if not self._is_exiting:
+            self.motion.fade_in(widget, duration=duration)
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, 'input', None) and event.type() in (QEvent.FocusIn, QEvent.FocusOut):
+            focused = event.type() == QEvent.FocusIn
+            if self.input_card.property('composing') != focused:
+                self.input_card.setProperty('composing', focused)
+                self.input_card.style().unpolish(self.input_card)
+                self.input_card.style().polish(self.input_card)
+                self.input_card.update()
+        return super().eventFilter(watched, event)
+
+    def _set_response_activity(self, active):
+        self.activity_indicator.set_active(active)
+        self.state.setProperty('working', bool(active))
+        self.state.style().unpolish(self.state)
+        self.state.style().polish(self.state)
+        self.state.update()
+
+    def _apply_motion_preferences(self):
+        reduced = self.config.get('reduced_motion') is True
+        self.motion.set_reduced_motion(reduced)
+        self.activity_indicator.set_reduced_motion(reduced)
+
+    def _copy_reply(self, label, button):
+        QApplication.clipboard().setText(label.text())
+        button.setText('Kopiert')
+        if not hasattr(button, '_copy_feedback'):
+            button._copy_feedback = QTimer(button)
+            button._copy_feedback.setSingleShot(True)
+            button._copy_feedback.timeout.connect(lambda: button.setText('Kopieren'))
+        button._copy_feedback.start(1400)
 
     def _use_suggestion(self, prompt):
         self.input.setPlainText(prompt)
@@ -1566,14 +1628,25 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self,'Auftrag läuft','Bitte den Auftrag zuerst stoppen.')
             event.ignore()
             return
+        if not self._close_app_request('close'):
+            event.ignore()
+            return
         if self.listener and self.listener.isRunning():
             self.listener.stop_event.set()
             self.listener.wait(3000)
         if self.ollama_probe and self.ollama_probe.isRunning():
             self.ollama_probe.wait(6000)  # bounded 5s HTTP probe must not outlive Qt
+        self._is_exiting = True
+        if hasattr(self, '_progress_refresh'):
+            self._progress_refresh.stop()
+        self._quick_reply_timer.stop()
+        self.motion.stop_all()
+        self.activity_indicator.set_active(False)
         event.accept()
 
     def exit_app(self):
+        if not self._close_app_request('quit'):
+            return
         if self.quick_worker is not None:
             self.quick_worker.stop_event.set()
             self._exit_after_quick = True
@@ -1797,48 +1870,19 @@ class MainWindow(QMainWindow):
             copy_button = QPushButton('Kopieren')
             copy_button.setObjectName('copyReplyButton')
             copy_button.setAccessibleName('Antwort kopieren')
-            copy_button.setToolTip('Sichtbaren Antworttext unverändert kopieren')
-            copy_button.clicked.connect(lambda _checked=False: QApplication.clipboard().setText(label.text()))
+            copy_button.setToolTip('Gesamte Antwort als Markdown kopieren')
+            copy_button.clicked.connect(lambda _checked=False: self._copy_reply(label, copy_button))
             heading.addWidget(copy_button)
         b.addLayout(heading)
-        label = QLabel(message) if mine else MessageLabel(message)
+        label = QLabel(message) if mine else MessageContent(message)
         label.setObjectName('bubbleContent')
-        label.setTextFormat(Qt.PlainText)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        if mine:
+            label.setTextFormat(Qt.PlainText)
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        else:
+            label.url_requested.connect(self._open_answer_link)
         b.addWidget(label)
-        if not mine:
-            code_actions = QWidget(body)
-            code_layout = QVBoxLayout(code_actions)
-            code_layout.setContentsMargins(0, 0, 0, 0)
-            code_layout.setSpacing(3)
-            code_actions.hide()
-            code_actions._blocks = []
-
-            def update_code_actions(text):
-                blocks = fenced_code_blocks(text)
-                if blocks == code_actions._blocks:
-                    return
-                code_actions._blocks = blocks
-                while code_layout.count():
-                    old = code_layout.takeAt(0).widget()
-                    old.hide()
-                    old.setParent(None)
-                    old.deleteLater()
-                for number, block in enumerate(blocks, 1):
-                    language = block['language'][:30]
-                    caption = f'Codeblock {number} kopieren' + (f' ({language})' if language else '')
-                    button = QPushButton(caption)
-                    button.setObjectName('copyCodeButton')
-                    button.setAccessibleName(f'Codeblock {number} kopieren')
-                    button.clicked.connect(lambda _checked=False, code=block['code']:
-                                           QApplication.clipboard().setText(code))
-                    code_layout.addWidget(button)
-                code_actions.setVisible(bool(blocks))
-
-            label.text_changed.connect(update_code_actions)
-            update_code_actions(message)
-            b.addWidget(code_actions)
         body.setMaximumWidth(790)
         row = QWidget()
         row.setObjectName('messageRow')
@@ -1858,11 +1902,19 @@ class MainWindow(QMainWindow):
             self._scroll_follow_timer.start(0)
         return label
 
+    def _open_answer_link(self, url):
+        """Only an explicit click can open an ordinary web URL."""
+        if (url.isValid() and url.scheme().lower() in ('http', 'https')
+                and url.host() and not url.userInfo()):
+            if not QDesktopServices.openUrl(url):
+                self.log('System', 'Der Weblink konnte nicht geöffnet werden.')
+
     def log(self,kind,text):
         self.logs.appendPlainText(f'{kind}: {text}')
         if kind in ('Status','Aktion'):
             self._agent_last_status = str(text)[:130]
-            self.state.setText(('● ' if kind=='Status' else '◆ ')+str(text)[:80])
+            self.state.setText(str(text)[:80])
+            self.state.setToolTip(str(text))
 
     def send(self):
         txt=self.input.toPlainText().strip()
@@ -1874,6 +1926,11 @@ class MainWindow(QMainWindow):
             return
         if self.quick_worker is not None:
             self.state.setText('Die aktuelle Antwort läuft noch. Mit Stopp abbrechen.')
+            return
+        app_query = app_open_intent(txt)
+        if app_query:
+            self.input.clear()
+            self.show_app_request(app_query)
             return
         if self.worker and self.worker.isRunning():
             self.input.clear()
@@ -1913,13 +1970,9 @@ class MainWindow(QMainWindow):
 
     def start_quick_reply(self, question):
         """Normal conversation never creates an Agent, Toolkit or task row."""
-        memory = ''
-        if len(question.strip()) > 8:
-            context = self.store.related_context(question, exclude_chat=self.chat_id, limit=3)
-            memory = '\n'.join(item['source'] + ': ' + item['content'] for item in context)[:2000]
         worker = ParallelReplyWorker(
-            self._chat_runtime_config(), self.store.messages(self.chat_id, limit=12), self,
-            standalone=True, memory_context=memory)
+            self._chat_runtime_config(), [], self, standalone=True,
+            store=self.store, chat_id=self.chat_id)
         self.quick_worker = worker
         self._quick_turn = {'chat_id': self.chat_id, 'text': '',
                             'label': self.add_bubble('assistant', 'SYTOX antwortet …'),
@@ -1935,6 +1988,7 @@ class MainWindow(QMainWindow):
         self.stopbtn.setText('Antwort abbrechen')
         self.model_mode.setEnabled(False)
         self.state.setText('SYTOX antwortet …')
+        self._set_response_activity(True)
         self.task_state.setText('Gespräch · kein Programmierauftrag')
         worker.start()
 
@@ -1978,6 +2032,7 @@ class MainWindow(QMainWindow):
         turn.update(answer=answer, outcome=outcome)
         turn['label'].setText(answer)
         self.store.add_message(turn['chat_id'], 'assistant', answer)
+        self._set_response_activity(False)
         self.state.setText({'done': 'Antwort fertig', 'cancelled': 'Antwort abgebrochen',
                             'failed': 'Antwort fehlgeschlagen'}.get(outcome, 'Antwort beendet'))
 
@@ -1986,6 +2041,7 @@ class MainWindow(QMainWindow):
         self.quick_worker = None
         self._quick_turn = None
         self._quick_reply_timer.stop()
+        self._set_response_activity(False)
         if worker is not None:
             worker.deleteLater()
         self.stopbtn.setEnabled(False)
@@ -2036,8 +2092,7 @@ class MainWindow(QMainWindow):
 
     def refresh_live_progress(self):
         """Read live task checkpoints; never ask the busy coding model."""
-        if (self._is_exiting or not hasattr(self, 'task_meter')
-                or not self.chat_id):
+        if not hasattr(self, 'task_meter') or not self.chat_id:
             return
         active = bool(self.worker and self.worker.isRunning())
         for widget in (self.task_meter, self.task_details, self.task_next):
@@ -2105,6 +2160,7 @@ class MainWindow(QMainWindow):
         self.task_state.setText('Aufgabe läuft' if mode == 'once' else
                                'Arbeitet bis zum Abschluss' if mode == 'until_done' else
                                f'Arbeitet bis zu {hours:g} Stunden')
+        self._set_response_activity(True)
         self.task_meter.setRange(0, 0)
         self.task_details.setText('Auftrag wird vorbereitet …')
         self.task_next.setText('')
@@ -2197,6 +2253,7 @@ class MainWindow(QMainWindow):
         self.log('Freigabe','Erlaubt' if payload['allowed'] else 'Abgelehnt')
 
     def worker_done(self,result):
+        self._set_response_activity(False)
         self.stopbtn.setEnabled(False);self.send_btn.setEnabled(True)
         self.task_state.setText(task_status_text(result.get('status')))
         for widget in (self.task_meter, self.task_details, self.task_next):
@@ -2392,6 +2449,8 @@ class MainWindow(QMainWindow):
 
     def check_model_status(self):
         """Check the selected chat model without blocking mouse/keyboard UI."""
+        if self._is_exiting:
+            return
         if self.ollama_probe and self.ollama_probe.isRunning():
             self._probe_again = True
             return
@@ -2403,6 +2462,8 @@ class MainWindow(QMainWindow):
         self.ollama_probe.start()
 
     def _model_status_checked(self, status: OllamaStatus):
+        if self._is_exiting:
+            return
         if self.ollama_probe and (self.ollama_probe.url != self.config['ollama_url'] or
                                   self.ollama_probe.model != self._preferred_status_model()):
             self._probe_again = True
@@ -2420,6 +2481,9 @@ class MainWindow(QMainWindow):
                     'border:1px solid #6A4235;border-radius:11px;padding:5px 11px;')
                 self.log('System', status.details)
     def _model_probe_finished(self):
+        if self._is_exiting:
+            self._probe_again = False
+            return
         if self._probe_again:
             self._probe_again = False
             QTimer.singleShot(0, self.check_model_status)
@@ -2440,6 +2504,7 @@ class MainWindow(QMainWindow):
         dialog=SettingsDialog(self.config,self)
         if dialog.exec()==QDialog.Accepted:
             self.config=dialog.values()
+            self._apply_motion_preferences()
             self.config['model_mode'] = self.model_mode.currentData()
             self.config_path.write_text(json.dumps(self.config,ensure_ascii=False,indent=2),encoding='utf-8')
             self.model_name.setText(
@@ -2686,6 +2751,48 @@ class MainWindow(QMainWindow):
         dialog.raise_()
         dialog.activateWindow()
 
+    def show_app_request(self, query):
+        """Open a uniquely matched app directly, without a model or extra confirmation."""
+        if self._is_exiting:
+            return
+        current = self.app_launch_dialog
+        if current is not None and (current.lookup_running or
+                                    (current.isVisible() and current.pending_choice)):
+            self.log('Windows', 'Eine Programmanfrage läuft bereits. Bitte warten oder den passenden Treffer auswählen.')
+            if current.isVisible():
+                current.raise_()
+                current.activateWindow()
+            return
+        if current is not None:
+            current.prepare_close()
+            current.deleteLater()
+        self._app_request_feedback(f'Suche „{query}“ auf deinem PC …')
+        dialog = AppLaunchDialog(query, parent=self)
+        self.app_launch_dialog = dialog
+        dialog.feedback.connect(self._app_request_feedback)
+        dialog.lookup_finished.connect(self._app_lookup_finished)
+
+    def _app_request_feedback(self, text):
+        self.log('Windows', text)
+        self.state.setText(str(text)[:80])
+        self.state.setToolTip(str(text))
+
+    def _close_app_request(self, action):
+        dialog = self.app_launch_dialog
+        if dialog is None:
+            return True
+        if not dialog.prepare_close():
+            self._pending_app_exit = action
+            return False
+        dialog.close()
+        return True
+
+    def _app_lookup_finished(self):
+        action = self._pending_app_exit
+        self._pending_app_exit = None
+        if action:
+            QTimer.singleShot(0, self, self.exit_app if action == 'quit' else self.close)
+
     def open_voice_diagnostics(self):
         if self.listener and self.listener.isRunning():
             QMessageBox.information(self,'Mikrofon belegt',
@@ -2759,6 +2866,11 @@ class MainWindow(QMainWindow):
             return
         if agent_status_intent(text):
             self.report_agent_status(text, spoken=True)
+            return
+        app_query = app_open_intent(text)
+        if app_query:
+            self.show_app_request(app_query)
+            self._conversation_ready()
             return
         intent = desktop_voice_intent(text)
         if intent:

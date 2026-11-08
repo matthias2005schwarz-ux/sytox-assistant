@@ -73,15 +73,36 @@ def tokens(text: str) -> list[str]:
     return result
 
 
+def project_scopes(text: str) -> set[str]:
+    """Only explicit project names; generic project wording is not an identity."""
+    excluded = {"ist", "hat", "soll", "mit", "für", "fuer", "eine", "mein",
+                "bevorzuge", "verwende", "nutze", "möchte", "moechte", "brauche",
+                "wird", "weiter", "fortsetzen", "bitte", "nicht", "keine"}
+    names = [match.group(1).casefold() for match in PROJECT.finditer(str(text or ""))]
+    names += [match.group(1).casefold() for match in KNOWN_PROJECT.finditer(str(text or ""))]
+    return {"project:" + name for name in names if name not in excluded}
+
+
+def memory_topics(text: str) -> set[str]:
+    """Use the same conservative fact topics when a question uses different words."""
+    text = str(text or "")
+    result = {name for name, pattern in SLOTS if re.search(pattern, text, re.IGNORECASE)}
+    if re.search(r'\b(?:lieblingsfarbe\w*|farb\w*|design)\b', text, re.IGNORECASE):
+        result.add('theme')
+    if re.search(r'\b(?:sprache|sprachstil|ansprache|formulierung)\b', text, re.IGNORECASE):
+        result.add('language')
+    if re.search(r'\b(?:schrift(?:größe|grösse|groesse|art)?|font\w*|typograf\w*)\b', text, re.IGNORECASE):
+        result.add('typography')
+    return result
+
+
 def _scope(sentence: str) -> str:
-    match = PROJECT.search(sentence)
-    if match:
-        name = match.group(1).lower()
-        if name not in {"ist", "hat", "soll", "mit", "für", "fuer", "eine", "mein"}:
-            return "project:" + name
-    match = KNOWN_PROJECT.search(sentence)
-    if match:
-        return "project:" + match.group(1).lower()
+    scopes = project_scopes(sentence)
+    # Preserve first-mentioned scope for facts mentioning multiple projects.
+    for match in list(PROJECT.finditer(sentence)) + list(KNOWN_PROJECT.finditer(sentence)):
+        scope = "project:" + match.group(1).casefold()
+        if scope in scopes:
+            return scope
     return "global"
 
 

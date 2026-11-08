@@ -75,6 +75,8 @@ class QueueTests(unittest.TestCase):
         changes = []
         agent = Agent(self.store, 'mock', 'http://offline', str(work),
                       lambda *args: True, lambda *args: None, threading.Event())
+        agent.review_client.chat = MagicMock(return_value={'role': 'assistant', 'content': json.dumps({
+            'status': 'passed', 'summary': 'Kontrollierter Prüfbefund', 'findings': []})})
         responses = [
             tool('write_file', path='app.py', content='print("Original")\n'),
             tool('run_command', command='python -m compileall app.py'),

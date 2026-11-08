@@ -14,24 +14,88 @@ from xml.etree import ElementTree
 import requests
 
 
+_PERSONAL_REFERENCE = re.compile(
+    r'\b(?:ich|mich|mir|mein(?:e|en|em|er|es)?|wir|uns|'
+    r'unser(?:e|en|em|er|es)?)\b'
+)
+_LOCAL_RESOURCE = (
+    r'(?:projekt\w*|konto|konten|profil\w*|gerät\w*|geraet\w*|'
+    r'computer|rechner|pc|datei\w*|ordner|chat\w*|einstellungen)'
+)
+
+
+def _explicit_public_research(text: str) -> bool:
+    """Recognize an actual research request, not a mention of web history."""
+    destination = r'(?:im internet|im web|im netz|online)'
+    command = r'(?:^|[.!?]\s*|\bbitte\s+)'
+    request = r'\b(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\b'
+    if re.search(command + r'(?:recherchier(?:e)?|google)\b', text):
+        return True
+    if re.search(request + r'.{0,150}\b(?:recherchieren|googeln)\b', text):
+        return True
+    if not re.search(r'\b' + destination + r'\b', text):
+        return False
+    return bool(
+        re.search(command + r'(?:suche?|finde|schau(?:e)?|sieh|prüfe?|pruefe?)\b', text)
+        or re.search(request + r'.{0,150}\b(?:suchen|nachsehen|nachschlagen|prüfen)\b', text)
+        or re.search(command + destination
+                     + r'\s+(?:suchen|nachsehen|nachschlagen|recherchieren)\b', text)
+    )
+
+
+def _personal_or_local_question(text: str) -> bool:
+    """Keep personal context and machine state out of automatic public queries."""
+    # A courtesy such as "Kannst du mir sagen ..." does not make otherwise
+    # public news a personal-data question. Other first-person references do.
+    personal_text = re.sub(
+        r'\b(?:kannst|könntest|koenntest|würdest|wuerdest)\s+du\s+'
+        r'(?:bitte\s+)?mir\b', '', text,
+    )
+    if _PERSONAL_REFERENCE.search(personal_text):
+        return True
+    if re.search(r'\b(?:dies(?:e|er|es|em|en)|hiesig\w*|lokal\w*)\s+'
+                 + _LOCAL_RESOURCE + r'\b', text):
+        return True
+    if re.search(r'\b(?:hier|lokal)\b', text) and re.search(_LOCAL_RESOURCE, text):
+        return True
+    # Installed software, signed-in users and file locations describe local
+    # state even when the user does not explicitly write "my computer".
+    if re.search(r'\b(?:wer|was|welch\w*)\b.{0,70}'
+                 r'\b(?:ist|sind|wurde|wurden)\s+(?:hier\s+)?'
+                 r'(?:installiert|angemeldet|gespeichert|geöffnet|eingebaut|'
+                 r'geändert|geaendert)\b', text):
+        return True
+    return bool(re.search(r'\bwo\s+(?:ist|liegt|befindet)\b.{0,50}\b'
+                          + _LOCAL_RESOURCE + r'\b', text))
+
+
 def should_search(question: str, *, local_first: bool = False) -> bool:
     """Conservative automatic search for factual/current questions.
 
     Local task controls and ordinary conversation should not leak to a search
-    provider. Explicit offline requests take precedence. The quick-chat route
-    can answer timeless definitions locally while preserving explicit/current
-    research and person questions. Existing Agent callers retain their policy.
+    provider. Explicit offline requests take precedence. Personal and local
+    questions require an explicit public research request before web access.
+    The quick-chat route can answer timeless definitions locally while
+    preserving explicit/current research and person questions. Other Agent
+    callers retain their public-question policy.
     """
     text = ' '.join(str(question or '').strip().split())
     if not text or len(text) > 240:
         return False
     lower = text.casefold()
-    if re.search(r'\b(ohne internet|offline|nicht (?:im internet|online) suchen|'
-                 r'keine websuche|nicht recherchieren)\b', lower):
+    if re.search(r'\b(ohne (?:internet|websuche|webrecherche)|offline|'
+                 r'nicht (?:im internet|online) suchen|'
+                 r'keine (?:websuche|webrecherche|internetrecherche)|'
+                 r'nicht (?:recherchieren|googeln))\b|'
+                 r'\b(?:google|recherchier\w*|suche?)\s+nicht\b', lower):
         return False
     if re.match(r'^(?:hey sytox[,: ]+)?(?:wie weit|arbeitest du noch|'
                 r'was machst du gerade|stopp|pause|mach weiter|'
                 r'hör auf|sei still)\b', lower):
+        return False
+    if _explicit_public_research(lower):
+        return True
+    if _personal_or_local_question(lower):
         return False
     if re.search(r'\b(im internet|websuche|websuche|online nachsehen|'
                  r'recherchier\w*|google|neueste\w*|aktuell\w*|'

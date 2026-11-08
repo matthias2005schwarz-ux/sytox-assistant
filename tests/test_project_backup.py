@@ -64,6 +64,23 @@ class ProjectBackupTests(unittest.TestCase):
                 create_snapshot(self.project, self.backups)
         self.assertEqual(list_snapshots(self.backups), [])
 
+    def test_active_review_baseline_survives_amendment_snapshot_retention(self):
+        source = self.project / 'app.py'
+        source.write_text('VALUE = 1\n', encoding='utf-8')
+        baseline = create_snapshot(self.project, self.backups, 'before_coding')
+        with patch('sytox.project_backup.RETAIN', 2):
+            for version in range(2, 6):
+                source.write_text(f'VALUE = {version}\n', encoding='utf-8')
+                create_snapshot(self.project, self.backups, 'before_amendment',
+                                preserve=(baseline['filename'],))
+        self.assertTrue(Path(baseline['path']).is_file())
+        self.assertEqual(len(list(self.backups.glob('*.zip'))), 3)
+        from sytox.code_review import build_review_bundle
+        review = build_review_bundle(self.project, baseline['path'])
+        self.assertTrue(review['review_complete'])
+        self.assertIn('-VALUE = 1', review['diff'])
+        self.assertIn('+VALUE = 5', review['diff'])
+
 
 if __name__ == '__main__':
     unittest.main()
