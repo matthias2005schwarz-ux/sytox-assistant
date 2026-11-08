@@ -5,7 +5,7 @@ import re
 import math
 
 from PySide6.QtCore import Signal, Qt, QTimer, QUrl, QByteArray, QSize, QEvent
-from PySide6.QtGui import QTextDocument, QTextOption, QImage, QFontDatabase, QTextCursor
+from PySide6.QtGui import QTextDocument, QTextOption, QImage, QFont, QFontInfo, QFontDatabase, QTextCursor
 from PySide6.QtWidgets import (
     QLabel, QWidget, QTextBrowser, QPlainTextEdit, QVBoxLayout, QHBoxLayout,
     QPushButton, QFrame, QSizePolicy, QApplication,
@@ -206,15 +206,26 @@ class CodePane(QFrame):
         self.editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.editor.setFixedHeight(72)
         self.editor.setFrameShape(QFrame.NoFrame)
-        font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        # The OS "FixedFont" hint may resolve to a proportional face when
+        # Windows/Qt repolishes widgets under the global Segoe UI theme.
+        # Select an actually installed fixed-pitch family, not just the hint.
+        available = set(QFontDatabase.families())
+        preferred = ('Consolas', 'Courier New', 'Cascadia Mono',
+                     'Lucida Console', 'DejaVu Sans Mono', 'Liberation Mono')
+        family_name = next((name for name in preferred
+                            if name in available and QFontInfo(QFont(name)).fixedPitch()),
+                           QFontDatabase.systemFont(QFontDatabase.FixedFont).family())
+        font = QFont(family_name)
+        font.setStyleHint(QFont.Monospace, QFont.PreferMatch)
         font.setPixelSize(13)
         font.setFixedPitch(True)
         self.editor.setFont(font)
-        # A global QWidget font rule otherwise overrides setFont, including on
-        # the real MainWindow. Keep colors/borders/padding in the theme cascade.
+        # Explicit widget-local QSS wins over the parent QWidget theme, and
+        # the document uses exactly the same physical font.
         family = font.family().replace('\\', '\\\\').replace("'", "\\'")
         self.editor.setStyleSheet("QPlainTextEdit#codeEditor { font-family: '" +
                                   family + "'; font-size: 13px; }")
+        self.editor.document().setDefaultFont(font)
         self.editor.document().setDocumentMargin(0)
         self._size_timer = QTimer(self)
         self._size_timer.setSingleShot(True)
