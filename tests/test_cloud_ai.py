@@ -85,10 +85,10 @@ class CloudBackendTests(unittest.TestCase):
             event({"tool_calls": [{
                 "index": 0, "id": "call_123", "type": "function",
                 "function": {"name": "read_file", "arguments": '{"path":'}
-            ]}),
+            }]}),
             event({"tool_calls": [{
                 "index": 0, "function": {"arguments": '"README.md"}'}
-            ]}),
+            }]}),
             event(done=True),
         ])
         schema = [{"type": "function", "function": {
