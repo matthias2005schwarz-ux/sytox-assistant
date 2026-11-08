@@ -55,6 +55,28 @@ class DirectAppIntentTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertEqual(app_open_intent(phrase), expected)
 
+    def test_natural_polite_requests_use_direct_launcher(self):
+        for phrase, expected in (
+                ('Kannst du Spotify öffnen?', 'Spotify'),
+                ('Hey Sytox, kannst du bitte Spotify öffnen?', 'Spotify'),
+                ('Könntest du Discord starten?', 'Discord'),
+                ('Würdest du bitte Notepad öffnen?', 'Notepad'),
+                ('Could you please open Spotify?', 'Spotify'),
+                ('Open Google Chrome', 'Google Chrome')):
+            with self.subTest(phrase=phrase):
+                self.assertEqual(app_open_intent(phrase), expected)
+
+    def test_polite_requests_still_reject_unsafe_actions(self):
+        for phrase in ('Kannst du Spotify öffnen und Discord starten?',
+                       'Kannst du nicht Spotify öffnen?',
+                       'Kannst du Spotify.exe öffnen?',
+                       'Kannst du Spotify öffnen? und danach löschen',
+                       'Kannst du die Datei öffnen?',
+                       'Wie kann ich Spotify öffnen?',
+                       'Kannst du Spotify öffnen??'):
+            with self.subTest(phrase=phrase):
+                self.assertIsNone(app_open_intent(phrase))
+
     def test_curated_aliases_do_not_guess_at_unrelated_names(self):
         for phrase, expected in (('starte Taschenrechner', 'Rechner'),
                                  ('öffne Chrome', 'Google Chrome'),
@@ -65,7 +87,7 @@ class DirectAppIntentTests(unittest.TestCase):
 
     def test_search_questions_negation_and_quoted_commands_are_not_launch_intents(self):
         for phrase in ('suche Programm Firefox', 'finde Spotify',
-                       'Kannst du Spotify öffnen?', 'Wie öffne ich Spotify?',
+                       'Wie öffne ich Spotify?',
                        'öffne Spotify nicht', 'öffne nicht Spotify',
                        'Bitte starte kein Spotify', '"öffne Spotify"',
                        'Erkläre den Befehl öffne Spotify', 'öffne die private Datei',
