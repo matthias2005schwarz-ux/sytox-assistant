@@ -37,7 +37,7 @@ jobs:
       - name: Upload visual workspace preview
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-ui-preview-0.3.12
+          name: sytox-ui-preview-0.3.13
           path: preview/sytox-black-crimson.png
           if-no-files-found: error
       - name: Build EXE and smoke-test startup
@@ -60,7 +60,7 @@ jobs:
       - name: Archive portable update package (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-portable-0.3.12
+          name: sytox-windows-portable-0.3.13
           path: dist/SYTOX_Assistant_Portable_CI.zip
           if-no-files-found: error
       # Dedicated app release gate: unit, EXE, direct-update, rollback and installer.
@@ -78,7 +78,7 @@ jobs:
         shell: powershell
         run: |
           .\Build_Installer.ps1 -SkipExeBuild
-          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.12.exe')) { throw 'Installer was not built' }
+          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.13.exe')) { throw 'Installer was not built' }
       - name: Install, launch, uninstall and verify user data on Windows runner
         shell: powershell
         run: .\Installer_Install_Smoke_Test.ps1
@@ -86,21 +86,21 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            'installer/SYTOX_Assistant_Setup_0.3.12.exe',
+            'installer/SYTOX_Assistant_Setup_0.3.13.exe',
             'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
           )
           foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
       - name: Archive Windows standalone app (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-app-0.3.12
+          name: sytox-windows-app-0.3.13
           path: dist/SYTOX_Assistant/
           if-no-files-found: error
       - name: Archive Windows installer (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.12
-          path: installer/SYTOX_Assistant_Setup_0.3.12.exe
+          name: sytox-windows-setup-0.3.13
+          path: installer/SYTOX_Assistant_Setup_0.3.13.exe
           if-no-files-found: error
 
   extra-language-builds:
@@ -171,8 +171,8 @@ jobs:
           & .\.venv\Scripts\python.exe tools/windows_multilang_smoke.py
           if ($LASTEXITCODE -ne 0) { throw 'One of the 8 extra language build/run checks failed' }
 
-  publish-verified-0312:
-    name: Publish SYTOX 0.3.12 after verified Windows upgrade and rollback
+  publish-verified-0313:
+    name: Publish SYTOX 0.3.13 after verified Windows upgrade and rollback
     needs: windows-smoke
     # Never publish a development-branch build or a failed Windows test.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -184,12 +184,12 @@ jobs:
       - name: Download verified Windows setup
         uses: actions/download-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.12
+          name: sytox-windows-setup-0.3.13
           path: release
       - name: Download verified portable Windows package
         uses: actions/download-artifact@v4
         with:
-          name: sytox-windows-portable-0.3.12
+          name: sytox-windows-portable-0.3.13
           path: release
       - name: Verify release version and no existing publication
         id: gate
@@ -199,15 +199,15 @@ jobs:
         run: |
           set -euo pipefail
           version=$(python -c 'from sytox import __version__; print(__version__)')
-          if [ "$version" != "0.3.12" ]; then
+          if [ "$version" != "0.3.13" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if gh release view v0.3.12 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view v0.3.13 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          test -f release/SYTOX_Assistant_Setup_0.3.12.exe
+          test -f release/SYTOX_Assistant_Setup_0.3.13.exe
           test -f release/SYTOX_Assistant_Portable_CI.zip
           echo "publish=true" >> "$GITHUB_OUTPUT"
       - name: Publish installer and direct update with SHA-256 sidecars
@@ -218,14 +218,14 @@ jobs:
         run: |
           set -euo pipefail
           cd release
-          mv SYTOX_Assistant_Portable_CI.zip SYTOX_Assistant_Portable_0.3.12.zip
-          sha256sum SYTOX_Assistant_Setup_0.3.12.exe > SYTOX_Assistant_Setup_0.3.12.exe.sha256
-          sha256sum SYTOX_Assistant_Portable_0.3.12.zip > SYTOX_Assistant_Portable_0.3.12.zip.sha256
-          gh release create v0.3.12 \
-            SYTOX_Assistant_Setup_0.3.12.exe \
-            SYTOX_Assistant_Setup_0.3.12.exe.sha256 \
-            SYTOX_Assistant_Portable_0.3.12.zip \
-            SYTOX_Assistant_Portable_0.3.12.zip.sha256 \
+          mv SYTOX_Assistant_Portable_CI.zip SYTOX_Assistant_Portable_0.3.13.zip
+          sha256sum SYTOX_Assistant_Setup_0.3.13.exe > SYTOX_Assistant_Setup_0.3.13.exe.sha256
+          sha256sum SYTOX_Assistant_Portable_0.3.13.zip > SYTOX_Assistant_Portable_0.3.13.zip.sha256
+          gh release create v0.3.13 \
+            SYTOX_Assistant_Setup_0.3.13.exe \
+            SYTOX_Assistant_Setup_0.3.13.exe.sha256 \
+            SYTOX_Assistant_Portable_0.3.13.zip \
+            SYTOX_Assistant_Portable_0.3.13.zip.sha256 \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "SYTOX Assistant 0.3.12" \
-            --notes "SYTOX 0.3.12 verbessert Schnellantworten und Windows-Befehle mit sichtbarkeitsgefiltertem Ollama-Streaming. Integriert sind die vorhandenen Codex-Programmierfunktionen mit Projektanalyse, gezielten Codeaenderungen, Tests und zusaetzlicher Codepruefung, direkte Windows-Programmstarts, bessere Kontext- und Modellauswahl sowie Markdown-Code-Darstellung und dezentere UI-Animationen. Enthalten sind die Schnellchat- und Streaming-Verbesserungen, sichere In-App-Updates und Rollback. Alle Release-Builds und Windows-Update-/Rollback-Pruefungen muessen zuvor erfolgreich sein."
+            --title "SYTOX Assistant 0.3.13" \
+            --notes "SYTOX 0.3.13 ergänzt optionale Cloud-KI, sichere lokale Schlüsselspeicherung und Streaming. Version 0.3.12 verbessert Schnellantworten und Windows-Befehle mit sichtbarkeitsgefiltertem Ollama-Streaming. Integriert sind die vorhandenen Codex-Programmierfunktionen mit Projektanalyse, gezielten Codeaenderungen, Tests und zusaetzlicher Codepruefung, direkte Windows-Programmstarts, bessere Kontext- und Modellauswahl sowie Markdown-Code-Darstellung und dezentere UI-Animationen. Enthalten sind die Schnellchat- und Streaming-Verbesserungen, sichere In-App-Updates und Rollback. Alle Release-Builds und Windows-Update-/Rollback-Pruefungen muessen zuvor erfolgreich sein."
