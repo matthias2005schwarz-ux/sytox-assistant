@@ -53,6 +53,22 @@ class StreamingClientTests(unittest.TestCase):
         self.assertGreaterEqual(timings[0]['request_s'], timings[0]['time_to_first_token_s'])
         self.assertGreaterEqual(timings[0]['total_s'], timings[0]['request_s'])
 
+    def test_interactive_content_discards_embedded_thinking_across_chunks(self):
+        _, context = self.response([
+            {'message': {'content': '<th'}},
+            {'message': {'content': 'ink>private reasoning'}},
+            {'message': {'content': '</thi'}},
+            {'message': {'content': 'nk>Hallo!'}, 'done': True},
+        ])
+        tokens = []
+        client = OllamaClient(model='qwen3:4b')
+        with patch('sytox.agent.requests.post', return_value=context):
+            result = client.chat([{'role': 'user', 'content': 'Hallo'}],
+                                 interactive=True, on_token=tokens.append)
+        self.assertEqual(result['content'], 'Hallo!')
+        self.assertEqual(''.join(tokens), 'Hallo!')
+        self.assertNotIn('reasoning', str(tokens))
+
     def test_background_agent_keeps_its_options_tools_and_long_read_timeout(self):
         _, context = self.response([
             {'message': {'tool_calls': [{'function': {'name': 'list_files'}}]}, 'done': True}
