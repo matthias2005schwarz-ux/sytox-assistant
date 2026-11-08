@@ -1,4 +1,4 @@
-"""Direct native app confirmation; discovery never runs application code."""
+"""Open requested apps directly; ask for a choice only when results are ambiguous."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -54,7 +54,7 @@ class _AppLookup(QThread):
 
 
 class AppLaunchDialog(QDialog):
-    """Resolve in a worker, then require one explicit, specific confirmation."""
+    """Resolve in a worker and open a unique result under the user's command."""
 
     feedback = Signal(str)
     lookup_finished = Signal()
@@ -90,6 +90,8 @@ class AppLaunchDialog(QDialog):
         self.candidate_list.setAccessibleName('Passendes Programm oder Fenster auswählen')
         self.candidate_list.setStyleSheet('QListWidget#desktopAppList { min-height: 150px; }')
         self.candidate_list.currentRowChanged.connect(self._choose_row)
+        self.candidate_list.itemClicked.connect(self._open_choice)
+        self.candidate_list.itemActivated.connect(self._open_choice)
         root.addWidget(self.candidate_list, 1)
         self.target_name = QLabel()
         self.target_name.setTextFormat(Qt.PlainText)
@@ -113,12 +115,6 @@ class AppLaunchDialog(QDialog):
         self.cancel_button.setDefault(True)
         self.cancel_button.clicked.connect(self.reject)
         buttons.addWidget(self.cancel_button)
-        self.confirm_button = QPushButton('Starten')
-        self.confirm_button.setObjectName('primary')
-        self.confirm_button.setAutoDefault(False)
-        self.confirm_button.setAccessibleName('Ausgewählten Programmstart bestätigen')
-        self.confirm_button.clicked.connect(self.confirm_selected)
-        buttons.addWidget(self.confirm_button)
         root.addLayout(buttons)
         self.start_lookup()
 
@@ -127,7 +123,7 @@ class AppLaunchDialog(QDialog):
         return self._lookup_worker is not None and self._lookup_worker.isRunning()
 
     @property
-    def pending_confirmation(self):
+    def pending_choice(self):
         return bool(self._candidates and not self._closed and not self._close_requested
                     and not self._action_started)
 
@@ -146,7 +142,6 @@ class AppLaunchDialog(QDialog):
         self.candidate_list.hide()
         self.target_name.clear()
         self.target_detail.clear()
-        self.confirm_button.setEnabled(False)
         self.retry_button.hide()
         self.cancel_button.setText('Abbrechen')
         worker = _AppLookup(self.desktop, self.query, self)
@@ -160,7 +155,7 @@ class AppLaunchDialog(QDialog):
             return
         self._candidates = list(result.get('candidates') or [])
         state = result.get('status')
-        self._set_status(str(result.get('message') or 'Bitte den passenden Eintrag bestätigen.'))
+        self._set_status(str(result.get('message') or 'Suche abgeschlossen.'))
         if state == 'single' and len(self._candidates) == 1:
             candidate = self._candidates[0]
             if candidate.get('kind') == 'app' and candidate.get('_file_state') is None:
@@ -171,6 +166,9 @@ class AppLaunchDialog(QDialog):
                 self.cancel_button.setText('Schließen')
             else:
                 self._show_candidate(candidate)
+                self.open_selected()
+                if self._closed:
+                    return
         elif state == 'multiple' and self._candidates:
             self.candidate_list.show()
             for candidate in self._candidates:
@@ -185,6 +183,9 @@ class AppLaunchDialog(QDialog):
             self.retry_button.show()
             self.cancel_button.setText('Schließen')
         self.cancel_button.setFocus()
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _lookup_done(self):
         worker = self._lookup_worker
@@ -196,36 +197,37 @@ class AppLaunchDialog(QDialog):
         self.lookup_finished.emit()
 
     def _choose_row(self, row):
+        if self._closed or self._close_requested or self._action_started:
+            return
         candidate = self._candidates[row] if 0 <= row < len(self._candidates) else None
         self._show_candidate(candidate)
+
+    def _open_choice(self, item):
+        if self._closed or self._close_requested or self._action_started:
+            return
+        self._choose_row(self.candidate_list.row(item))
+        self.open_selected()
 
     def _show_candidate(self, candidate):
         self._selected = candidate
         self.target_name.setVisible(candidate is not None)
         self.target_detail.setVisible(candidate is not None)
-        enabled = candidate is not None and not self._action_started and not self._close_requested
-        self.confirm_button.setEnabled(enabled)
         if candidate is None:
             self.target_name.clear()
             self.target_detail.clear()
             return
         self.target_name.setText(str(candidate.get('name') or self.query))
         if candidate.get('kind') == 'window':
-            self.confirm_button.setText('Nach vorne holen')
-            self.confirm_button.setAccessibleName('Wechsel zum ausgewählten Fenster bestätigen')
             self.target_detail.setText('Bereits geöffnet · ' + str(candidate.get('title') or '') +
                                        '\n' + str(candidate.get('executable') or ''))
         else:
-            self.confirm_button.setText('Starten')
-            self.confirm_button.setAccessibleName('Ausgewählten Programmstart bestätigen')
             self.target_detail.setText(str(candidate.get('path') or ''))
 
-    def confirm_selected(self):
+    def open_selected(self):
         candidate = self._selected
         if candidate is None or self._closed or self._close_requested or self._action_started:
-            return
+            return False
         self._action_started = True
-        self.confirm_button.setEnabled(False)
         self.candidate_list.setEnabled(False)
         self.retry_button.hide()
         try:
@@ -235,7 +237,7 @@ class AppLaunchDialog(QDialog):
                                and str(entry.get('executable') or '').casefold() ==
                                str(candidate.get('executable') or '').casefold()), None)
                 if target is None or not candidate.get('executable'):
-                    raise LookupError('Das bestätigte Fenster ist nicht mehr verfügbar. Bitte erneut suchen.')
+                    raise LookupError('Das gefundene Fenster ist nicht mehr verfügbar. Bitte erneut suchen.')
                 self.desktop.activate(candidate['window_id'])
                 self._set_status(str(candidate.get('name') or self.query) + ': Fenster aktiviert.')
             elif candidate.get('kind') == 'app':
@@ -247,6 +249,8 @@ class AppLaunchDialog(QDialog):
             else:
                 raise ValueError('Der gewählte Eintrag kann nicht geöffnet werden.')
             self.cancel_button.setText('Schließen')
+            self._finish_close()
+            return True
         except Exception as exc:
             self._set_status('Nicht geöffnet: ' + str(exc))
             self._selected = None
@@ -257,19 +261,19 @@ class AppLaunchDialog(QDialog):
             self.candidate_list.setEnabled(True)
             self.retry_button.show()
             self.cancel_button.setText('Schließen')
+            return False
 
     def _finish_close(self):
         if self._closed:
+            self.hide()
             return
         self._closed = True
         self._selected = None
         self._candidates = []
-        self.confirm_button.setEnabled(False)
         super().reject()
 
     def prepare_close(self):
         self._close_requested = True
-        self.confirm_button.setEnabled(False)
         if self.lookup_running:
             self._lookup_worker.requestInterruption()
             self.hide()

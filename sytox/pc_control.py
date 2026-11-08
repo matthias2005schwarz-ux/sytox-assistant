@@ -16,7 +16,7 @@ from pathlib import Path, PureWindowsPath
 def _app_key(name):
     """Compare whole names, without guessing from words in a window title."""
     return ''.join(character for character in unicodedata.normalize('NFKC', name).casefold()
-                   if character.isalnum())
+                   if character.isalnum() or character == '+')
 
 
 _APP_EXECUTABLES = {}

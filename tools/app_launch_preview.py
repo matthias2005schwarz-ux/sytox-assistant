@@ -1,7 +1,7 @@
-"""Capture real app-opening dialogs from explicitly labelled, inert demo data.
+"""Capture real app-opening results from explicitly labelled, inert demo data.
 
-Uses no model, microphone, network or Windows action. Every launch/activation
-entry point on the fake adapter raises if accidentally called.
+Uses no model, microphone, network or Windows action. The fake adapter records
+simulated automatic launches and activations without calling the OS.
 """
 from __future__ import annotations
 
@@ -24,12 +24,12 @@ from sytox.theme import STYLE
 
 
 class DemoDesktop:
-    """Read-only metadata for the preview, never an actual desktop adapter."""
+    """Inert metadata and action receipts, never an actual desktop adapter."""
 
     def __init__(self, apps=(), windows=()):
         self.apps = list(apps)
         self.app_windows = list(windows)
-        self.action_attempts = 0
+        self.actions = []
 
     def find_apps(self, query):
         return [dict(entry) for entry in self.apps]
@@ -38,12 +38,10 @@ class DemoDesktop:
         return [dict(entry) for entry in self.app_windows]
 
     def open_app(self, path):
-        self.action_attempts += 1
-        raise AssertionError('The preview must never request a program launch.')
+        self.actions.append(('open', str(path)))
 
     def activate(self, window_id):
-        self.action_attempts += 1
-        raise AssertionError('The preview must never request a window activation.')
+        self.actions.append(('activate', window_id))
 
 
 def capture(app, desktop, destination, scenario):
@@ -53,7 +51,6 @@ def capture(app, desktop, destination, scenario):
     banner.setTextFormat(Qt.PlainText)
     banner.setWordWrap(True)
     dialog.layout().insertWidget(0, banner)
-    dialog.show()
     loop = QEventLoop()
     timeout = QTimer(dialog)
     timeout.setSingleShot(True)
@@ -72,19 +69,27 @@ def capture(app, desktop, destination, scenario):
             raise RuntimeError('Demo metadata lookup did not finish.')
         if scenario == 'choose-app':
             if (dialog.candidate_list.count() != 2 or dialog.candidate_list.currentRow() != -1
-                    or dialog.confirm_button.isEnabled()):
+                    or not dialog.pending_choice or desktop.actions):
                 raise RuntimeError('The multiple-match preview is not awaiting an explicit choice.')
         elif scenario == 'running-window':
-            if dialog.confirm_button.text() != 'Nach vorne holen' or not dialog.confirm_button.isEnabled():
-                raise RuntimeError('The running-window preview did not resolve its inert process metadata.')
-        elif not dialog.confirm_button.isEnabled() or dialog.confirm_button.text() != 'Starten':
-            raise RuntimeError('The single-match preview did not resolve its inert shortcut.')
+            if desktop.actions != [('activate', 42)] or not dialog._closed:
+                raise RuntimeError('The running-window preview did not activate its inert process exactly once.')
+        elif (desktop.actions != [('open', str(desktop.apps[0]['path']))] or not dialog._closed):
+            raise RuntimeError('The single-match preview did not open its inert shortcut exactly once.')
+        if scenario != 'choose-app':
+            banner.setText('Lokale Ablaufvorschau · keine Windows-Aktion\n'
+                           'Ergebnisansicht nach automatischem Öffnen.')
+            # Normal successful requests close themselves. Show their real
+            # result here only so the offline preview can document the outcome.
+            dialog.show()
+            app.processEvents()
+        before_capture = list(desktop.actions)
         output = destination / (scenario + '.png')
         image = dialog.grab()
         if image.isNull() or not image.save(str(output), 'PNG') or output.stat().st_size < 10000:
             raise RuntimeError('The native dialog screenshot was not saved.')
-        if desktop.action_attempts:
-            raise RuntimeError('An action was incorrectly attempted during the preview.')
+        if desktop.actions != before_capture:
+            raise RuntimeError('Showing the preview incorrectly repeated an action.')
         print(f'Native dialog preview saved: {output}')
     finally:
         dialog.prepare_close()
@@ -105,6 +110,7 @@ def main():
     destination = Path(sys.argv[1]).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     app = QApplication.instance() or QApplication(['sytox-app-launch-preview'])
+    app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(STYLE)
     with tempfile.TemporaryDirectory(prefix='sytox-app-launch-preview-') as temporary:
         demo = Path(temporary)

@@ -2752,13 +2752,13 @@ class MainWindow(QMainWindow):
         dialog.activateWindow()
 
     def show_app_request(self, query):
-        """Resolve a compact app command locally; execution remains an explicit click."""
+        """Open a uniquely matched app directly, without a model or extra confirmation."""
         if self._is_exiting:
             return
         current = self.app_launch_dialog
         if current is not None and (current.lookup_running or
-                                    (current.isVisible() and current.pending_confirmation)):
-            self.log('Windows', 'Es wartet bereits eine Programmanfrage. Bitte zuerst bestätigen oder schließen.')
+                                    (current.isVisible() and current.pending_choice)):
+            self.log('Windows', 'Eine Programmanfrage läuft bereits. Bitte warten oder den passenden Treffer auswählen.')
             if current.isVisible():
                 current.raise_()
                 current.activateWindow()
@@ -2766,13 +2766,16 @@ class MainWindow(QMainWindow):
         if current is not None:
             current.prepare_close()
             current.deleteLater()
+        self._app_request_feedback(f'Suche „{query}“ auf deinem PC …')
         dialog = AppLaunchDialog(query, parent=self)
         self.app_launch_dialog = dialog
-        dialog.feedback.connect(lambda text: self.log('Windows', text))
+        dialog.feedback.connect(self._app_request_feedback)
         dialog.lookup_finished.connect(self._app_lookup_finished)
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+
+    def _app_request_feedback(self, text):
+        self.log('Windows', text)
+        self.state.setText(str(text)[:80])
+        self.state.setToolTip(str(text))
 
     def _close_app_request(self, action):
         dialog = self.app_launch_dialog

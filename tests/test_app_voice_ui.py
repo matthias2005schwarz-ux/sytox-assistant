@@ -18,6 +18,7 @@ from sytox.voice_features import VoiceTurnRouter
 class LocalDesktop:
     def __init__(self, shortcut):
         self.shortcut = shortcut
+        self.apps = [{'name': shortcut.stem, 'path': str(shortcut)}]
         self.opened = []
         self.focused = []
         self.release = None
@@ -30,7 +31,7 @@ class LocalDesktop:
         self.entered.set()
         if self.release is not None:
             self.release.wait(3)
-        return [{'name': 'Spotify', 'path': str(self.shortcut)}]
+        return [dict(app) for app in self.apps if query.casefold() in app['name'].casefold()]
 
     def open_app(self, path):
         self.opened.append(path)
@@ -89,7 +90,7 @@ class AppVoiceUiTests(unittest.TestCase):
         self.wait_for(lambda: dialog._lookup_worker is None)
         return dialog
 
-    def test_wake_command_leads_to_one_confirmation_without_model_or_agent(self):
+    def test_wake_command_opens_the_unique_program_without_click_model_or_agent(self):
         command = VoiceTurnRouter().command_for('Hey Sytox, öffne Spotify')
         with patch.object(self.window, 'send') as send, \
              patch.object(self.window, 'start_worker') as agent, \
@@ -99,11 +100,26 @@ class AppVoiceUiTests(unittest.TestCase):
         send.assert_not_called()
         agent.assert_not_called()
         quick.assert_not_called()
-        self.assertEqual(self.desktop.opened, [])
-        self.assertEqual(dialog.target_name.text(), 'Spotify')
-        self.assertTrue(dialog.confirm_button.isEnabled())
-        dialog.confirm_button.click()
         self.assertEqual(self.desktop.opened, [self.desktop.shortcut])
+        self.assertFalse(dialog.isVisible())
+        self.assertTrue(dialog._closed)
+        self.assertFalse(dialog.pending_choice)
+
+    def test_an_arbitrary_program_name_uses_the_same_automatic_voice_path(self):
+        shortcut = Path(self.profile.name) / 'Meine Musikzentrale.lnk'
+        shortcut.write_bytes(b'another local inert shortcut')
+        self.desktop.apps = [{'name': 'Meine Musikzentrale', 'path': str(shortcut)}]
+        command = VoiceTurnRouter().command_for('Hey Sytox, öffne Meine Musikzentrale')
+        with patch.object(self.window, 'send') as send, \
+             patch.object(self.window, 'start_worker') as agent, \
+             patch.object(self.window, 'start_quick_reply') as quick:
+            self.window.received_voice_command(command)
+            dialog = self.ready_dialog()
+        send.assert_not_called()
+        agent.assert_not_called()
+        quick.assert_not_called()
+        self.assertEqual(self.desktop.opened, [shortcut])
+        self.assertFalse(dialog.isVisible())
 
     def test_typed_open_while_coding_does_not_modify_or_stop_the_task(self):
         running = MagicMock()
@@ -118,9 +134,10 @@ class AppVoiceUiTests(unittest.TestCase):
         amendment.assert_not_called()
         running.stop_event.set.assert_not_called()
         self.assertIs(self.window.worker, running)
-        self.assertTrue(dialog.pending_confirmation)
+        self.assertFalse(dialog.pending_choice)
         self.assertEqual(self.window.store.tasks(self.window.chat_id), [])
-        self.assertEqual(self.desktop.opened, [])
+        self.assertEqual(self.desktop.opened, [self.desktop.shortcut])
+        self.assertFalse(dialog.isVisible())
 
     def test_explicit_app_search_keeps_the_existing_readonly_panel(self):
         with patch.object(self.window, 'show_desktop_tools') as panel, \
@@ -129,9 +146,14 @@ class AppVoiceUiTests(unittest.TestCase):
         panel.assert_called_once_with(query='Firefox', list_windows=False)
         direct.assert_not_called()
 
-    def test_pending_confirmation_is_not_retargeted_by_a_second_request(self):
+    def test_pending_multiple_choice_is_not_retargeted_by_a_second_request(self):
+        other = Path(self.profile.name) / 'Other Spotify.lnk'
+        other.write_bytes(b'other local inert shortcut')
+        self.desktop.apps.append({'name': 'Spotify', 'path': str(other)})
         self.window.received_voice_command('Öffne Spotify')
         first = self.ready_dialog()
+        self.assertTrue(first.pending_choice)
+        self.assertTrue(first.isVisible())
         self.window.received_voice_command('Öffne Discord')
         self.assertIs(self.window.app_launch_dialog, first)
         self.assertEqual(first.query, 'Spotify')
@@ -140,12 +162,13 @@ class AppVoiceUiTests(unittest.TestCase):
     def test_successful_request_can_be_followed_by_another_without_manual_close(self):
         self.window.received_voice_command('Öffne Spotify')
         first = self.ready_dialog()
-        first.confirm_button.click()
+        self.assertEqual(self.desktop.opened, [self.desktop.shortcut])
         self.window.received_voice_command('Öffne Spotify')
         second = self.ready_dialog()
         self.assertIsNot(second, first)
-        self.assertEqual(len(self.desktop.opened), 1)
-        self.assertTrue(second.pending_confirmation)
+        self.assertEqual(self.desktop.opened, [self.desktop.shortcut, self.desktop.shortcut])
+        self.assertFalse(second.pending_choice)
+        self.assertFalse(second.isVisible())
 
     def test_close_waits_for_lookup_and_discards_its_result(self):
         self.desktop.release = threading.Event()
@@ -159,7 +182,7 @@ class AppVoiceUiTests(unittest.TestCase):
         self.desktop.release.set()
         self.wait_for(lambda: not self.window.isVisible())
         self.assertFalse(dialog.lookup_running)
-        self.assertFalse(dialog.confirm_button.isEnabled())
+        self.assertFalse(dialog.pending_choice)
         self.assertEqual(self.desktop.opened, [])
 
 

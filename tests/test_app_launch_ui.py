@@ -1,16 +1,17 @@
-"""Direct app confirmation against real Qt widgets and fake Windows adapters."""
+"""Automatic app opening against real Qt widgets and inert desktop adapters."""
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import QCoreApplication, QEvent, QTimer, QThread, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 from shiboken6 import isValid
 
-from sytox.app_launch_ui import AppLaunchDialog
+from sytox.app_launch_ui import AppLaunchDialog, _shortcut_state
 
 
 class FakeDesktop:
@@ -21,14 +22,18 @@ class FakeDesktop:
         self.focused = []
         self.release = None
         self.search_started = threading.Event()
+        self.window_queries = []
+        self.app_queries = []
 
     def find_app_windows(self, query):
+        self.window_queries.append(query)
         self.search_started.set()
         if self.release:
             self.release.wait(3)
         return list(self.app_windows)
 
     def find_apps(self, query):
+        self.app_queries.append(query)
         return list(self.apps)
 
     def open_app(self, path):
@@ -73,100 +78,155 @@ class AppLaunchDialogTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(predicate(), 'Qt lookup did not reach the expected state')
 
-    def dialog(self, *, wait=True):
-        dialog = AppLaunchDialog('Spotify', desktop=self.desktop)
+    def dialog(self, *, query='Spotify', wait=True):
+        dialog = AppLaunchDialog(query, desktop=self.desktop)
         self.dialogs.append(dialog)
-        dialog.show()
         if wait:
             self.wait_for(lambda: dialog._lookup_worker is None)
         return dialog
 
-    def test_unique_shortcut_needs_one_explicit_confirmation_and_cannot_launch_twice(self):
-        dialog = self.dialog()
-        self.assertFalse(dialog.candidate_list.isVisible())
-        self.assertTrue(dialog.confirm_button.isEnabled())
-        self.assertIn(str(self.shortcut), dialog.target_detail.text())
-        self.assertEqual(self.desktop.opened, [])
-        self.assertTrue(dialog.pending_confirmation)
-        dialog.confirm_button.click()
-        dialog.confirm_selected()
-        self.assertEqual(self.desktop.opened, [self.shortcut])
-        self.assertIn('an Windows übergeben', dialog.status.text())
-        self.assertFalse(dialog.confirm_button.isEnabled())
-        self.assertFalse(dialog.pending_confirmation)
-
-    def test_cancel_and_default_enter_never_launch(self):
-        dialog = self.dialog()
-        self.assertTrue(dialog.cancel_button.isDefault())
-        QTest.keyClick(dialog, Qt.Key_Return)
-        self.app.processEvents()
-        self.assertTrue(dialog._closed)
-        self.assertEqual(self.desktop.opened, [])
-        dialog.confirm_selected()
-        self.assertEqual(self.desktop.opened, [])
-
-    def test_multiple_shortcuts_require_selection_before_confirmation(self):
+    def multiple_apps(self):
         other = Path(self.temp.name) / 'Other Spotify.lnk'
         other.write_bytes(b'another inert shortcut')
         self.desktop.apps.append({'name': 'Spotify', 'path': str(other)})
+        return other
+
+    def test_unique_shortcut_opens_without_click_and_cannot_launch_twice(self):
         dialog = self.dialog()
+        self.assertEqual(self.desktop.opened, [self.shortcut])
+        self.assertIn('an Windows übergeben', dialog.status.text())
+        self.assertTrue(dialog._closed)
+        self.assertFalse(dialog.isVisible())
+        self.assertFalse(dialog.pending_choice)
+        dialog.open_selected()
+        self.assertEqual(self.desktop.opened, [self.shortcut])
+
+    def test_unique_unlisted_programs_use_the_same_automatic_path(self):
+        for name in ('Audacity', 'Meine Musikzentrale'):
+            with self.subTest(name=name):
+                shortcut = Path(self.temp.name) / (name + '.lnk')
+                shortcut.write_bytes(b'inert custom program shortcut')
+                self.desktop.apps = [{'name': name, 'path': str(shortcut)}]
+                self.desktop.opened.clear()
+                dialog = self.dialog(query=name)
+                self.assertEqual(self.desktop.opened, [shortcut])
+                self.assertTrue(dialog._closed)
+                self.assertFalse(dialog.isVisible())
+
+    def test_multiple_shortcuts_open_on_one_actual_click_without_a_start_button(self):
+        other = self.multiple_apps()
+        dialog = self.dialog()
+        self.assertTrue(dialog.isVisible())
         self.assertEqual(dialog.candidate_list.count(), 2)
         self.assertEqual(dialog.candidate_list.currentRow(), -1)
-        self.assertFalse(dialog.confirm_button.isEnabled())
-        self.assertTrue(dialog.pending_confirmation)
-        dialog.confirm_selected()
+        self.assertTrue(dialog.pending_choice)
         self.assertEqual(self.desktop.opened, [])
+        self.assertNotIn('Starten', [button.text() for button in dialog.findChildren(QPushButton)])
         dialog.candidate_list.setCurrentRow(1)
-        dialog.confirm_button.click()
+        self.assertEqual(self.desktop.opened, [])  # Browsing the list is not choosing it.
+        item = dialog.candidate_list.item(1)
+        QTest.mouseClick(dialog.candidate_list.viewport(), Qt.LeftButton,
+                         pos=dialog.candidate_list.visualItemRect(item).center())
+        self.app.processEvents()
         self.assertEqual(self.desktop.opened, [other])
+        dialog.candidate_list.itemActivated.emit(item)  # A following double-click event cannot launch again.
+        dialog.open_selected()
+        self.assertEqual(self.desktop.opened, [other])
+        self.assertFalse(dialog.isVisible())
 
-    def test_missing_program_has_clear_message_and_retry_without_actions(self):
+    def test_keyboard_navigation_requires_enter_to_choose_a_multiple_match(self):
+        self.multiple_apps()
+        dialog = self.dialog()
+        dialog.candidate_list.setFocus()
+        QTest.keyClick(dialog.candidate_list, Qt.Key_Down)
+        self.assertEqual(self.desktop.opened, [])
+        selected = dialog.candidate_list.currentRow()
+        self.assertGreaterEqual(selected, 0)
+        expected = Path(self.desktop.apps[selected]['path'])
+        QTest.keyClick(dialog.candidate_list, Qt.Key_Return)
+        self.app.processEvents()
+        self.assertEqual(self.desktop.opened, [expected])
+
+    def test_cancelling_an_unselected_multiple_match_never_launches(self):
+        self.multiple_apps()
+        dialog = self.dialog()
+        dialog.reject()
+        self.assertTrue(dialog._closed)
+        dialog.open_selected()
+        self.assertEqual(self.desktop.opened, [])
+
+    def test_missing_program_has_clear_message_and_retry_opens_a_newly_found_program(self):
         self.desktop.apps.clear()
         dialog = self.dialog()
-        self.assertFalse(dialog.confirm_button.isEnabled())
+        self.assertTrue(dialog.isVisible())
         self.assertTrue(dialog.retry_button.isVisible())
-        self.assertFalse(dialog.pending_confirmation)
+        self.assertFalse(dialog.pending_choice)
         self.assertIn('nicht', dialog.status.text().casefold())
         self.assertEqual(self.desktop.opened, [])
         self.desktop.apps.append({'name': 'Spotify', 'path': str(self.shortcut)})
         dialog.retry_button.click()
         self.wait_for(lambda: dialog._lookup_worker is None)
-        self.assertTrue(dialog.confirm_button.isEnabled())
-        self.assertEqual(self.desktop.opened, [])
+        self.assertEqual(self.desktop.opened, [self.shortcut])
+        self.assertTrue(dialog._closed)
 
     def test_existing_process_window_is_revalidated_then_focused_without_launch(self):
         self.desktop.app_windows = [{'id': 42, 'title': 'Track title', 'app_name': 'Spotify',
                                      'executable': 'C:/Spotify/Spotify.exe', 'active': False}]
         dialog = self.dialog()
-        self.assertEqual(dialog.confirm_button.text(), 'Nach vorne holen')
-        self.assertEqual(self.desktop.focused, [])
-        dialog.confirm_button.click()
         self.assertEqual(self.desktop.focused, [42])
         self.assertEqual(self.desktop.opened, [])
+        self.assertEqual(self.desktop.app_queries, [])
+        self.assertEqual(len(self.desktop.window_queries), 2)
         self.assertIn('Fenster aktiviert', dialog.status.text())
+        self.assertTrue(dialog._closed)
+        self.assertFalse(dialog.isVisible())
 
     def test_changed_process_identity_cannot_focus_or_fall_back_to_launch(self):
-        self.desktop.app_windows = [{'id': 42, 'title': 'Spotify', 'app_name': 'Spotify',
-                                     'executable': 'C:/Spotify/Spotify.exe'}]
+        original = {'id': 42, 'title': 'Spotify', 'app_name': 'Spotify',
+                    'executable': 'C:/Spotify/Spotify.exe'}
+        changed = {**original, 'executable': 'C:/Other/Other.exe'}
+        self.desktop.find_app_windows = MagicMock(side_effect=[[original], [changed]])
         dialog = self.dialog()
-        self.desktop.app_windows[0]['executable'] = 'C:/Other/Other.exe'
-        dialog.confirm_button.click()
         self.assertEqual(self.desktop.focused, [])
         self.assertEqual(self.desktop.opened, [])
         self.assertIn('Nicht geöffnet', dialog.status.text())
+        self.assertTrue(dialog.isVisible())
+        self.assertTrue(dialog.retry_button.isVisible())
 
-    def test_changed_or_deleted_shortcut_needs_a_new_search_and_confirmation(self):
-        dialog = self.dialog()
-        self.shortcut.write_bytes(b'a changed shortcut is a different permission target')
-        dialog.confirm_button.click()
+    def test_changed_shortcut_between_discovery_and_open_is_not_launched(self):
+        calls = []
+
+        def change_after_snapshot(raw):
+            state = _shortcut_state(raw)
+            calls.append(raw)
+            if len(calls) == 1:
+                self.shortcut.write_bytes(b'changed after discovery before automatic opening')
+            return state
+
+        with patch('sytox.app_launch_ui._shortcut_state', side_effect=change_after_snapshot):
+            dialog = self.dialog()
         self.assertEqual(self.desktop.opened, [])
         self.assertIn('verändert oder entfernt', dialog.status.text())
         self.assertTrue(dialog.retry_button.isVisible())
         dialog.retry_button.click()
         self.wait_for(lambda: dialog._lookup_worker is None)
-        self.shortcut.unlink()
-        dialog.confirm_button.click()
+        self.assertEqual(self.desktop.opened, [self.shortcut])
+
+    def test_deleted_shortcut_between_discovery_and_open_is_not_launched(self):
+        calls = []
+
+        def delete_after_snapshot(raw):
+            state = _shortcut_state(raw)
+            calls.append(raw)
+            if len(calls) == 1:
+                self.shortcut.unlink()
+            return state
+
+        with patch('sytox.app_launch_ui._shortcut_state', side_effect=delete_after_snapshot):
+            dialog = self.dialog()
         self.assertEqual(self.desktop.opened, [])
+        self.assertIn('Nicht geöffnet', dialog.status.text())
+        self.assertTrue(dialog.retry_button.isVisible())
 
     def test_lookup_keeps_gui_responsive_and_cancel_discards_late_result(self):
         self.desktop.release = threading.Event()
@@ -183,13 +243,13 @@ class AppLaunchDialogTests(unittest.TestCase):
         self.desktop.release.set()
         self.wait_for(lambda: dialog._lookup_worker is None)
         self.assertTrue(dialog._closed)
-        self.assertFalse(dialog.confirm_button.isEnabled())
         self.assertEqual(self.desktop.opened, [])
         self.assertEqual(self.desktop.focused, [])
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         self.assertEqual(dialog.findChildren(QThread), [])
 
-    def test_retry_waits_for_the_finished_signal_cleanup_even_after_thread_has_stopped(self):
+    def test_retry_waits_for_finished_signal_cleanup_before_starting_another_worker(self):
+        self.desktop.apps.clear()
         dialog = self.dialog(wait=False)
         previous = dialog._lookup_worker
         self.assertIsNotNone(previous)
@@ -198,7 +258,7 @@ class AppLaunchDialogTests(unittest.TestCase):
         dialog.start_lookup()
         self.assertIs(dialog._lookup_worker, previous)
         self.wait_for(lambda: dialog._lookup_worker is None)
-        self.assertTrue(dialog.confirm_button.isEnabled())
+        self.assertTrue(dialog.retry_button.isVisible())
         self.assertEqual(self.desktop.opened, [])
 
 

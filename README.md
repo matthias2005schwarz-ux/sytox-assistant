@@ -1,9 +1,10 @@
 ## Programme direkt per Sprachbefehl öffnen
 
-„Hey Sytox, öffne Spotify“ führt jetzt ohne Modellanfrage zu einer konkreten
-Startbestätigung. Bereits geöffnete Programme können nach Bestätigung nach vorne
-geholt werden; mehrere passende Treffer bleiben zur Auswahl. Auch kompakte
-getippte Startbefehle verwenden diesen Weg. [Bedienung und Grenzen](docs/app-launch.md).
+„Hey Sytox, öffne Spotify“ öffnet ein eindeutig gefundenes Programm direkt, ohne
+Modellanfrage und ohne weiteren Klick. Bereits geöffnete Programme werden nach
+vorne geholt. Das gilt für alle auffindbaren Programme; bei mehreren Treffern
+reicht die Auswahl des gewünschten Eintrags. Auch kompakte getippte Startbefehle
+verwenden diesen Weg. [Bedienung und Grenzen](docs/app-launch.md).
 
 ## Ruhigere Animationen und direkteres Feedback
 
@@ -169,8 +170,8 @@ SYTOX kann neben den bisherigen kurzen Befehlen auch höfliche, natürlich formu
 ## Neu im aktuellen Entwicklungsstand: Sprach- und Desktop-Steuerung (noch ohne Release-Installer)
 
 - Im rechten Panel unter **Agent Control → Windows-Steuerung** können geöffnete Fenster angezeigt und Programme anhand von Windows-Startmenü-/Desktop-Verknüpfungen gesucht werden.
-- Ein Fenster wird nur **nach deiner Bestätigung** in den Vordergrund gebracht. Ein gefundenes Programm wird nur nach Auswahl und ausdrücklicher Bestätigung gestartet. Keine versteckten Shell-Befehle oder automatische Texteingabe.
-- Nach aktiviertem lokalem Gesprächsmodus mit „Hey Sytox“ funktionieren zusätzliche Befehle wie **„Zeig mir die offenen Fenster“**, **„Suche Programm Firefox“**, **„Öffne Editor“** und **„Mikrofon ausschalten“**. Die ersten drei öffnen nur die sichere Windows-Steuerzentrale; es wird dadurch noch nichts gestartet. Alle anderen Sprachaufträge laufen wie bisher über Agent/Tool-Freigaben.
+- In der manuellen Windows-Steuerzentrale werden Fensterwechsel und Programmstarts nach Auswahl und Bestätigung ausgeführt. Direkte Startbefehle wie **„Öffne Spotify“** öffnen dagegen einen eindeutigen Treffer sofort; bei mehreren Treffern reicht die Auswahl. Die vorhandenen Regeln für andere PC-Aktionen bleiben erhalten.
+- Nach aktiviertem lokalem Gesprächsmodus mit „Hey Sytox“ funktionieren zusätzliche Befehle wie **„Zeig mir die offenen Fenster“**, **„Suche Programm Firefox“**, **„Öffne Editor“** und **„Mikrofon ausschalten“**. Fensterlisten und Suchaufträge öffnen die Windows-Steuerzentrale; kompakte Startbefehle verwenden den direkten Programmstart. Andere Sprachaufträge laufen wie bisher über Agent/Tool-Freigaben.
 - Die Offline-Spracherkennung benötigt weiterhin das deutsche Vosk-Modell und ein funktionsfähiges Mikrofon. Für Windows-Tests wurden simulierte Desktop-/Zustimmungsprüfungen ergänzt; reale Mikrofon- und Desktop-Hardware müssen auf dem eigenen Windows-PC geprüft werden.
 - Diese Änderungen sind **Quellcode**. Eine neue, erfolgreich verifizierte Windows-EXE und ein Installer wurden für diesen Entwicklungsstand noch nicht bereitgestellt.
 

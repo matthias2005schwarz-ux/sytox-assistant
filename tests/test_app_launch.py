@@ -85,6 +85,15 @@ class DirectAppIntentTests(unittest.TestCase):
 
 
 class AppRequestResolutionTests(unittest.TestCase):
+    def test_notepad_plus_plus_remains_a_distinct_requested_program(self):
+        self.assertEqual(app_open_intent('Öffne Notepad++'), 'Notepad++')
+        desktop = FakeDesktop(apps=[shortcut('Notepad', 'C:/Apps/Notepad.lnk'),
+                                    shortcut('Notepad++', 'C:/Apps/NotepadPlusPlus.lnk')])
+        result = resolve_app_request(desktop, 'Notepad++')
+        self.assertEqual(result['status'], 'single')
+        self.assertEqual(result['candidates'][0]['name'], 'Notepad++')
+        self.assertEqual(desktop.calls[0], ('find_app_windows', 'Notepad++'))
+
     def test_existing_process_window_is_preferred_without_starting_a_second_copy(self):
         desktop = FakeDesktop(windows=[app_window()], apps=[shortcut()])
         result = resolve_app_request(desktop, 'Spotify')

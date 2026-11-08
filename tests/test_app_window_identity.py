@@ -60,6 +60,12 @@ class AppWindowIdentityTests(unittest.TestCase):
         self.assertEqual([entry['id'] for entry in desktop.find_app_windows('Music Box')], [2])
         self.assertEqual(desktop.find_app_windows('Spotify'), [])
 
+    def test_notepad_plus_plus_does_not_match_the_windows_notepad_process(self):
+        desktop = self.desktop([window(1, 'Notepad'), window(2, 'A document')],
+                               {1: r'C:\Windows\notepad.exe', 2: r'C:\Apps\notepad++.exe'})
+        self.assertEqual([entry['id'] for entry in desktop.find_app_windows('Notepad++')], [2])
+        self.assertEqual([entry['id'] for entry in desktop.find_app_windows('Notepad')], [1])
+
     def test_multiple_real_windows_remain_distinct_for_user_selection(self):
         desktop = self.desktop([window(1, 'One'), window(2, 'Two'), window(1, 'Duplicate')],
                                {1: r'C:\Chrome\chrome.exe', 2: r'C:\Chrome\chrome.exe'})

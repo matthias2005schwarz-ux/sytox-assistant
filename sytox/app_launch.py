@@ -55,7 +55,7 @@ _MAINTENANCE_ENDINGS = ('uninstall', 'uninstaller', 'deinstallieren', 'deinstall
 
 
 def _key(value):
-    return ''.join(character for character in value.casefold() if character.isalnum())
+    return ''.join(character for character in value.casefold() if character.isalnum() or character == '+')
 
 
 def _valid_name(value):
@@ -138,14 +138,14 @@ def _result(query, candidates=(), *, error=None, truncated=False):
                            'ist und eine Verknüpfung im Startmenü oder auf dem Desktop besitzt.'}
     single = len(candidates) == 1
     return {'status': 'single' if single else 'multiple', 'query': query, 'candidates': candidates,
-            'message': ('Ein passender Treffer. Bitte den Wechsel oder Start bestätigen.' if single else
-                        f'{len(candidates)} passende Treffer. Welches Programm bzw. Fenster meinst du?')}
+            'message': ('Ein passender Treffer wurde gefunden.' if single else
+                        f'{len(candidates)} passende Treffer. Wähle das gewünschte Programm oder Fenster; es wird direkt geöffnet.')}
 
 
 def resolve_app_request(desktop, query):
     """Return process-verified windows or discovered shortcuts, without action.
 
-    Discovery results are untrusted metadata. Confirmed path existence and the
+    Discovery results are untrusted metadata. Path existence and the
     current process identity must be checked by the UI immediately before action.
     """
     if not isinstance(query, str):
