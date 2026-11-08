@@ -97,7 +97,7 @@ class CloudChatClient:
     """Small OllamaClient-compatible facade; never executes tools itself."""
 
     def __init__(self, model=DEFAULT_CHAT_MODEL, *, api_key=None):
-        self.model = str(model or DEFAULT_CHAT_MODEL).strip()
+        self.model = str(model if model is not None else '').strip()
         if (not self.model or len(self.model) > 100 or
                 any(ch.isspace() for ch in self.model) or "/" in self.model):
             raise CloudAIError("Cloud-Modellname ungültig.")
