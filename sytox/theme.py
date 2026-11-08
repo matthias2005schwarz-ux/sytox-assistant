@@ -184,7 +184,7 @@ QFrame#codeBlock {{ background: #100F13; border: 1px solid #583846;
 QWidget#codeHeader {{ background: #241A21; border: none; }}
 QLabel#codeLanguage {{ color: #F097A0; font-size: 11px; font-weight: 700;
     background: transparent; border: none; }}
-QPlainTextEdit#codeEditor {{ background: #100F13; color: #EFEAF1;
+QPlainTextEdit#codeEditor {{ font-family: 'Consolas'; font-size: 13px; background: #100F13; color: #EFEAF1;
     border: none; border-radius: 0; padding: 10px 12px;
     selection-background-color: #71333F; }}
 QPlainTextEdit#codeEditor:focus {{ border: none; }}

@@ -131,7 +131,10 @@ class MarkdownContentTests(unittest.TestCase):
         self.content.setText('```python\n' + '\n'.join(f'print({n})' for n in range(11)) + '\n```')
         self.settle()
         editor = self.content.findChild(CodePane).editor
-        self.assertTrue(QFontInfo(editor.font()).fixedPitch())
+        resolved = QFontInfo(editor.font())
+        self.assertTrue(resolved.fixedPitch(),
+                        f'editor QFont={editor.font().family()}; resolved={resolved.family()}; '
+                        f'widget QSS={editor.styleSheet()[:180]}')
         self.assertTrue(QFontInfo(editor.document().defaultFont()).fixedPitch())
         self.assertEqual(editor.fontMetrics().horizontalAdvance('M'),
                          editor.fontMetrics().horizontalAdvance('i'))
