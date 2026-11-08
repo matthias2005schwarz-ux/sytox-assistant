@@ -1,3 +1,16 @@
+## SYTOX 0.3.13 – optionale Cloud-KI für JARVIS
+
+- **Cloud-Chat (freiwillig):** normale Unterhaltungen können über eine OpenAI-API laufen. Die KI-Berechnung erfolgt dann in der Cloud und nicht auf deiner lokalen GPU/CPU.
+- **Cloud-Programmier-Agent (separate Freigabe):** bei aktivierter Funktion nutzt der bestehende Agent das Cloud-Modell für Planung und Werkzeugaufrufe. Dateiänderungen und Windows-Aktionen werden weiterhin auf deinem PC über die bestehenden lokalen Werkzeuge und Sicherheitsprüfungen ausgeführt.
+- **Chat, Gedächtnis und Sprache:** die bestehende Oberfläche, Vosk-Spracherkennung, Sprachausgabe und lokale SQLite-Speicherung bleiben erhalten.
+- **Sicherheit:** beides ist standardmäßig **aus**. Ein API-Schlüssel wird nur im Windows-Anmeldedatenspeicher abgelegt; `settings.json` und GitHub enthalten ihn nicht. Bei Cloud-Chat werden Chattexte und relevante Erinnerungen übertragen, bei Cloud-Programmierung auch die dafür benötigten Projektauszüge und Werkzeugergebnisse.
+- **Kosten:** Das API-Konto wird separat abgerechnet und ist nicht in einem ChatGPT-Plus-Abo enthalten. Ohne gültigen persönlichen API-Schlüssel ist die Cloud-Funktion nicht aktiv.
+- **Grenzen:** lokale Sofortantworten und Programmstarts funktionieren weiterhin ohne Cloud. Für die Schnelligkeit normaler Cloud-Antworten gibt es keine Garantie; der Nutzer muss eine tatsächliche Verbindung selbst freigeben und prüfen.
+
+[Cloud-KI einrichten und Datenschutz](docs/cloud-mode.md).
+
+---
+
 ## SYTOX 0.3.12 – schnelle JARVIS-Basis
 
 - **Hi und andere reine Begrüßungen:** Sofortantwort ohne Ollama-Modellstart (auch im Projektchat).

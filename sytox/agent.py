@@ -17,6 +17,7 @@ from .actions import Toolkit, tool_schema, Cancelled
 from .web_search import should_search, search_web, format_results
 from .program_build import needs_compiled_artifact
 from .ram_saver import keep_alive_for_config
+from .cloud_ai import CloudChatClient, CloudAIError, DEFAULT_CODING_MODEL
 from .fast_interaction import VisibleReplyFilter
 from .model_resources import model_gate
 from .model_router import is_project_request
@@ -408,12 +409,22 @@ CONTROL_TOOLS = [
 
 
 class Agent:
+    MAX_CLOUD_STEPS = 20  # Hard per-run cap against unattended API bills.
     RETRY_DELAYS = (1, 2, 4)  # Seconds; configurable in unit tests.
     MAX_STEPS = 10000  # Additional guard for unattended runs.
-    def __init__(self, store, model, base_url, workspace, approve, logger, stop_event=None, gmail_client_secrets='', ram_keep_alive=None, screen_context=''):
+    def __init__(self, store, model, base_url, workspace, approve, logger, stop_event=None, gmail_client_secrets='', ram_keep_alive=None, screen_context='', cloud_config=None):
         self.store = store
-        self.client = OllamaClient(base_url, model, keep_alive=ram_keep_alive)
-        self.review_client = OllamaClient(base_url, model, keep_alive=ram_keep_alive)
+        # Explicit user opt-in only: project snippets and tool results can
+        # contain private files. Existing local Agent remains the default.
+        self._cloud_agent_enabled = bool(
+            cloud_config and cloud_config.get('cloud_agent_enabled') is True)
+        if self._cloud_agent_enabled:
+            cloud_model = cloud_config.get('cloud_coding_model') or DEFAULT_CODING_MODEL
+            self.client = CloudChatClient(model=cloud_model)
+            self.review_client = CloudChatClient(model=cloud_model)
+        else:
+            self.client = OllamaClient(base_url, model, keep_alive=ram_keep_alive)
+            self.review_client = OllamaClient(base_url, model, keep_alive=ram_keep_alive)
         self.workspace = workspace
         self.approve = approve
         self.logger = logger
@@ -686,6 +697,13 @@ class Agent:
                     status, result = ('time_elapsed',
                         'Arbeitszeit abgelaufen. Fortschritt gespeichert; Auftrag kann fortgesetzt werden.')
                     break
+                if self._cloud_agent_enabled and steps - previous_steps >= self.MAX_CLOUD_STEPS:
+                    status, result = (
+                        'paused', 'Cloud-Kostenlimit erreicht: maximal '
+                        f'{self.MAX_CLOUD_STEPS} KI-Schritte pro Arbeitsdurchlauf. '
+                        'Der aktuelle Stand wurde gespeichert. Nur bei Bedarf '
+                        'und nach Prüfung der API-Kosten fortsetzen.')
+                    break
                 steps += 1
                 step_started = time.monotonic()
                 self.logger('Status', f'{mode}: Schritt {steps} – Modell arbeitet …')
@@ -702,7 +720,7 @@ class Agent:
                     reply = self.client.chat(messages,
                         tools=tool_schema() + toolkit.extensions.schema() + (CONTROL_TOOLS if mode != 'once' or coding_task else []), stop=self.stop)
                     model_failures = 0
-                except OllamaError as exc:
+                except (OllamaError, CloudAIError) as exc:
                     model_failures += 1
                     checkpoint = {'steps': steps, 'last_result': str(exc)[:1800],
                         'model_failures': model_failures,
@@ -713,12 +731,17 @@ class Agent:
                         'unvalidated_paths': sorted(toolkit.unvalidated_paths),
                         'progress_notes': progress_notes[-8:]}
                     persist_task('running', checkpoint)
+                    # Authentication, API limits and cloud billing errors should
+                    # never trigger a series of automatic billed retries.
+                    if isinstance(exc, CloudAIError):
+                        status, result = 'paused', 'Cloud-KI nicht verfügbar: ' + str(exc)
+                        break
                     if model_failures >= len(self.RETRY_DELAYS):
-                        status, result = ('paused', 'Lokales Modell nach mehreren Versuchen nicht erreichbar: '
+                        status, result = ('paused', 'KI-Dienst nach mehreren Versuchen nicht erreichbar: '
                                           + str(exc) + '\nFortschritt gespeichert. Später fortsetzen.')
                         break
                     delay = self.RETRY_DELAYS[model_failures - 1]
-                    self.logger('Status', f'Ollama vorübergehend nicht verfügbar; neuer Versuch {model_failures + 1}.')
+                    self.logger('Status', f'KI-Dienst vorübergehend nicht verfügbar; neuer Versuch {model_failures + 1}.')
                     if self.stop.wait(delay):
                         raise Cancelled('Auftrag gestoppt')
                     continue
