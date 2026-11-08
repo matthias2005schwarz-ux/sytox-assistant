@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import math
+import sys
 
 from PySide6.QtCore import Signal, Qt, QTimer, QUrl, QByteArray, QSize, QEvent
 from PySide6.QtGui import QTextDocument, QTextOption, QImage, QFont, QFontInfo, QFontDatabase, QTextCursor
@@ -214,7 +215,16 @@ class CodePane(QFrame):
                      'Lucida Console', 'DejaVu Sans Mono', 'Liberation Mono')
         family_name = next((name for name in preferred
                             if name in available and QFontInfo(QFont(name)).fixedPitch()),
-                           QFontDatabase.systemFont(QFontDatabase.FixedFont).family())
+                           None)
+        if family_name is None:
+            system_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+            system_info = QFontInfo(system_font)
+            # Qt's offscreen platform can expose only the generic 'monospace'
+            # name and no resolvable glyphs. Request a real family for the
+            # installed Windows app even when the CI plugin has no font backend.
+            family_name = (system_font.family() if system_info.family()
+                           and system_info.fixedPitch() else
+                           ('Consolas' if sys.platform == 'win32' else 'DejaVu Sans Mono'))
         font = QFont(family_name)
         font.setStyleHint(QFont.Monospace, QFont.PreferMatch)
         font.setPixelSize(13)
