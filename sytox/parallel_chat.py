@@ -149,8 +149,13 @@ class ParallelReplyWorker(QThread):
             raise ValueError('Diese Nachricht ist für den Schnellchat zu lang '
                              '(mehr als 12.000 Zeichen). Bitte teile sie auf.')
         self.context_error = ''
-        if re.fullmatch(r'\s*(?:hallo|hi|hey|guten (?:tag|morgen|abend))[!.\s]*',
-                        question, re.IGNORECASE):
+        # Greetings and short social check-ins do not need memory search
+        # or project history. Avoid unnecessary local SQLite/FTS work.
+        if instant_reply(question) is not None or re.fullmatch(
+                r"\s*(?:(?:hallo|hi|hey)[,!.\s]+)?"
+                r"(?:wie\s+geht(?:'s|\s+es)\s+dir|"
+                r"wie\s+läuft(?:'s|\s+es)|alles\s+klar)[?!. ]*",
+                question, re.IGNORECASE):
             return
         self._check_cancelled()
         older = self.store.current_chat_context(question, self.chat_id, limit=3)
