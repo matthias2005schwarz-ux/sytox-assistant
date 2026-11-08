@@ -37,7 +37,7 @@ jobs:
       - name: Upload visual workspace preview
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-ui-preview-0.3.10
+          name: sytox-ui-preview-0.3.11
           path: preview/sytox-black-crimson.png
           if-no-files-found: error
       - name: Build EXE and smoke-test startup
@@ -60,7 +60,7 @@ jobs:
       - name: Archive portable update package (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-portable-0.3.10
+          name: sytox-windows-portable-0.3.11
           path: dist/SYTOX_Assistant_Portable_CI.zip
           if-no-files-found: error
       - uses: actions/setup-dotnet@v4
@@ -110,7 +110,7 @@ jobs:
         shell: powershell
         run: |
           .\Build_Installer.ps1 -SkipExeBuild
-          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.10.exe')) { throw 'Installer was not built' }
+          if (!(Test-Path 'installer\SYTOX_Assistant_Setup_0.3.11.exe')) { throw 'Installer was not built' }
       - name: Install, launch, uninstall and verify user data on Windows runner
         shell: powershell
         run: .\Installer_Install_Smoke_Test.ps1
@@ -118,25 +118,25 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            'installer/SYTOX_Assistant_Setup_0.3.10.exe',
+            'installer/SYTOX_Assistant_Setup_0.3.11.exe',
             'dist/SYTOX_Assistant/SYTOX_Assistant.exe'
           )
           foreach ($file in $files) { (Get-FileHash $file -Algorithm SHA256) | Format-List }
       - name: Archive Windows standalone app (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-app-0.3.10
+          name: sytox-windows-app-0.3.11
           path: dist/SYTOX_Assistant/
           if-no-files-found: error
       - name: Archive Windows installer (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.10
-          path: installer/SYTOX_Assistant_Setup_0.3.10.exe
+          name: sytox-windows-setup-0.3.11
+          path: installer/SYTOX_Assistant_Setup_0.3.11.exe
           if-no-files-found: error
 
-  publish-verified-0310:
-    name: Publish SYTOX 0.3.10 after verified Windows upgrade and rollback
+  publish-verified-0311:
+    name: Publish SYTOX 0.3.11 after verified Windows upgrade and rollback
     needs: windows-smoke
     # Never publish a development-branch build or a failed Windows test.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -148,12 +148,12 @@ jobs:
       - name: Download verified Windows setup
         uses: actions/download-artifact@v4
         with:
-          name: sytox-windows-setup-0.3.10
+          name: sytox-windows-setup-0.3.11
           path: release
       - name: Download verified portable Windows package
         uses: actions/download-artifact@v4
         with:
-          name: sytox-windows-portable-0.3.10
+          name: sytox-windows-portable-0.3.11
           path: release
       - name: Verify release version and no existing publication
         id: gate
@@ -163,15 +163,15 @@ jobs:
         run: |
           set -euo pipefail
           version=$(python -c 'from sytox import __version__; print(__version__)')
-          if [ "$version" != "0.3.10" ]; then
+          if [ "$version" != "0.3.11" ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if gh release view v0.3.10 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view v0.3.11 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          test -f release/SYTOX_Assistant_Setup_0.3.10.exe
+          test -f release/SYTOX_Assistant_Setup_0.3.11.exe
           test -f release/SYTOX_Assistant_Portable_CI.zip
           echo "publish=true" >> "$GITHUB_OUTPUT"
       - name: Publish installer and direct update with SHA-256 sidecars
@@ -182,14 +182,14 @@ jobs:
         run: |
           set -euo pipefail
           cd release
-          mv SYTOX_Assistant_Portable_CI.zip SYTOX_Assistant_Portable_0.3.10.zip
-          sha256sum SYTOX_Assistant_Setup_0.3.10.exe > SYTOX_Assistant_Setup_0.3.10.exe.sha256
-          sha256sum SYTOX_Assistant_Portable_0.3.10.zip > SYTOX_Assistant_Portable_0.3.10.zip.sha256
-          gh release create v0.3.10 \
-            SYTOX_Assistant_Setup_0.3.10.exe \
-            SYTOX_Assistant_Setup_0.3.10.exe.sha256 \
-            SYTOX_Assistant_Portable_0.3.10.zip \
-            SYTOX_Assistant_Portable_0.3.10.zip.sha256 \
+          mv SYTOX_Assistant_Portable_CI.zip SYTOX_Assistant_Portable_0.3.11.zip
+          sha256sum SYTOX_Assistant_Setup_0.3.11.exe > SYTOX_Assistant_Setup_0.3.11.exe.sha256
+          sha256sum SYTOX_Assistant_Portable_0.3.11.zip > SYTOX_Assistant_Portable_0.3.11.zip.sha256
+          gh release create v0.3.11 \
+            SYTOX_Assistant_Setup_0.3.11.exe \
+            SYTOX_Assistant_Setup_0.3.11.exe.sha256 \
+            SYTOX_Assistant_Portable_0.3.11.zip \
+            SYTOX_Assistant_Portable_0.3.11.zip.sha256 \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "SYTOX Assistant 0.3.10" \
-            --notes "SYTOX 0.3.10 bringt den echten gestreamten Schnellchat ohne Agent-Schleifen, schnellere Qwen-Antworten, eine kompaktere Steuerzentrale, Kopieren von Antworten und Code, lokale Chat-Suche und Chat-Export sowie gespeicherte Entwürfe, Fokus- und Lesepositionen. Enthält weiterhin sichere, SHA-256-geprüfte In-App-Updates mit automatischer Wiederherstellung bei Startfehlern. Die Windows-Tests und Update-/Rollback-Integrationstests wurden vor der Veröffentlichung ausgeführt."
+            --title "SYTOX Assistant 0.3.11" \
+            --notes "SYTOX 0.3.11 integriert verbesserte Codex-Programmierfunktionen mit Projektanalyse, gezielten Codeaenderungen, Tests und zusaetzlicher Codepruefung, direkte Windows-Programmstarts, bessere Kontext- und Modellauswahl sowie Markdown-Code-Darstellung und dezentere UI-Animationen. Enthalten sind die Schnellchat- und Streaming-Verbesserungen, sichere In-App-Updates und Rollback. Alle Release-Builds und Windows-Update-/Rollback-Pruefungen muessen zuvor erfolgreich sein."

@@ -1,3 +1,11 @@
+## SYTOX 0.3.11 – integrierte Codex-Erweiterungen
+
+Integriert Projektverständnis mit quellcodebezogener Suche, echte Projektprüfungen und Fehlerkorrektur, gezielte quellcodeschonende Änderungen, zusätzliche unabhängige Codeprüfung, direkte Programmstarts, verbesserte Aufgabenerkennung, native Markdown-/Code-Darstellung und dezente UI-Animationen. Behält die stabilisierte direkte Ollama-Streaming-Abbruchlogik aus 0.3.10 und den sicheren In-App-Updater mit Hashprüfung und Rollback bei.
+
+**Update:** Nach erfolgreicher Windows- und Release-Prüfung erscheint 0.3.11 unter „Nach Updates suchen“. Im Regelfall genügt ein bestätigtes Update aus der Anwendung; frühere Bestandsversionen können einmalig den integrierten Installer verwenden. Chats und Qwen-Projekte sollen erhalten bleiben; ein lokaler Praxistest mit Ollama ist weiterhin erforderlich.
+
+---
+
 ## Gezielte Codeänderungen mit zusätzlicher Prüfung
 
 Bestehender Code kann jetzt über eindeutige Textstellen geändert werden. Die
