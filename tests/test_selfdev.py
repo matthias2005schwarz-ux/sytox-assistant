@@ -123,6 +123,8 @@ class ProgressCheckpointTests(unittest.TestCase):
     def _agent(self, replies):
         agent = Agent(self.store, 'mock', 'http://unused', str(self.root/'workspace'),
                       lambda *_: True, lambda *_: None, threading.Event())
+        agent.review_client.chat = MagicMock(return_value={'role': 'assistant', 'content': json.dumps({
+            'status': 'passed', 'summary': 'Kontrollierter Prüfbefund', 'findings': []})})
         agent.client.chat = MagicMock(side_effect=replies)
         return agent
 

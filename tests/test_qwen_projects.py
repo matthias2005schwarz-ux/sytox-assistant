@@ -28,15 +28,16 @@ class ProjectStorageTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def test_projects_and_fast_chats_survive_database_reopen(self):
+    def test_projects_and_automatic_chats_survive_database_reopen(self):
         store = Store(self.db)
         cid = store.create_chat('Alltag')
         pid = store.create_chat('Meine Minecraft-Entwicklung', kind='project')
         store.add_message(pid, 'user', 'Bitte codiere ein Plugin')
-        self.assertEqual(store.chat_model_mode(cid), 'fast')
+        self.assertEqual(store.chat_model_mode(cid), 'auto')
         self.assertEqual(store.chat_model_mode(pid), 'project')
         self.assertEqual({item['kind'] for item in store.chats()}, {'chat', 'project'})
         store = Store(self.db)
+        self.assertEqual(store.chat_model_mode(cid), 'auto')
         self.assertEqual(store.chat_kind(pid), 'project')
         self.assertEqual(store.chat_model_mode(pid), 'project')
         self.assertEqual(store.messages(pid)[0]['content'], 'Bitte codiere ein Plugin')
@@ -60,13 +61,32 @@ class ProjectStorageTests(unittest.TestCase):
     def test_per_chat_manual_choice_is_not_shared_or_overridden_in_projects(self):
         store = Store(self.db)
         chat_a = store.create_chat('A')
-        chat_b = store.create_chat('B')
+        chat_b = store.create_chat('B', model_mode='fast')
         project = store.create_chat('Qwen', kind='project')
         store.set_chat_model_mode(chat_a, 'auto')
         store.set_chat_model_mode(project, 'fast')
         self.assertEqual(store.chat_model_mode(chat_a), 'auto')
         self.assertEqual(store.chat_model_mode(chat_b), 'fast')
         self.assertEqual(store.chat_model_mode(project), 'project')
+
+    def test_new_auto_chats_route_by_request_while_manual_choices_remain(self):
+        store = Store(self.db)
+        automatic = store.create_chat('Automatisch')
+        manual_fast = store.create_chat('Manuell klein', model_mode='fast')
+        manual_project = store.create_chat('Manuell groß', model_mode='project')
+        settings = {'model_mode': store.chat_model_mode(automatic)}
+        self.assertEqual(select_chat_model('Hallo', settings), ('qwen3:4b', 'fast'))
+        self.assertEqual(select_chat_model('Programmiere ein Plugin', settings),
+                         ('qwen3-coder:30b', 'project'))
+        reopened = Store(self.db)
+        self.assertEqual(reopened.chat_model_mode(automatic), 'auto')
+        self.assertEqual(reopened.chat_model_mode(manual_fast), 'fast')
+        self.assertEqual(reopened.chat_model_mode(manual_project), 'project')
+        self.assertEqual(select_chat_model('Programmiere ein Plugin', {
+            'model_mode': reopened.chat_model_mode(manual_fast)}), ('qwen3:4b', 'fast'))
+        self.assertEqual(select_chat_model('Hallo', {
+            'model_mode': reopened.chat_model_mode(manual_project)}),
+            ('qwen3-coder:30b', 'project'))
 
     def test_project_rename_and_delete_do_not_touch_other_chats(self):
         store = Store(self.db)
@@ -105,6 +125,9 @@ class ProjectSidebarQtTests(unittest.TestCase):
             self.window.tray.hide()
         self.window.close()
         self.window.deleteLater()
+        from PySide6.QtCore import QCoreApplication, QEvent
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.app.processEvents()
         self.patchenv.stop()
         self.home.cleanup()
 
@@ -121,7 +144,7 @@ class ProjectSidebarQtTests(unittest.TestCase):
         self.assertFalse(self.window.model_mode.isEnabled())
         self.assertIn('QWEN-PROJEKT', self.window.chat_breadcrumb.text())
 
-    def test_normal_chat_returns_to_fast_model_and_project_remains_large(self):
+    def test_normal_chat_returns_to_auto_and_project_remains_large(self):
         normal = self.window.chat_id
         with patch('sytox.ui.QInputDialog.getText', return_value=('Coding', True)):
             self.window.create_project()
@@ -129,21 +152,23 @@ class ProjectSidebarQtTests(unittest.TestCase):
         self.assertEqual(select_chat_model('Hallo', self.window._chat_runtime_config())[0],
                          self.window.config['project_model'])
         self.window.select_chat(normal)
-        self.assertEqual(self.window.model_mode.currentData(), 'fast')
+        self.assertEqual(self.window.model_mode.currentData(), 'auto')
         self.assertTrue(self.window.model_mode.isEnabled())
-        self.assertEqual(select_chat_model('Bitte schreibe Code', self.window._chat_runtime_config())[0],
+        self.assertEqual(select_chat_model('Hallo', self.window._chat_runtime_config())[0],
                          self.window.config['fast_model'])
+        self.assertEqual(select_chat_model('Bitte schreibe Code', self.window._chat_runtime_config())[0],
+                         self.window.config['project_model'])
         self.window.select_chat(pid)
         self.assertEqual(self.window.model_mode.currentData(), 'project')
 
     def test_manual_chat_choice_is_kept_after_switching(self):
         first = self.window.chat_id
-        self.window.model_mode.setCurrentIndex(self.window.model_mode.findData('auto'))
-        self.assertEqual(self.window.store.chat_model_mode(first), 'auto')
+        self.window.model_mode.setCurrentIndex(self.window.model_mode.findData('fast'))
+        self.assertEqual(self.window.store.chat_model_mode(first), 'fast')
         with patch('sytox.ui.QInputDialog.getText', return_value=('Qwen', True)):
             self.window.create_project()
         self.window.select_chat(first)
-        self.assertEqual(self.window.model_mode.currentData(), 'auto')
+        self.assertEqual(self.window.model_mode.currentData(), 'fast')
 
     def test_search_filters_both_lists_without_losing_project_type(self):
         with patch('sytox.ui.QInputDialog.getText', return_value=('Turtle-Coding', True)):

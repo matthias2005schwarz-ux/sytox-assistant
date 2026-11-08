@@ -1,3 +1,58 @@
+## Gezielte Codeänderungen mit zusätzlicher Prüfung
+
+Bestehender Code kann jetzt über eindeutige Textstellen geändert werden. Die
+Bearbeitung erhält den übrigen Dateiinhalt und kann einen veralteten Dateistand
+am SHA-256-Hash erkennen. Nach den Tests prüft ein getrennter Durchlauf am
+konfigurierten Modell den tatsächlichen Diff auf Auftragserfüllung und konkrete
+Fehler. Befunde gehen zur Korrektur zurück, bevor der Auftrag abgeschlossen wird.
+[Ablauf und Prüfgrenzen](docs/programming-workflow.md).
+
+## Programme direkt per Sprachbefehl öffnen
+
+„Hey Sytox, öffne Spotify“ öffnet ein eindeutig gefundenes Programm direkt, ohne
+Modellanfrage und ohne weiteren Klick. Bereits geöffnete Programme werden nach
+vorne geholt. Das gilt für alle auffindbaren Programme; bei mehreren Treffern
+reicht die Auswahl des gewünschten Eintrags. Auch kompakte getippte Startbefehle
+verwenden diesen Weg. [Bedienung und Grenzen](docs/app-launch.md).
+
+## Ruhigere Animationen und direkteres Feedback
+
+Buttons reagieren sanft auf Maus und Tastaturfokus. Neue Nachrichten und
+eingeblendete Bereiche erhalten kurze Übergänge; dezente Punkte zeigen laufende
+Antworten und Aufträge. Kopieren wird direkt bestätigt. Unter Einstellungen lässt
+sich die Bewegung reduzieren. Die Einstellungen sind scrollbar, „Speichern“ bleibt
+sichtbar. [Darstellung und native Video-Vorschau](docs/motion-ui.md).
+
+## Programmieren mit Projektquellen und echten Testergebnissen
+
+Vor Programmieränderungen erhält die KI passende lokale Quelldateien, zugehörige
+Tests und erkennbare Imports mit Zeilenangaben. Sie kann gezielt nach Bezeichnern
+suchen und einzelne Zeilenbereiche nachlesen. Vor der Fertigmeldung werden
+erkannte Projektprüfungen über die vorhandenen Befehlsfreigaben ausgeführt.
+Fehlerausgaben gehen zur Korrektur an die KI zurück; nach Änderungen zählen alte
+Prüfergebnisse nicht mehr. [Ablauf und Grenzen](docs/programming-workflow.md).
+
+## Lesbare Antworten und Code im Desktop-Chat
+
+Antworten werden jetzt als Markdown mit Überschriften, Listen und Tabellen
+dargestellt. Code erhält eigene dunkle Karten, Syntaxfarben, eine Schrift mit
+fester Zeichenbreite und einen Kopierbutton direkt am Block. Die Darstellung
+aktualisiert sich bereits während der Generierung; Originaltext und Export
+bleiben erhalten. [Darstellung und native Vorschau](docs/chat-rendering.md).
+
+## Verbesserte Aufgabenerkennung und lokaler Kontext
+
+Ausdrückliche Aufträge bleiben auch nach einer Erklärungsfrage erkennbar.
+Gedächtnisabruf und ältere Chat-Vorgaben werden gezielter ausgewählt; aktuelle
+Korrekturen und Projektgrenzen erhalten Vorrang. Details und Prüfgrenzen:
+[KI-Qualität im Entwicklungszweig](docs/ai-quality.md).
+Programmieraufträge brauchen auch im Modus „Einmal“ einen geprüften Abschluss.
+Offene Prüfungen und wesentliche Vorgaben bleiben bei längeren Aufgaben erhalten.
+Neue normale Chats verwenden die automatische Modellauswahl: kurze Gespräche mit
+`qwen3:4b`, Programmieraufträge mit `qwen3-coder:30b`. Bestehende manuelle Auswahlen bleiben erhalten.
+
+---
+
 ## SYTOX 0.3.10 – Schnellchat, Streaming und Bedienung
 
 Version 0.3.10 übernimmt die zuletzt geprüften Codex-Verbesserungen. Kurze

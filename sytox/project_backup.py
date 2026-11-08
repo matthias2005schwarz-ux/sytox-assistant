@@ -68,7 +68,7 @@ def _list_source_files(project):
     return files
 
 
-def create_snapshot(workspace, backup_root, label='before_edit'):
+def create_snapshot(workspace, backup_root, label='before_edit', *, preserve=()):
     project, backups = _safe_root(workspace, backup_root)
     files = _list_source_files(project)
     backups.mkdir(parents=True, exist_ok=True)
@@ -100,8 +100,11 @@ def create_snapshot(workspace, backup_root, label='before_edit'):
             if verification.testzip() is not None:
                 raise SnapshotError('Backup-ZIP ist beschädigt.')
         # Old archives are pruned only AFTER the new verified snapshot exists.
-        for obsolete in sorted(backups.glob('*.zip'), reverse=True)[RETAIN:]:
-            obsolete.unlink(missing_ok=True)
+        protected = set(preserve)
+        recent = sorted(backups.glob('*.zip'), reverse=True)
+        for obsolete in recent[RETAIN:]:
+            if obsolete.name not in protected:
+                obsolete.unlink(missing_ok=True)
         return {
             'filename': name, 'path': str(target), 'files': len(records),
             'bytes': sum(item['size'] for item in records),
@@ -121,7 +124,7 @@ def list_snapshots(backup_root):
             if p.is_file() and not p.is_symlink()]
 
 
-def restore_snapshot(workspace, backup_root, name, approve):
+def restore_snapshot(workspace, backup_root, name, approve, *, preserve=()):
     project, backups = _safe_root(workspace, backup_root)
     if not isinstance(name, str) or '/' in name or '\\' in name or not name.endswith('.zip'):
         raise SnapshotError('Ungültiger Snapshot-Name.')
@@ -168,7 +171,7 @@ def restore_snapshot(workspace, backup_root, name, approve):
                    'Zustand zusätzlich gesichert. Nicht enthaltene Dateien werden '
                    'nicht automatisch gelöscht.'):
         return {'status': 'denied', 'files': 0}
-    before = create_snapshot(project, backups, 'before_restore')
+    before = create_snapshot(project, backups, 'before_restore', preserve=preserve)
     for path, data in validated.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix='.sytox_restore_', dir=path.parent)

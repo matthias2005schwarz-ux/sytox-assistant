@@ -80,8 +80,10 @@ class KeepAlivePolicyTests(unittest.TestCase):
                 Agent(store, 'qwen3-coder:30b', 'http://localhost:11434',
                       str(Path(tmp) / 'work'), lambda *_: False, lambda *_: None,
                       threading.Event(), ram_keep_alive='60s')
-            client.assert_called_once_with('http://localhost:11434', 'qwen3-coder:30b',
-                                           keep_alive='60s')
+            self.assertEqual(client.call_count, 2)
+            for request in client.call_args_list:
+                self.assertEqual(request.args, ('http://localhost:11434', 'qwen3-coder:30b'))
+                self.assertEqual(request.kwargs, {'keep_alive': '60s'})
 
 
 if __name__ == '__main__':

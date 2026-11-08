@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .memory_engine import extract_facts, tokens, is_continuation_request
+from .memory_engine import extract_facts, tokens, is_continuation_request, project_scopes, memory_topics
 
 
 def now():
@@ -100,7 +100,7 @@ class Store:
         if kind not in ('chat', 'project'):
             raise ValueError('Unbekannter Chattyp')
         if model_mode is None:
-            model_mode = 'project' if kind == 'project' else 'fast'
+            model_mode = 'project' if kind == 'project' else 'auto'
         if model_mode not in ('auto', 'fast', 'project'):
             raise ValueError('Unbekannter Modellmodus')
         cid = uuid.uuid4().hex
@@ -308,48 +308,198 @@ class Store:
                 break
         return results
 
-    def related_context(self, query, exclude_chat=None, limit=6):
-        """Cross-chat recall; this is lexical FTS, not perfect semantic memory."""
-        query_words=re.findall(r'[^\W_]{3,}',str(query or ''),flags=re.UNICODE)[:8]
-        if not query_words: return []
-        expr=' OR '.join('"'+t.replace('"','')+'"' for t in query_words)
-        results=[]
+    @staticmethod
+    def _recall_terms(query):
+        generic = {'projekt', 'project', 'welche', 'welcher', 'welches', 'welchen',
+                   'bevorzuge', 'bevorzugte', 'erinnerung', 'erinnerungen', 'weißt',
+                   'weiss', 'gespeichert', 'über', 'mich', 'bitte'}
+        return set(tokens(query)) - generic
+
+    @staticmethod
+    def _uncovered_user_text(content, facts):
+        """Remove covered fact sentences, retaining independent user constraints.
+
+        Keep untouched excerpts verbatim. When one sentence is superseded, its
+        neighbours retain their separators and indentation instead of dropping
+        the whole original message.
+        """
+        pieces = re.split(r'((?<=[.!?])\s+|\n+)', content)
+        kept, removed = [], False
+        for index in range(0, len(pieces), 2):
+            sentence = pieces[index]
+            covered = any((fact['scope'], fact['fact_key']) in facts
+                          for fact in extract_facts(sentence))
+            if covered:
+                removed = True
+                continue
+            kept.append(sentence)
+            if index + 1 < len(pieces):
+                kept.append(pieces[index + 1])
+        return ''.join(kept).strip('\r\n') if removed else content
+
+    def related_context(self, query, exclude_chat=None, limit=6, *, current_chat_id=None):
+        """Rank local user facts and excerpts; never mix unrelated project contexts.
+
+        This remains deterministic lexical retrieval, not semantic understanding.
+        All returned material is context, not new instructions or verified actions.
+        """
+        limit = max(0, min(int(limit), 50))
+        if not limit or not str(query or '').strip():
+            return []
+        current_chat_id = current_chat_id or exclude_chat
+        terms, topics = self._recall_terms(query), memory_topics(query)
+        expr = ' OR '.join('"' + term + '"' for term in sorted(terms)[:12])
+        candidates, pinned = [], []
         with self._connect() as db:
-            # Newest per-topic facts take precedence over older chat snippets.
-            term_set=set(tokens(query))
-            matching=[]
-            for fact in db.execute(
-                    'SELECT * FROM memory_facts ORDER BY updated_at DESC LIMIT 450'):
-                content_terms=set(tokens(fact['content']))
-                overlap=len(term_set & content_terms)
-                scope=fact['scope']
-                if scope.startswith('project:') and scope[8:] in str(query).casefold():
-                    overlap+=3
-                # Preferences apply across chats; other facts require relevance.
-                if overlap or (scope=='global' and fact['kind']=='explicit'):
-                    matching.append((overlap,fact))
-            matching.sort(key=lambda pair:pair[0],reverse=True)
-            for score,fact in matching[:6]:
-                results.append({'source':'Langzeitgedächtnis '+fact['scope'],
-                                'content':fact['content'][:350]})
-            if self._fts_available(db,'message_search'):
+            chats = {row['id']: row['kind'] for row in db.execute('SELECT id,kind FROM chats')}
+            facts = db.execute('SELECT * FROM memory_facts ORDER BY updated_at DESC,id DESC LIMIT 450').fetchall()
+            latest = {(row['scope'], row['fact_key']): row for row in facts}
+            requested = project_scopes(query)
+            # Existing stored scope names also work without the word "Projekt".
+            for fact in facts:
+                scope = fact['scope']
+                if scope.startswith('project:') and re.search(
+                        r'(?<!\w)' + re.escape(scope[8:]) + r'(?!\w)', str(query), re.IGNORECASE):
+                    requested.add(scope)
+            source_scopes = {}
+            for fact in facts:
+                if fact['scope'].startswith('project:'):
+                    source_scopes.setdefault(fact['source_chat_id'], set()).add(fact['scope'])
+
+            def allowed(content, scope='global', source=None):
+                named = project_scopes(content)
+                if scope.startswith('project:'):
+                    named.add(scope)
+                if requested:
+                    if named and not named.intersection(requested):
+                        return False
+                    if chats.get(source) == 'project' and source != current_chat_id:
+                        return bool((named | source_scopes.get(source, set())).intersection(requested))
+                    return True
+                if chats.get(current_chat_id) == 'project':
+                    return source == current_chat_id if named or chats.get(source) == 'project' else True
+                return not named and chats.get(source) != 'project'
+
+            for fact in facts:
+                if not allowed(fact['content'], fact['scope'], fact['source_chat_id']):
+                    continue
+                overlap = len(terms.intersection(tokens(fact['content'])))
+                topic = fact['fact_key'] in topics
+                named = fact['scope'] in requested
+                if not (overlap or topic or named):
+                    continue
+                score = 100 + 8 * overlap + 12 * topic + 20 * named
+                score += 10 * (fact['source_chat_id'] == current_chat_id)
+                score += 6 * (fact['kind'] in ('correction', 'edited'))
+                candidates.append((score, fact['id'], {
+                    'source': 'Langzeitgedächtnis ' + fact['scope'] + ' (Nutzerangabe)',
+                    'content': fact['content'][:350], 'kind': 'fact',
+                    'scope': fact['scope'], 'chat_id': fact['source_chat_id']}))
+
+            rows = []
+            fallback = not self._fts_available(db, 'message_search')
+            if terms and not fallback:
                 try:
-                    rows=db.execute('''SELECT content,chat_id FROM message_search
-                      WHERE message_search MATCH ? AND chat_id != ? ORDER BY rank LIMIT ?''',
-                      (expr, exclude_chat or '',limit)).fetchall()
-                    results += [{'source':'Vorheriger Chat','content':r['content'][:900]} for r in rows]
-                except sqlite3.OperationalError: pass
-            if self._fts_available(db,'memory_search'):
+                    rows = db.execute('''SELECT DISTINCT m.id,m.content,m.chat_id
+                        FROM message_search AS s JOIN messages AS m
+                          ON m.chat_id=s.chat_id AND m.content=s.content
+                        WHERE message_search MATCH ? AND m.role='user' AND m.chat_id != ?
+                        ORDER BY m.id DESC LIMIT 80''', (expr, exclude_chat or '')).fetchall()
+                except sqlite3.OperationalError:
+                    fallback = True
+            if terms and fallback:
+                rows = db.execute("SELECT id,content,chat_id FROM messages WHERE role='user' "
+                                  'AND chat_id != ? ORDER BY id DESC LIMIT 600', (exclude_chat or '',)).fetchall()
+            for row in rows:
+                if row['chat_id'] not in chats or not allowed(row['content'], source=row['chat_id']):
+                    continue
+                content = self._uncovered_user_text(row['content'], latest)
+                overlap = len(terms.intersection(tokens(content)))
+                topic = bool(topics.intersection(memory_topics(content)))
+                if overlap or topic:
+                    candidates.append((30 + 6 * overlap + 2 * topic, row['id'], {
+                        'source': 'Frühere Nutzerangabe (unbestätigter Chat-Auszug)',
+                        'content': content[:900], 'kind': 'excerpt', 'chat_id': row['chat_id']}))
+
+            manual = {row['id']: row for row in db.execute(
+                'SELECT id,content FROM memories ORDER BY id DESC LIMIT 200')}
+            if terms and self._fts_available(db, 'memory_search'):
                 try:
-                    rows=db.execute('''SELECT content FROM memory_search
-                      WHERE memory_search MATCH ? ORDER BY rank LIMIT ?''',(expr,limit)).fetchall()
-                    results += [{'source':'Erinnerung','content':r['content'][:900]} for r in rows]
-                except sqlite3.OperationalError: pass
-            # Provide a small amount of pinned memory regardless of matching vocabulary.
-            for r in db.execute('SELECT content FROM memories ORDER BY id DESC LIMIT 8'):
-                if not any(x['content']==r['content'] for x in results):
-                    results.append({'source':'Erinnerung','content':r['content'][:900]})
-        return results[:limit+8]
+                    for row in db.execute('''SELECT m.id,m.content FROM memory_search AS s
+                        JOIN memories AS m ON m.id=s.memory_id
+                        WHERE memory_search MATCH ? ORDER BY rank LIMIT 80''', (expr,)):
+                        manual[row['id']] = row
+                except sqlite3.OperationalError:
+                    pass
+            for row in manual.values():
+                if not allowed(row['content']):
+                    continue
+                overlap = len(terms.intersection(tokens(row['content'])))
+                item = {'source': 'Erinnerung (manuell gespeichert)', 'content': row['content'][:900],
+                        'kind': 'manual'}
+                if overlap:
+                    candidates.append((60 + 6 * overlap, row['id'], item))
+                else:
+                    pinned.append(item)
+        ordered = [item for _score, _id, item in sorted(candidates, key=lambda item: (item[0], item[1]), reverse=True)]
+        ordered += pinned[:2]  # Pinned notes share the caller's limit instead of overflowing it.
+        result, seen = [], set()
+        for item in ordered:
+            key = ' '.join(item['content'].casefold().split())
+            if key not in seen:
+                result.append(item)
+                seen.add(key)
+            if len(result) >= limit:
+                break
+        return result
+
+    def current_chat_context(self, query, chat_id, recent_messages=12, limit=4):
+        """Recall relevant older user statements beyond the recent-turn window."""
+        limit = max(0, min(int(limit), 20))
+        terms, topics = self._recall_terms(query), memory_topics(query)
+        if not limit or not chat_id or not (terms or topics):
+            return []
+        with self._connect() as db:
+            recent = db.execute('SELECT id FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT ?',
+                                (chat_id, max(1, int(recent_messages)))).fetchall()
+            if not recent:
+                return []
+            cutoff = min(row['id'] for row in recent)
+            facts = {(row['scope'], row['fact_key']): row for row in db.execute(
+                'SELECT * FROM memory_facts ORDER BY updated_at DESC,id DESC LIMIT 450')}
+            rows = []
+            if terms and self._fts_available(db, 'message_search'):
+                expr = ' OR '.join('"' + term + '"' for term in sorted(terms)[:12])
+                try:
+                    rows = db.execute('''SELECT DISTINCT m.id,m.content FROM message_search AS s
+                        JOIN messages AS m ON m.chat_id=s.chat_id AND m.content=s.content
+                        WHERE message_search MATCH ? AND m.chat_id=? AND m.role='user' AND m.id<?
+                        ORDER BY m.id DESC LIMIT 100''', (expr, chat_id, cutoff)).fetchall()
+                except sqlite3.OperationalError:
+                    pass
+            # Topic-word variants and non-FTS installations still recall bounded old user context.
+            if not rows:
+                rows = db.execute("SELECT id,content FROM messages WHERE chat_id=? AND role='user' "
+                                  'AND id<? ORDER BY id DESC LIMIT 600', (chat_id, cutoff)).fetchall()
+            ranked = []
+            for row in rows:
+                content = self._uncovered_user_text(row['content'], facts)
+                if not content:
+                    continue
+                overlap = len(terms.intersection(tokens(content)))
+                topic = bool(topics.intersection(memory_topics(content)))
+                if overlap or topic:
+                    ranked.append((overlap * 4 + topic * 2, row['id'], content))
+        result, seen = [], set()
+        for _score, _id, content in sorted(ranked, reverse=True):
+            key = ' '.join(content.casefold().split())
+            if key not in seen:
+                result.append({'source': 'Frühere Nutzerangabe im aktuellen Chat (unverifiziert, ggf. überholt)',
+                               'content': content[:1200], 'kind': 'excerpt', 'chat_id': chat_id})
+                seen.add(key)
+            if len(result) >= limit:
+                break
+        return result
 
     def create_task(self,cid,goal,mode='once',deadline=None):
         tid=uuid.uuid4().hex

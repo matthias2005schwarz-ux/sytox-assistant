@@ -35,8 +35,10 @@ class BlackCrimsonDesignTests(unittest.TestCase):
         suggestion = ui[begin:end]
         self.assertIn('self.input.setPlainText(prompt)', suggestion)
         self.assertNotIn('self.send(', suggestion)
-        self.assertIn('QPropertyAnimation(', ui)
-        self.assertIn('QGraphicsOpacityEffect(', ui)
+        motion = (ROOT / 'sytox/motion.py').read_text(encoding='utf-8')
+        self.assertIn('self.motion.fade_in(', ui)
+        self.assertIn('QPropertyAnimation(', motion)
+        self.assertIn('QGraphicsOpacityEffect(', motion)
 
 
     def test_focus_mode_has_native_toggle_and_keyboard_shortcuts(self):

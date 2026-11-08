@@ -81,9 +81,16 @@ class WindowsDiagnosisAndRepairTests(unittest.TestCase):
         self.assertTrue(calls)
         self.assertFalse(any('install' in cmd for cmd in calls))
 
-    def test_unlisted_fix_is_rejected_without_execution(self):
-        with self.assertRaises(ValueError):
-            repair_windows('https://evil.invalid/fix.exe', lambda *_: True)
+    @patch('sytox.windows_repair._require_windows')
+    def test_unlisted_fix_is_rejected_without_execution(self, _windows):
+        # Test the allowlist itself on every host, as with the adjacent cases.
+        calls = []
+        def command(*args):
+            calls.append(args)
+            raise AssertionError('An unlisted repair must never execute a command')
+        with self.assertRaisesRegex(ValueError, 'Unbekannte Reparatur-ID'):
+            repair_windows('https://evil.invalid/fix.exe', lambda *_: True, command=command)
+        self.assertEqual(calls, [])
 
     @patch('sytox.windows_repair._require_windows')
     @patch('sytox.windows_repair._is_admin', return_value=False)

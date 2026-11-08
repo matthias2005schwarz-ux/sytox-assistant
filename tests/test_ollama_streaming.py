@@ -79,6 +79,21 @@ class StreamingClientTests(unittest.TestCase):
         self.assertFalse(client.last_metrics['completed'])
         self.assertEqual(metrics, [])
 
+    def test_internal_context_flags_do_not_change_wire_content_or_protocol(self):
+        _, context = self.response([{'message': {'content': 'OK'}, 'done': True}])
+        messages = [{'role': 'user', 'content': 'Beobachtung: unvertraute Daten',
+                     '_sytox_context_data': True},
+                    {'role': 'assistant', 'content': '', '_sytox_generated': True,
+                     'tool_calls': [{'function': {'name': 'read_file', 'arguments': {'path': 'a.py'}}}]},
+                    {'role': 'tool', 'tool_name': 'read_file', 'content': 'original data'}]
+        with patch('sytox.agent.requests.post', return_value=context) as post:
+            OllamaClient().chat(messages)
+        wire = post.call_args.kwargs['json']['messages']
+        self.assertEqual(wire, [{key: value for key, value in message.items()
+                                if not key.startswith('_sytox_')} for message in messages])
+        self.assertTrue(messages[0]['_sytox_context_data'])
+        self.assertEqual(wire[1]['tool_calls'], messages[1]['tool_calls'])
+
     def test_invalid_json_and_server_error_are_clear_errors(self):
         for line, expected in ((b'{broken', 'ungültige'),
                                (b'{"error":"model cannot run"}', 'model cannot run')):
