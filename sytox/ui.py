@@ -29,6 +29,7 @@ from .storage import Store,default_data_dir
 from .voice_features import record_until,transcribe_wav,speak,render_speech_file,VoiceTurnRouter,interruption_command,download_german_voice_model, desktop_voice_intent, agent_status_intent
 from .desktop_ui import DesktopControlDialog
 from .app_launch import app_open_intent
+from .fast_interaction import instant_reply
 from .app_launch_ui import AppLaunchDialog
 from .parallel_chat import ParallelChatDialog, ParallelReplyWorker
 from .chat_content import MessageContent
@@ -1963,7 +1964,10 @@ class MainWindow(QMainWindow):
         if re.search(r'\bbis (?:es |alles )?fertig\b',txt.lower()):mode='until_done'
         selected, _route = select_chat_model(txt, self._chat_runtime_config(), mode)
         self.model_name.setText(selected)
-        if self.store.chat_kind(self.chat_id) == 'project' or requires_agent(txt, mode):
+        # A standalone greeting must never wake the large project Agent,
+        # even when the user happens to be inside a Qwen project.
+        if ((self.store.chat_kind(self.chat_id) == 'project' and
+             instant_reply(txt) is None) or requires_agent(txt, mode)):
             self.start_worker(mode,hours)
         else:
             self.start_quick_reply(txt)
