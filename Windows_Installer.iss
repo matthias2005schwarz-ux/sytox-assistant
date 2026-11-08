@@ -1,7 +1,7 @@
 ; SYTOX Assistant per-user Inno Setup package; build the exe first on Windows.
 ; Keep AppId unchanged for all later releases, so upgrades replace this app.
 #define MyAppName "SYTOX Assistant"
-#define MyAppVersion "0.3.11"
+#define MyAppVersion "0.3.12"
 #define MyAppExe "SYTOX_Assistant.exe"
 [Setup]
 AppId={{5D368754-1CC9-43F0-91B0-A8327A3DDC87}
