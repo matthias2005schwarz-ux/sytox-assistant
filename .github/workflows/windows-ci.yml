@@ -85,14 +85,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: msys2/setup-msys2@v2
+        id: msys2_extra
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-lua
       - name: Build and run 8 extra language examples
         shell: pwsh
+        env:
+          MSYS2_ROOT: ${{ steps.msys2_extra.outputs.msys2-location }}
         run: |
-          choco install mingw php lua kotlinc --yes --no-progress
-          if ($LASTEXITCODE -ne 0) { throw 'Extra language compiler installation failed' }
+          # Chocolatey's third-party MinGW/Lua downloads can return HTTP 504.
+          # MSYS2 UCRT64 provides verified Windows x64 gcc/g++ and lua/luac.
+          choco install php kotlinc --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'PHP/Kotlin compiler installation failed' }
           Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
           refreshenv
-          $env:PATH = 'C:\ProgramData\mingw64\mingw64\bin;' + (Join-Path $PWD '.venv\Scripts') + ';' + $env:PATH
+          $ucrt = Join-Path $env:MSYS2_ROOT 'ucrt64\bin'
+          if (!(Test-Path (Join-Path $ucrt 'gcc.exe')) -or !(Test-Path (Join-Path $ucrt 'luac.exe'))) {
+            throw 'MSYS2 UCRT64 compilers were not installed'
+          }
+          $env:PATH = $ucrt + ';' + (Join-Path $PWD '.venv\Scripts') + ';' + $env:PATH
           npm install --global typescript
           if ($LASTEXITCODE -ne 0) { throw 'TypeScript setup failed' }
           & .\.venv\Scripts\python.exe tools/windows_multilang_smoke.py
